@@ -4,6 +4,9 @@ A fully native SwiftUI app for editing, visualizing, simulating, and testing
 Tailscale ACL policies. 100% local/offline — the app never touches the network;
 policies only touch disk when you explicitly import or export.
 
+Unofficial community tool, not affiliated with or endorsed by Tailscale Inc.
+Licensed under the [MIT License](LICENSE).
+
 ## Download
 
 Grab the latest notarized build from the
