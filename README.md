@@ -7,9 +7,15 @@ policies only touch disk when you explicitly import or export.
 Unofficial community tool, not affiliated with or endorsed by Tailscale Inc.
 Licensed under the [MIT License](LICENSE).
 
-## Download
+## Install
 
-Grab the latest notarized build from the
+With [Homebrew](https://brew.sh):
+
+```sh
+brew install --cask steingmo/tap/tailscale-acl
+```
+
+Or grab the latest notarized build from the
 [Releases page](https://github.com/steingmo/tailscale-acl-manager/releases),
 unzip, and drag **Tailscale ACL.app** to Applications. The app is signed and
 notarized with a Developer ID, so it runs without Gatekeeper warnings.
