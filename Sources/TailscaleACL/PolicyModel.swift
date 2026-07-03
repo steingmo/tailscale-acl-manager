@@ -11,6 +11,21 @@ struct ACLRule: Identifiable {
     var id: Int { index }
 }
 
+/// Modern grants syntax: dst entries are bare targets; protocols and ports
+/// live in the `ip` field ("*", "443", "80-443", "tcp:22", "icmp:*", …).
+struct GrantRule: Identifiable {
+    var index: Int
+    var comments: [String]
+    var src: [String]
+    var dst: [String]
+    var ip: [String]
+    var hasApp: Bool
+    var via: [String]
+    var srcPosture: [String]
+
+    var id: Int { index }
+}
+
 struct ACLTest: Identifiable {
     var index: Int
     var src: String
@@ -28,6 +43,7 @@ struct PolicyModel {
     var hosts: [String: String] = [:]
     var hostOrder: [String] = []
     var rules: [ACLRule] = []
+    var grants: [GrantRule] = []
     var tests: [ACLTest] = []
 
     init() {}
@@ -64,6 +80,21 @@ struct PolicyModel {
                 ))
             }
         }
+        if let elements = tree["grants"]?.elements {
+            for (i, e) in elements.enumerated() {
+                guard case .object = e.value else { continue }
+                grants.append(GrantRule(
+                    index: i,
+                    comments: e.comments,
+                    src: e.value["src"]?.stringArray ?? [],
+                    dst: e.value["dst"]?.stringArray ?? [],
+                    ip: e.value["ip"]?.stringArray ?? [],
+                    hasApp: e.value["app"] != nil,
+                    via: e.value["via"]?.stringArray ?? [],
+                    srcPosture: e.value["srcPosture"]?.stringArray ?? []
+                ))
+            }
+        }
         if let elements = tree["tests"]?.elements {
             for (i, e) in elements.enumerated() {
                 guard case .object = e.value else { continue }
@@ -89,7 +120,7 @@ struct PolicyModel {
     /// Source-side entities for pickers and the visual builder.
     var sourceSpecs: [String] {
         var specs: [String] = []
-        let used = Set(rules.flatMap(\.src))
+        let used = Set(rules.flatMap(\.src) + grants.flatMap(\.src))
         if used.contains("*") { specs.append("*") }
         for s in used where s.hasPrefix("autogroup:") { specs.append(s) }
         specs.append(contentsOf: groupOrder)
@@ -100,7 +131,8 @@ struct PolicyModel {
     /// Destination-side entities (targets, without ports).
     var destTargets: [String] {
         var targets: [String] = []
-        let used = Set(rules.flatMap(\.dst).map { DestSpec($0).target })
+        let used = Set(rules.flatMap(\.dst).map { DestSpec($0).target }
+                       + grants.flatMap(\.dst))
         if used.contains("*") { targets.append("*") }
         targets.append(contentsOf: hostOrder)
         targets.append(contentsOf: tagOrder)

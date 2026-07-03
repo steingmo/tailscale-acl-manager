@@ -59,10 +59,19 @@ enum SamplePolicy {
     },
   ],
 
+  "grants": [
+    // Modern grant syntax: engineers may use Redis on the db server.
+    {
+      "src": ["group:eng"],
+      "dst": ["tag:db"],
+      "ip":  ["tcp:6379"],
+    },
+  ],
+
   "tests": [
     {
       "src":    "alice@example.com",
-      "accept": ["tag:server:22", "tag:ci:8080"],
+      "accept": ["tag:server:22", "tag:ci:8080", "tag:db:6379"],
       "deny":   ["tag:db:5432"],
     },
     {

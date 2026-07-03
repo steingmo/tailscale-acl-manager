@@ -176,23 +176,40 @@ struct SimulatorScreen: View {
     }
 
     private func matchCard(_ match: RuleMatch) -> some View {
-        let rule = store.model.rules.first { $0.index == match.ruleIndex }
+        let isGrant = match.kind == .grant
+        let badgeColor = isGrant ? Theme.green : Theme.blue
+        let detail = isGrant
+            ? "\(match.srcSpec) → \(match.dstSpec) (\(match.ipSpec ?? "*"))"
+            : "\(match.srcSpec) → \(match.dstSpec)"
         return VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 6) {
-                Text("Rule #\(match.ruleIndex + 1)")
+                Text(isGrant ? "Grant #\(match.ruleIndex + 1)" : "Rule #\(match.ruleIndex + 1)")
                     .font(.system(size: 10.5, weight: .bold))
-                    .foregroundStyle(Theme.blue)
+                    .foregroundStyle(badgeColor)
                     .padding(.horizontal, 6)
                     .padding(.vertical, 3)
-                    .background(Theme.blue.opacity(0.15), in: RoundedRectangle(cornerRadius: 5))
+                    .background(badgeColor.opacity(0.15), in: RoundedRectangle(cornerRadius: 5))
                 Text("matched")
                     .font(.system(size: 11.5))
                     .foregroundStyle(Theme.textSecondary)
-                Text("\(match.srcSpec) → \(match.dstSpec)")
+                Text(detail)
                     .font(.system(size: 11.5, weight: .semibold, design: .monospaced))
                     .foregroundStyle(Theme.textPrimary)
             }
-            if let rule {
+            if isGrant, let grant = store.model.grants.first(where: { $0.index == match.ruleIndex }) {
+                HStack(spacing: 6) {
+                    ForEach(grant.src, id: \.self) { EntityChip(name: $0) }
+                    Image(systemName: "arrow.right")
+                        .font(.system(size: 9.5))
+                        .foregroundStyle(Theme.textSecondary)
+                    ForEach(grant.dst, id: \.self) { Chip(text: $0, color: Theme.purple) }
+                    ForEach(grant.ip, id: \.self) { Chip(text: $0, color: Theme.orange) }
+                    if grant.hasApp {
+                        Chip(text: "app", color: Theme.pink)
+                    }
+                    ForEach(grant.via, id: \.self) { Chip(text: "via \($0)", color: Theme.textSecondary) }
+                }
+            } else if let rule = store.model.rules.first(where: { $0.index == match.ruleIndex }) {
                 HStack(spacing: 6) {
                     ForEach(rule.src, id: \.self) { EntityChip(name: $0) }
                     Image(systemName: "arrow.right")

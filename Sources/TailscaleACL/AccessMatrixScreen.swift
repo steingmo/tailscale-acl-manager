@@ -96,6 +96,14 @@ struct AccessMatrixScreen: View {
                 }
             }
         }
+        for grant in store.model.grants {
+            for src in grant.src where evaluator.sourceSpecCovers(spec: src, row: row) {
+                for dst in grant.dst
+                where dst == col || dst == "*" || evaluator.targetMatches(target: dst, destID: col) {
+                    ports.append(contentsOf: grant.ip.map { $0 == "*" ? "all" : $0 })
+                }
+            }
+        }
         return ports.uniqued()
     }
 

@@ -2,15 +2,22 @@ import SwiftUI
 import AppKit
 import UniformTypeIdentifiers
 
-/// One drawn line on the canvas: a (rule, src, dst) triple.
+/// One drawn line on the canvas: a (rule-or-grant, src, dst) triple.
 private struct Connection: Identifiable {
+    var kind: RuleMatch.Kind
     var ruleIndex: Int
     var src: String
-    var dst: String // full dst spec incl. ports
+    var dst: String   // ACL: full dst spec incl. ports; grant: bare target
+    var ip: [String]  // grant ip entries; empty for ACLs
 
-    var id: String { "\(ruleIndex)|\(src)|\(dst)" }
-    var dstTarget: String { DestSpec(dst).target }
-    var ports: String { DestSpec(dst).ports }
+    var id: String { "\(kind)|\(ruleIndex)|\(src)|\(dst)" }
+    var dstTarget: String { kind == .acl ? DestSpec(dst).target : dst }
+    var ports: String {
+        kind == .acl ? DestSpec(dst).ports : PolicyStore.splitIPEntries(ip).ports
+    }
+    var proto: String? {
+        kind == .acl ? nil : PolicyStore.splitIPEntries(ip).proto
+    }
 }
 
 private enum NodeSide { case source, dest }
@@ -59,7 +66,16 @@ struct VisualBuilderScreen: View {
         for rule in store.model.rules where rule.action == "accept" {
             for src in rule.src {
                 for dst in rule.dst {
-                    result.append(Connection(ruleIndex: rule.index, src: src, dst: dst))
+                    result.append(Connection(kind: .acl, ruleIndex: rule.index,
+                                             src: src, dst: dst, ip: []))
+                }
+            }
+        }
+        for grant in store.model.grants {
+            for src in grant.src {
+                for dst in grant.dst {
+                    result.append(Connection(kind: .grant, ruleIndex: grant.index,
+                                             src: src, dst: dst, ip: grant.ip))
                 }
             }
         }
@@ -84,18 +100,31 @@ struct VisualBuilderScreen: View {
         .background(Theme.background)
         .sheet(item: $editingConnection) { conn in
             ConnectionSheet(
-                title: "Edit access",
+                title: conn.kind == .grant ? "Edit access (grant)" : "Edit access (ACL)",
                 src: conn.src,
                 dstTarget: conn.dstTarget,
                 initialPorts: conn.ports,
-                initialProto: store.model.rules.first(where: { $0.index == conn.ruleIndex })?.proto ?? "any",
+                initialProto: conn.kind == .grant
+                    ? (conn.proto ?? "any")
+                    : store.model.rules.first(where: { $0.index == conn.ruleIndex })?.proto ?? "any",
                 showRemove: true,
-                onSave: { ports, proto in
-                    store.updateConnection(ruleIndex: conn.ruleIndex, oldDst: conn.dst,
-                                           newPorts: ports, proto: proto)
+                allowTypeChoice: false,
+                initialIsGrant: conn.kind == .grant,
+                onSave: { ports, proto, _ in
+                    if conn.kind == .grant {
+                        store.updateGrantIP(grantIndex: conn.ruleIndex,
+                                            ports: ports, proto: proto)
+                    } else {
+                        store.updateConnection(ruleIndex: conn.ruleIndex, oldDst: conn.dst,
+                                               newPorts: ports, proto: proto)
+                    }
                 },
                 onRemove: {
-                    store.removeConnection(ruleIndex: conn.ruleIndex, dst: conn.dst)
+                    if conn.kind == .grant {
+                        store.removeGrantConnection(grantIndex: conn.ruleIndex, dst: conn.dst)
+                    } else {
+                        store.removeConnection(ruleIndex: conn.ruleIndex, dst: conn.dst)
+                    }
                 }
             )
         }
@@ -111,9 +140,17 @@ struct VisualBuilderScreen: View {
                     initialPorts: "",
                     initialProto: "any",
                     showRemove: false,
-                    onSave: { ports, proto in
-                        store.addRule(src: creating.src, dstTarget: creating.dst,
-                                      ports: ports.isEmpty ? "*" : ports, proto: proto)
+                    allowTypeChoice: true,
+                    initialIsGrant: true,
+                    onSave: { ports, proto, isGrant in
+                        let p = ports.isEmpty ? "*" : ports
+                        if isGrant {
+                            store.addGrant(src: creating.src, dstTarget: creating.dst,
+                                           ports: p, proto: proto)
+                        } else {
+                            store.addRule(src: creating.src, dstTarget: creating.dst,
+                                          ports: p, proto: proto)
+                        }
                     },
                     onRemove: {}
                 )
@@ -156,6 +193,16 @@ struct VisualBuilderScreen: View {
             Text("Destinations")
                 .font(.system(size: 11.5, weight: .semibold))
                 .foregroundStyle(Theme.textPrimary)
+            Text("·")
+                .foregroundStyle(Theme.textSecondary)
+            Circle().fill(Theme.blue).frame(width: 7, height: 7)
+            Text("ACL")
+                .font(.system(size: 11))
+                .foregroundStyle(Theme.textSecondary)
+            Circle().fill(Theme.green).frame(width: 7, height: 7)
+            Text("grant")
+                .font(.system(size: 11))
+                .foregroundStyle(Theme.textSecondary)
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
@@ -174,7 +221,8 @@ struct VisualBuilderScreen: View {
                 let from = dotPoint(for: Node(side: .source, name: conn.src))
                 let to = dotPoint(for: Node(side: .dest, name: conn.dstTarget))
                 ConnectionCurve(from: from, to: to)
-                    .stroke(Theme.blue.opacity(0.75), lineWidth: 1.5)
+                    .stroke((conn.kind == .grant ? Theme.green : Theme.blue).opacity(0.75),
+                            lineWidth: 1.5)
                 ConnectionCurve(from: from, to: to)
                     .stroke(Color.clear, lineWidth: 12)
                     .contentShape(ConnectionCurve(from: from, to: to).path(in: CGRect(
@@ -423,12 +471,15 @@ private struct ConnectionSheet: View {
     var initialPorts: String
     var initialProto: String
     var showRemove: Bool
-    var onSave: (String, String) -> Void
+    var allowTypeChoice: Bool
+    var initialIsGrant: Bool
+    var onSave: (String, String, Bool) -> Void
     var onRemove: () -> Void
 
     @Environment(\.dismiss) private var dismiss
     @State private var ports = ""
     @State private var proto = "any"
+    @State private var isGrant = true
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
@@ -441,6 +492,21 @@ private struct ConnectionSheet: View {
                 Image(systemName: "arrow.right")
                     .foregroundStyle(Theme.textSecondary)
                 EntityChip(name: dstTarget)
+            }
+
+            if allowTypeChoice {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Rule syntax")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(Theme.textSecondary)
+                    Picker("", selection: $isGrant) {
+                        Text("Grant (modern)").tag(true)
+                        Text("ACL (legacy)").tag(false)
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .frame(width: 260)
+                }
             }
 
             VStack(alignment: .leading, spacing: 8) {
@@ -506,7 +572,7 @@ private struct ConnectionSheet: View {
                 Button("Cancel") { dismiss() }
                     .keyboardShortcut(.cancelAction)
                 Button(showRemove ? "Save" : "Grant access") {
-                    onSave(ports.trimmingCharacters(in: .whitespaces), proto)
+                    onSave(ports.trimmingCharacters(in: .whitespaces), proto, isGrant)
                     dismiss()
                 }
                 .keyboardShortcut(.defaultAction)
@@ -519,6 +585,7 @@ private struct ConnectionSheet: View {
         .onAppear {
             ports = initialPorts
             proto = initialProto
+            isGrant = initialIsGrant
         }
     }
 

@@ -154,6 +154,84 @@ final class PolicyStore: ObservableObject {
         }
     }
 
+    // MARK: - Grant editing (modern syntax)
+
+    /// Build grant `ip` entries from a ports string and protocol
+    /// ("22,80" + tcp → ["tcp:22", "tcp:80"]).
+    nonisolated static func ipEntries(ports: String, proto: String?) -> [String] {
+        let parts = ports == "*"
+            ? ["*"]
+            : ports.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+        guard let proto, proto != "any", !proto.isEmpty else { return parts }
+        return parts.map { "\(proto):\($0)" }
+    }
+
+    /// Derive (proto, ports) UI fields from grant `ip` entries.
+    nonisolated static func splitIPEntries(_ entries: [String]) -> (proto: String, ports: String) {
+        var protos = Set<String>()
+        var ports: [String] = []
+        for e in entries {
+            if let colon = e.firstIndex(of: ":") {
+                protos.insert(String(e[..<colon]).lowercased())
+                ports.append(String(e[e.index(after: colon)...]))
+            } else {
+                protos.insert("any")
+                ports.append(e)
+            }
+        }
+        let proto = protos.count == 1 ? protos.first! : "any"
+        return (["tcp", "udp", "any"].contains(proto) ? proto : "any",
+                ports.joined(separator: ","))
+    }
+
+    func addGrant(src: String, dstTarget: String, ports: String, proto: String?) {
+        let entries = Self.ipEntries(ports: ports, proto: proto)
+        mutate { tree in
+            let members: [JSON.Member] = [
+                .init(comments: [], key: "src", value: stringArrayJSON([src])),
+                .init(comments: [], key: "dst", value: stringArrayJSON([dstTarget])),
+                .init(comments: [], key: "ip", value: stringArrayJSON(entries)),
+            ]
+            var grants = tree["grants"]?.elements ?? []
+            grants.append(JSON.Element(comments: [], value: .object(members)))
+            if tree["grants"] == nil {
+                tree["grants"] = .array(grants)
+            } else {
+                tree["grants"]?.elements = grants
+            }
+        }
+    }
+
+    func updateGrantIP(grantIndex: Int, ports: String, proto: String?) {
+        let entries = Self.ipEntries(ports: ports, proto: proto)
+        mutate { tree in
+            guard var grants = tree["grants"]?.elements,
+                  grants.indices.contains(grantIndex) else { return }
+            var grant = grants[grantIndex].value
+            grant["ip"] = stringArrayJSON(entries)
+            grants[grantIndex].value = grant
+            tree["grants"]?.elements = grants
+        }
+    }
+
+    /// Remove one dst from a grant; removes the grant when no dst remains.
+    func removeGrantConnection(grantIndex: Int, dst dstName: String) {
+        mutate { tree in
+            guard var grants = tree["grants"]?.elements,
+                  grants.indices.contains(grantIndex) else { return }
+            var grant = grants[grantIndex].value
+            var dst = grant["dst"]?.stringArray ?? []
+            dst.removeAll { $0 == dstName }
+            if dst.isEmpty {
+                grants.remove(at: grantIndex)
+            } else {
+                grant["dst"] = stringArrayJSON(dst)
+                grants[grantIndex].value = grant
+            }
+            tree["grants"]?.elements = grants
+        }
+    }
+
     // MARK: - Entity editing
 
     enum EntityKind: String, CaseIterable, Identifiable {
@@ -249,6 +327,27 @@ final class PolicyStore: ObservableObject {
                         || ($0.value["dst"]?.stringArray.isEmpty ?? true)
                 }
                 tree["acls"] = .array(acls)
+            }
+            // Clean grants (dst entries are bare targets; via lists too).
+            if var grants = tree["grants"]?.elements {
+                for i in grants.indices {
+                    var grant = grants[i].value
+                    for key in ["src", "dst", "via"] where grant[key] != nil {
+                        var values = grant[key]?.stringArray ?? []
+                        values.removeAll { $0 == name }
+                        if key == "via" && values.isEmpty {
+                            grant[key] = nil
+                        } else {
+                            grant[key] = stringArrayJSON(values)
+                        }
+                    }
+                    grants[i].value = grant
+                }
+                grants.removeAll {
+                    ($0.value["src"]?.stringArray.isEmpty ?? true)
+                        || ($0.value["dst"]?.stringArray.isEmpty ?? true)
+                }
+                tree["grants"] = .array(grants)
             }
             // Clean tests.
             if var tests = tree["tests"]?.elements {

@@ -1,11 +1,15 @@
 import Foundation
 
 struct RuleMatch: Identifiable {
+    enum Kind { case acl, grant }
+
+    var kind: Kind = .acl
     var ruleIndex: Int
     var srcSpec: String
     var dstSpec: String
+    var ipSpec: String?
 
-    var id: String { "\(ruleIndex)-\(srcSpec)-\(dstSpec)" }
+    var id: String { "\(kind)-\(ruleIndex)-\(srcSpec)-\(dstSpec)-\(ipSpec ?? "")" }
 }
 
 struct AccessResult {
@@ -27,12 +31,38 @@ struct Evaluator {
                     let d = DestSpec(dst)
                     if targetMatches(target: d.target, destID: destID)
                         && portMatches(spec: d.ports, port: port) {
-                        matches.append(RuleMatch(ruleIndex: rule.index, srcSpec: src, dstSpec: dst))
+                        matches.append(RuleMatch(kind: .acl, ruleIndex: rule.index,
+                                                 srcSpec: src, dstSpec: dst))
+                    }
+                }
+            }
+        }
+        // Grants: app-only grants (empty ip) confer no network-layer access.
+        for grant in model.grants {
+            for src in grant.src where sourceMatches(spec: src, sourceID: sourceID) {
+                for dst in grant.dst where targetMatches(target: dst, destID: destID) {
+                    for spec in grant.ip where ipSpecMatches(spec: spec, port: port) {
+                        matches.append(RuleMatch(kind: .grant, ruleIndex: grant.index,
+                                                 srcSpec: src, dstSpec: dst, ipSpec: spec))
                     }
                 }
             }
         }
         return AccessResult(allowed: !matches.isEmpty, matches: matches)
+    }
+
+    /// Grant `ip` entries: "*", "443", "80-443", "proto:*", "proto:443",
+    /// "proto:80-443". The simulator queries TCP/UDP-style ports, so specs
+    /// pinned to other protocols (icmp, gre, …) don't match a port query.
+    func ipSpecMatches(spec: String, port: Int) -> Bool {
+        var portPart = spec
+        if let colon = spec.firstIndex(of: ":") {
+            let proto = String(spec[..<colon]).lowercased()
+            guard ["tcp", "udp", "6", "17"].contains(proto) else { return false }
+            portPart = String(spec[spec.index(after: colon)...])
+        }
+        if portPart == "*" { return true }
+        return portMatches(spec: portPart, port: port)
     }
 
     func sourceMatches(spec: String, sourceID: String) -> Bool {
