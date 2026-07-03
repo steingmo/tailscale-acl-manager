@@ -53,12 +53,19 @@ ZIP="dist/TailscaleACL-$VERSION.zip"
 SHA256="$(shasum -a 256 "$ZIP" | awk '{print $1}')"
 echo "sha256: $SHA256"
 
+# Sparkle EdDSA signature for the appcast (key lives in the login keychain).
+SIGN_UPDATE="$(find .build/artifacts/sparkle -type f -name sign_update -not -path '*old_dsa*' | head -1)"
+[[ -x "$SIGN_UPDATE" ]] || { echo "error: Sparkle sign_update tool not found." >&2; exit 1; }
+ED_SIG="$("$SIGN_UPDATE" "$ZIP")"
+echo "sparkle: $ED_SIG"
+
 if [[ $DRY_RUN == 1 ]]; then
   git checkout -- Info.plist
   echo ""
   echo "Dry run complete. Would have:"
   echo "  - committed Info.plist bump and tagged v$VERSION"
   echo "  - created GitHub release v$VERSION with $ZIP"
+  echo "  - updated appcast.xml and pushed it"
   echo "  - updated cask to $VERSION / $SHA256 and pushed the tap"
   exit 0
 fi
@@ -73,6 +80,32 @@ gh release create "v$VERSION" \
   "$ZIP#Tailscale ACL $VERSION (macOS 14+, Apple silicon, notarized)" \
   --title "Tailscale ACL $VERSION" \
   --generate-notes
+
+# --- Update the Sparkle appcast ----------------------------------------------
+PUBDATE="$(LC_ALL=C date -u +"%a, %d %b %Y %H:%M:%S +0000")"
+cat > appcast.xml <<EOF
+<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
+  <channel>
+    <title>Tailscale ACL</title>
+    <item>
+      <title>Version $VERSION</title>
+      <pubDate>$PUBDATE</pubDate>
+      <sparkle:version>$VERSION</sparkle:version>
+      <sparkle:shortVersionString>$VERSION</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <sparkle:releaseNotesLink>https://github.com/$REPO/releases/tag/v$VERSION</sparkle:releaseNotesLink>
+      <enclosure
+        url="https://github.com/$REPO/releases/download/v$VERSION/TailscaleACL-$VERSION.zip"
+        $ED_SIG
+        type="application/octet-stream"/>
+    </item>
+  </channel>
+</rss>
+EOF
+git add appcast.xml
+git commit -m "Update appcast for v$VERSION"
+git push origin main
 
 # --- Update the Homebrew cask ------------------------------------------------
 git -C "$TAP_DIR" pull --quiet

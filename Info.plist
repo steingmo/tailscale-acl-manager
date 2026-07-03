@@ -23,6 +23,14 @@
 	<key>NSHighResolutionCapable</key>
 	<true/>
 	<key>NSHumanReadableCopyright</key>
-	<string>Local tool — fully offline, no network access.</string>
+	<string>Fully local policy editing — network use is limited to update checks.</string>
+	<key>SUFeedURL</key>
+	<string>https://raw.githubusercontent.com/steingmo/tailscale-acl-manager/main/appcast.xml</string>
+	<key>SUPublicEDKey</key>
+	<string>bfk3xLADn+lXCwFVWvwbYf4DL5e+imVJSHMz5s6sds0=</string>
+	<key>SUEnableAutomaticChecks</key>
+	<true/>
+	<key>SUScheduledCheckInterval</key>
+	<integer>86400</integer>
 </dict>
 </plist>

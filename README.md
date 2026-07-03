@@ -22,6 +22,10 @@ notarized with a Developer ID, so it runs without Gatekeeper warnings.
 
 Requires macOS 14 (Sonoma) or newer, Apple silicon.
 
+The app checks for updates once a day via [Sparkle](https://sparkle-project.org)
+(or on demand from the app menu) and can install them in place. Homebrew
+installs can also update with `brew upgrade --cask tailscale-acl`.
+
 ## Build from source
 
 ```sh

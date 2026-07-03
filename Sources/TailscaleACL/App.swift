@@ -1,5 +1,25 @@
 import SwiftUI
 import AppKit
+import Sparkle
+
+/// Sparkle updater wrapper: checks the appcast daily and on demand.
+@MainActor
+final class UpdaterViewModel: ObservableObject {
+    private let controller: SPUStandardUpdaterController
+    @Published var canCheckForUpdates = false
+
+    init() {
+        controller = SPUStandardUpdaterController(
+            startingUpdater: true, updaterDelegate: nil, userDriverDelegate: nil
+        )
+        controller.updater.publisher(for: \.canCheckForUpdates)
+            .assign(to: &$canCheckForUpdates)
+    }
+
+    func checkForUpdates() {
+        controller.updater.checkForUpdates()
+    }
+}
 
 enum Screen: String, CaseIterable, Identifiable {
     case policyEditor = "Policy Editor"
@@ -156,6 +176,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 struct TailscaleACLApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     @StateObject private var store = PolicyStore()
+    @StateObject private var updater = UpdaterViewModel()
 
     var body: some SwiftUI.Scene {
         WindowGroup("Tailscale ACL") {
@@ -163,5 +184,13 @@ struct TailscaleACLApp: App {
                 .environmentObject(store)
         }
         .defaultSize(width: 1440, height: 900)
+        .commands {
+            CommandGroup(after: .appInfo) {
+                Button("Check for Updates…") {
+                    updater.checkForUpdates()
+                }
+                .disabled(!updater.canCheckForUpdates)
+            }
+        }
     }
 }

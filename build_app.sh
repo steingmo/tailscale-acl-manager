@@ -23,18 +23,29 @@ APP="Tailscale ACL.app"
 # file-provider-synced folder (iCloud Documents) that stamps FinderInfo
 # xattrs onto files, which codesign rejects as "detritus".
 STAGE="$(mktemp -d)/$APP"
-mkdir -p "$STAGE/Contents/MacOS" "$STAGE/Contents/Resources"
+mkdir -p "$STAGE/Contents/MacOS" "$STAGE/Contents/Resources" "$STAGE/Contents/Frameworks"
 cp .build/release/TailscaleACL "$STAGE/Contents/MacOS/TailscaleACL"
 cp Info.plist "$STAGE/Contents/Info.plist"
+
+# Embed Sparkle.framework (binary artifact fetched by SPM).
+SPARKLE_FW="$(find .build/artifacts/sparkle -type d -name 'Sparkle.framework' | head -1)"
+[[ -d "$SPARKLE_FW" ]] || { echo "error: Sparkle.framework not found — run swift build first." >&2; exit 1; }
+ditto "$SPARKLE_FW" "$STAGE/Contents/Frameworks/Sparkle.framework"
+
 xattr -cr "$STAGE"
 
 # Sign with Developer ID when available (hardened runtime + timestamp),
 # otherwise fall back to ad-hoc for machines without the certificate.
 IDENTITY="${CODESIGN_IDENTITY:-Developer ID Application}"
 if security find-identity -v -p codesigning | grep -q "$IDENTITY"; then
+  # Sparkle's nested helpers (XPC services, Autoupdate, Updater.app) must be
+  # signed with hardened runtime for notarization; --deep covers them all.
+  codesign --force --options runtime --timestamp -s "$IDENTITY" --deep \
+    "$STAGE/Contents/Frameworks/Sparkle.framework"
   codesign --force --options runtime --timestamp -s "$IDENTITY" "$STAGE"
 else
   echo "note: no '$IDENTITY' identity found; using ad-hoc signature"
+  codesign --force -s - --deep "$STAGE/Contents/Frameworks/Sparkle.framework"
   codesign --force -s - "$STAGE"
 fi
 codesign --verify --strict "$STAGE"
