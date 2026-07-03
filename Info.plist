@@ -13,9 +13,9 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>1.0.1</string>
+	<string>1.1.0</string>
 	<key>CFBundleVersion</key>
-	<string>1.0.1</string>
+	<string>1.1.0</string>
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.developer-tools</string>
 	<key>LSMinimumSystemVersion</key>
@@ -24,12 +24,12 @@
 	<true/>
 	<key>NSHumanReadableCopyright</key>
 	<string>Fully local policy editing — network use is limited to update checks.</string>
+	<key>SUEnableAutomaticChecks</key>
+	<true/>
 	<key>SUFeedURL</key>
 	<string>https://raw.githubusercontent.com/steingmo/tailscale-acl-manager/main/appcast.xml</string>
 	<key>SUPublicEDKey</key>
 	<string>bfk3xLADn+lXCwFVWvwbYf4DL5e+imVJSHMz5s6sds0=</string>
-	<key>SUEnableAutomaticChecks</key>
-	<true/>
 	<key>SUScheduledCheckInterval</key>
 	<integer>86400</integer>
 </dict>
