@@ -223,13 +223,10 @@ struct VisualBuilderScreen: View {
                 let to = dotPoint(for: Node(side: .dest, name: conn.dstTarget))
                 let color = conn.kind == .grant ? Theme.green : Theme.blue
                 let active = hoveredConnection == conn.id || editingConnection?.id == conn.id
-                // Dim the other lines while one is hovered or being edited.
-                let dimmed = !active && (hoveredConnection != nil || editingConnection != nil)
 
                 ConnectionCurve(from: from, to: to)
-                    .stroke(color.opacity(dimmed ? 0.2 : active ? 1 : 0.75),
+                    .stroke(color.opacity(active ? 1 : 0.75),
                             lineWidth: active ? 3.5 : 1.5)
-                    .shadow(color: active ? color.opacity(0.8) : .clear, radius: active ? 4 : 0)
                 if active {
                     // Mark both endpoints so it's obvious what the line connects.
                     Circle().fill(color).frame(width: 8, height: 8).position(from)
