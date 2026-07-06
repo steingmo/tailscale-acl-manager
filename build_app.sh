@@ -26,6 +26,7 @@ STAGE="$(mktemp -d)/$APP"
 mkdir -p "$STAGE/Contents/MacOS" "$STAGE/Contents/Resources" "$STAGE/Contents/Frameworks"
 cp .build/release/TailscaleACL "$STAGE/Contents/MacOS/TailscaleACL"
 cp Info.plist "$STAGE/Contents/Info.plist"
+cp AppIcon.icns "$STAGE/Contents/Resources/AppIcon.icns"
 
 # Embed Sparkle.framework (binary artifact fetched by SPM).
 SPARKLE_FW="$(find .build/artifacts/sparkle -type d -name 'Sparkle.framework' | head -1)"

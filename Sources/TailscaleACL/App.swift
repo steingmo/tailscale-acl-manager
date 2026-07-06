@@ -127,48 +127,14 @@ struct RootView: View {
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    // Icon comes from the bundled AppIcon.icns (regenerate with
+    // assets/make-icon.swift) — setting it at runtime is unreliable.
     func applicationDidFinishLaunching(_ notification: Notification) {
-        NSApp.applicationIconImage = Self.makeIcon()
         NSApp.activate(ignoringOtherApps: true)
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         true
-    }
-
-    /// Drawn app icon: dark rounded square with a green shield.
-    static func makeIcon() -> NSImage {
-        let size = NSSize(width: 512, height: 512)
-        let image = NSImage(size: size)
-        image.lockFocus()
-
-        let rect = NSRect(x: 32, y: 32, width: 448, height: 448)
-        let path = NSBezierPath(roundedRect: rect, xRadius: 100, yRadius: 100)
-        let gradient = NSGradient(
-            starting: NSColor(srgbRed: 0.13, green: 0.14, blue: 0.16, alpha: 1),
-            ending: NSColor(srgbRed: 0.07, green: 0.08, blue: 0.09, alpha: 1)
-        )
-        gradient?.draw(in: path, angle: -90)
-
-        if let shield = NSImage(
-            systemSymbolName: "checkmark.shield.fill",
-            accessibilityDescription: nil
-        )?.withSymbolConfiguration(
-            .init(pointSize: 240, weight: .medium)
-                .applying(.init(paletteColors: [
-                    NSColor(srgbRed: 0.19, green: 0.83, blue: 0.48, alpha: 1)
-                ]))
-        ) {
-            let s = shield.size
-            shield.draw(in: NSRect(
-                x: (size.width - s.width) / 2,
-                y: (size.height - s.height) / 2,
-                width: s.width, height: s.height
-            ))
-        }
-
-        image.unlockFocus()
-        return image
     }
 }
 

@@ -6,6 +6,8 @@
 	<string>Tailscale ACL</string>
 	<key>CFBundleExecutable</key>
 	<string>TailscaleACL</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
 	<key>CFBundleIdentifier</key>
 	<string>com.local.tailscale-acl-manager</string>
 	<key>CFBundleName</key>
