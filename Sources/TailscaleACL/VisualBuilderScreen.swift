@@ -238,7 +238,6 @@ struct VisualBuilderScreen: View {
                         x: 0, y: 0, width: canvasWidth, height: canvasHeight
                     )).strokedPath(.init(lineWidth: 12)))
                     .onTapGesture { editingConnection = conn }
-                    .onHover { hoveredConnection = $0 ? conn.id : nil }
                     .help("\(conn.src) → \(conn.dst) — click to edit")
             }
 
@@ -258,6 +257,23 @@ struct VisualBuilderScreen: View {
             }
         }
         .coordinateSpace(name: "canvas")
+        // .onHover ignores contentShape, so hover is hit-tested here manually.
+        .onContinuousHover(coordinateSpace: .local) { phase in
+            switch phase {
+            case .active(let point):
+                hoveredConnection = connections.first { conn in
+                    ConnectionCurve(
+                        from: dotPoint(for: Node(side: .source, name: conn.src)),
+                        to: dotPoint(for: Node(side: .dest, name: conn.dstTarget))
+                    )
+                    .path(in: CGRect(x: 0, y: 0, width: canvasWidth, height: canvasHeight))
+                    .strokedPath(.init(lineWidth: 12))
+                    .contains(point)
+                }?.id
+            case .ended:
+                hoveredConnection = nil
+            }
+        }
     }
 
     private func nodeView(_ node: Node) -> some View {
