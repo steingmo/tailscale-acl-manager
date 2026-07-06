@@ -40,6 +40,7 @@ struct VisualBuilderScreen: View {
     @State private var wireFrom: Node?
     @State private var wirePoint: CGPoint?
     @State private var editingConnection: Connection?
+    @State private var hoveredConnection: String?
     @State private var creating: (src: String, dst: String)?
     @State private var showingAddBox = false
     @State private var renamingNode: Node?
@@ -220,15 +221,27 @@ struct VisualBuilderScreen: View {
             ForEach(connections) { conn in
                 let from = dotPoint(for: Node(side: .source, name: conn.src))
                 let to = dotPoint(for: Node(side: .dest, name: conn.dstTarget))
+                let color = conn.kind == .grant ? Theme.green : Theme.blue
+                let active = hoveredConnection == conn.id || editingConnection?.id == conn.id
+                // Dim the other lines while one is hovered or being edited.
+                let dimmed = !active && (hoveredConnection != nil || editingConnection != nil)
+
                 ConnectionCurve(from: from, to: to)
-                    .stroke((conn.kind == .grant ? Theme.green : Theme.blue).opacity(0.75),
-                            lineWidth: 1.5)
+                    .stroke(color.opacity(dimmed ? 0.2 : active ? 1 : 0.75),
+                            lineWidth: active ? 3.5 : 1.5)
+                    .shadow(color: active ? color.opacity(0.8) : .clear, radius: active ? 4 : 0)
+                if active {
+                    // Mark both endpoints so it's obvious what the line connects.
+                    Circle().fill(color).frame(width: 8, height: 8).position(from)
+                    Circle().fill(color).frame(width: 8, height: 8).position(to)
+                }
                 ConnectionCurve(from: from, to: to)
                     .stroke(Color.clear, lineWidth: 12)
                     .contentShape(ConnectionCurve(from: from, to: to).path(in: CGRect(
                         x: 0, y: 0, width: canvasWidth, height: canvasHeight
                     )).strokedPath(.init(lineWidth: 12)))
                     .onTapGesture { editingConnection = conn }
+                    .onHover { hoveredConnection = $0 ? conn.id : nil }
                     .help("\(conn.src) → \(conn.dst) — click to edit")
             }
 
