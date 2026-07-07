@@ -42,6 +42,8 @@ struct PolicyModel {
     var tagOrder: [String] = []
     var hosts: [String: String] = [:]
     var hostOrder: [String] = []
+    var ipsets: [String: [String]] = [:]
+    var ipsetOrder: [String] = []
     var rules: [ACLRule] = []
     var grants: [GrantRule] = []
     var tests: [ACLTest] = []
@@ -65,6 +67,12 @@ struct PolicyModel {
             for m in members {
                 hosts[m.key] = m.value.stringValue ?? ""
                 hostOrder.append(m.key)
+            }
+        }
+        if let members = tree["ipsets"]?.members {
+            for m in members {
+                ipsets[m.key] = m.value.stringArray
+                ipsetOrder.append(m.key)
             }
         }
         if let elements = tree["acls"]?.elements {
@@ -128,15 +136,19 @@ struct PolicyModel {
         return specs.uniqued()
     }
 
-    /// Destination-side entities (targets, without ports).
+    /// Destination-side entities (targets, without ports; "host:x" → "x").
     var destTargets: [String] {
         var targets: [String] = []
-        let used = Set(rules.flatMap(\.dst).map { DestSpec($0).target }
-                       + grants.flatMap(\.dst))
+        let used = Set(
+            (rules.flatMap(\.dst).map { DestSpec($0).target } + grants.flatMap(\.dst))
+                .map { $0.hasPrefix("host:") ? String($0.dropFirst(5)) : $0 }
+        )
         if used.contains("*") { targets.append("*") }
         targets.append(contentsOf: hostOrder)
         targets.append(contentsOf: tagOrder)
-        for t in used where !targets.contains(t) && t.hasPrefix("autogroup:") {
+        targets.append(contentsOf: ipsetOrder)
+        // Anything referenced only in rules: autogroups, groups-as-dst, raw IPs.
+        for t in used.sorted() where !targets.contains(t) {
             targets.append(t)
         }
         return targets.uniqued()

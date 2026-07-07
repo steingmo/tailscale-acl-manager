@@ -247,7 +247,8 @@ final class PolicyStore: ObservableObject {
         switch kind {
         case .group: fullName = name.hasPrefix("group:") ? name : "group:\(name)"
         case .tag: fullName = name.hasPrefix("tag:") ? name : "tag:\(name)"
-        case .host, .ipSet: fullName = name
+        case .ipSet: fullName = name.hasPrefix("ipset:") ? name : "ipset:\(name)"
+        case .host: fullName = name
         }
         mutate { tree in
             switch kind {
@@ -255,8 +256,11 @@ final class PolicyStore: ObservableObject {
                 appendMember(&tree, section: "groups", key: fullName, value: .array([]))
             case .tag:
                 appendMember(&tree, section: "tagOwners", key: fullName, value: .array([]))
-            case .host, .ipSet:
+            case .host:
                 appendMember(&tree, section: "hosts", key: fullName, value: .string(address))
+            case .ipSet:
+                appendMember(&tree, section: "ipsets", key: fullName,
+                             value: .array([JSON.Element(comments: [], value: .string(address))]))
             }
         }
     }
@@ -292,7 +296,7 @@ final class PolicyStore: ObservableObject {
     /// Delete an entity and clean up every rule/test that references it.
     func deleteEntity(_ name: String) {
         mutate { tree in
-            for section in ["groups", "tagOwners", "hosts"] {
+            for section in ["groups", "tagOwners", "hosts", "ipsets"] {
                 if var members = tree[section]?.members {
                     members.removeAll { $0.key == name }
                     tree[section]?.elements = nil
@@ -315,9 +319,12 @@ final class PolicyStore: ObservableObject {
                 for i in acls.indices {
                     var rule = acls[i].value
                     var src = rule["src"]?.stringArray ?? []
-                    src.removeAll { $0 == name }
+                    src.removeAll { $0 == name || $0 == "host:\(name)" }
                     var dst = rule["dst"]?.stringArray ?? []
-                    dst.removeAll { DestSpec($0).target == name }
+                    dst.removeAll {
+                        let t = DestSpec($0).target
+                        return t == name || t == "host:\(name)"
+                    }
                     rule["src"] = stringArrayJSON(src)
                     rule["dst"] = stringArrayJSON(dst)
                     acls[i].value = rule
@@ -334,7 +341,7 @@ final class PolicyStore: ObservableObject {
                     var grant = grants[i].value
                     for key in ["src", "dst", "via"] where grant[key] != nil {
                         var values = grant[key]?.stringArray ?? []
-                        values.removeAll { $0 == name }
+                        values.removeAll { $0 == name || $0 == "host:\(name)" }
                         if key == "via" && values.isEmpty {
                             grant[key] = nil
                         } else {
@@ -425,9 +432,13 @@ private func appendMember(_ tree: inout JSON, section: String, key: String, valu
 private func rewriteNames(_ tree: inout JSON, from oldName: String, to newName: String) {
     func rewriteString(_ s: String) -> String {
         if s == oldName { return newName }
+        if s == "host:\(oldName)" { return "host:\(newName)" }
         let d = DestSpec(s)
         if d.target == oldName && s != d.target {
             return DestSpec(target: newName, ports: d.ports).spec
+        }
+        if d.target == "host:\(oldName)" && s != d.target {
+            return DestSpec(target: "host:\(newName)", ports: d.ports).spec
         }
         return s
     }

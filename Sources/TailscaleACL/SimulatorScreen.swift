@@ -21,6 +21,7 @@ struct SimulatorScreen: View {
         if !m.groupOrder.isEmpty { sections.append(("Groups", m.groupOrder)) }
         if !m.tagOrder.isEmpty { sections.append(("Tags", m.tagOrder)) }
         if !m.hostOrder.isEmpty { sections.append(("Hosts", m.hostOrder)) }
+        if !m.ipsetOrder.isEmpty { sections.append(("IP sets", m.ipsetOrder)) }
         sections.append(("Special", special))
         return sections
     }

@@ -316,6 +316,7 @@ struct VisualBuilderScreen: View {
     private func canDelete(_ node: Node) -> Bool {
         node.name.hasPrefix("group:") || node.name.hasPrefix("tag:")
             || store.model.hosts[node.name] != nil
+            || store.model.ipsets[node.name] != nil
     }
 
     // MARK: - Geometry
@@ -712,10 +713,11 @@ private struct EditEntitySheet: View {
     @State private var newItem = ""
     @State private var address = ""
 
-    private enum Kind { case group, tag, host }
+    private enum Kind { case group, tag, host, ipset }
     private var kind: Kind {
         if name.hasPrefix("group:") { return .group }
         if name.hasPrefix("tag:") { return .tag }
+        if name.hasPrefix("ipset:") { return .ipset }
         return .host
     }
 
@@ -746,6 +748,10 @@ private struct EditEntitySheet: View {
                 listEditor(title: "Owners — who may apply this tag",
                            addPrompt: "Add owner, e.g. group:ops or an email",
                            suggestions: store.model.groupOrder + ["autogroup:admin"])
+            case .ipset:
+                listEditor(title: "Addresses (IPs or CIDRs)",
+                           addPrompt: "Add address, e.g. 10.1.0.5 or 10.1.0.0/24",
+                           suggestions: [])
             case .host:
                 VStack(alignment: .leading, spacing: 6) {
                     Text("IP address / CIDR")
@@ -774,6 +780,7 @@ private struct EditEntitySheet: View {
             switch kind {
             case .group: items = store.model.groups[name] ?? []
             case .tag: items = store.model.tagOwners[name] ?? []
+            case .ipset: items = store.model.ipsets[name] ?? []
             case .host: address = store.model.hosts[name] ?? ""
             }
         }
@@ -863,6 +870,8 @@ private struct EditEntitySheet: View {
             store.setEntityList(section: "groups", key: name, values: cleaned)
         case .tag:
             store.setEntityList(section: "tagOwners", key: name, values: cleaned)
+        case .ipset:
+            store.setEntityList(section: "ipsets", key: name, values: cleaned)
         case .host:
             store.setHostAddress(name: name,
                                  address: address.trimmingCharacters(in: .whitespaces))
@@ -872,6 +881,7 @@ private struct EditEntitySheet: View {
         // Keep the entity's kind prefix if the user drops it.
         if kind == .group && !n.hasPrefix("group:") { n = "group:\(n)" }
         if kind == .tag && !n.hasPrefix("tag:") { n = "tag:\(n)" }
+        if kind == .ipset && !n.hasPrefix("ipset:") { n = "ipset:\(n)" }
         if n != name {
             store.renameEntity(from: name, to: n)
         }

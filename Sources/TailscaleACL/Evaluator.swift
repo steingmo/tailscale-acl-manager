@@ -65,7 +65,14 @@ struct Evaluator {
         return portMatches(spec: portPart, port: port)
     }
 
-    func sourceMatches(spec: String, sourceID: String) -> Bool {
+    /// "host:dc01" and "dc01" refer to the same host entity.
+    private func stripHost(_ s: String) -> String {
+        s.hasPrefix("host:") ? String(s.dropFirst(5)) : s
+    }
+
+    func sourceMatches(spec rawSpec: String, sourceID rawSource: String) -> Bool {
+        let spec = stripHost(rawSpec)
+        let sourceID = stripHost(rawSource)
         if spec == sourceID { return true }
         if spec == "*" { return true }
         if spec == "autogroup:members" || spec == "autogroup:member" {
@@ -74,18 +81,23 @@ struct Evaluator {
             return sourceID.contains("@") || sourceID.hasPrefix("group:")
         }
         if spec.hasPrefix("group:") {
-            return spec == sourceID || (model.groups[spec]?.contains(sourceID) ?? false)
+            return model.groups[spec]?.contains(sourceID) ?? false
         }
-        if spec == sourceID { return true }
         // Host referenced by a CIDR host entry: spec is a host whose value is a
         // CIDR that contains sourceID's IP.
         if let cidr = model.hosts[spec], let ip = model.hosts[sourceID] {
             return cidrContains(cidr: cidr, ip: ip)
         }
+        // IP set containing the source host's address.
+        if let entries = model.ipsets[spec], let ip = model.hosts[sourceID] {
+            return entries.contains { cidrContains(cidr: $0, ip: ip) }
+        }
         return false
     }
 
-    func targetMatches(target: String, destID: String) -> Bool {
+    func targetMatches(target rawTarget: String, destID rawDest: String) -> Bool {
+        let target = stripHost(rawTarget)
+        let destID = stripHost(rawDest)
         if target == "*" { return true }
         if target == destID { return true }
         if target == "autogroup:members" || target == "autogroup:member" {
@@ -96,6 +108,10 @@ struct Evaluator {
         }
         if let cidr = model.hosts[target], let ip = model.hosts[destID] {
             return cidrContains(cidr: cidr, ip: ip)
+        }
+        // IP set containing the destination host's address.
+        if let entries = model.ipsets[target], let ip = model.hosts[destID] {
+            return entries.contains { cidrContains(cidr: $0, ip: ip) }
         }
         return false
     }
@@ -127,10 +143,11 @@ struct Evaluator {
 
     // MARK: - IPv4 / CIDR
 
+    /// `cidr` may be a bare IP (treated as /32) or "a.b.c.d/n".
     func cidrContains(cidr: String, ip: String) -> Bool {
         let parts = cidr.split(separator: "/")
-        guard parts.count == 2,
-              let bits = Int(parts[1]), bits >= 0, bits <= 32,
+        let bits = parts.count == 2 ? Int(parts[1]) ?? -1 : 32
+        guard bits >= 0, bits <= 32,
               let base = ipv4(String(parts[0])),
               let addr = ipv4(ip.split(separator: "/").first.map(String.init) ?? ip)
         else { return false }

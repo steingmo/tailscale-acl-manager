@@ -40,6 +40,7 @@ enum Theme {
         if name.hasPrefix("autogroup:") { return "globe" }
         if name.hasPrefix("group:") { return "person.2" }
         if name.hasPrefix("tag:") { return "tag" }
+        if name.hasPrefix("ipset:") { return "square.stack.3d.up" }
         return "server.rack"
     }
 }
