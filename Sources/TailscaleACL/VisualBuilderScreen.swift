@@ -11,7 +11,10 @@ private struct Connection: Identifiable {
     var ip: [String]  // grant ip entries; empty for ACLs
 
     var id: String { "\(kind)|\(ruleIndex)|\(src)|\(dst)" }
-    var dstTarget: String { kind == .acl ? DestSpec(dst).target : dst }
+    var dstTarget: String {
+        let t = kind == .acl ? DestSpec(dst).target : dst
+        return t.hasPrefix("host:") ? String(t.dropFirst(5)) : t
+    }
     var ports: String {
         kind == .acl ? DestSpec(dst).ports : PolicyStore.splitIPEntries(ip).ports
     }
