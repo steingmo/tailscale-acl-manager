@@ -94,11 +94,22 @@ struct VisualBuilderScreen: View {
         VStack(alignment: .leading, spacing: 0) {
             header
             legend
-            ScrollView([.horizontal, .vertical]) {
-                canvas
-                    .frame(width: canvasWidth, height: canvasHeight, alignment: .topLeading)
-                    .padding(.horizontal, 16)
-                    .padding(.bottom, 20)
+            if store.isValid {
+                ScrollView([.horizontal, .vertical]) {
+                    canvas
+                        .frame(width: canvasWidth, height: canvasHeight, alignment: .topLeading)
+                        .padding(.horizontal, 16)
+                        .padding(.bottom, 20)
+                }
+            } else {
+                HStack(spacing: 8) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(Theme.orange)
+                    Text("Fix the policy in the editor to use the visual builder.")
+                        .foregroundStyle(Theme.textSecondary)
+                }
+                .padding(16)
+                Spacer(minLength: 0)
             }
         }
         .background(Theme.background)

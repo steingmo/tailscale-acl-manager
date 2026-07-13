@@ -37,15 +37,20 @@ final class PolicyStore: ObservableObject {
         parseTask?.cancel()
         parseTask = nil
         do {
-            let parsed = try HuJSONParser.parse(text)
+            // Emptying the editor means "start from scratch", not a syntax error.
+            let source = text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                ? "{}" : text
+            let parsed = try HuJSONParser.parse(source)
             tree = parsed
             model = PolicyModel(tree: parsed)
             parseError = nil
             testResults = evaluator.runTests()
         } catch let error as HuJSONError {
             parseError = error
+            testResults = []
         } catch {
             parseError = HuJSONError(message: "\(error)", line: 0)
+            testResults = []
         }
     }
 
