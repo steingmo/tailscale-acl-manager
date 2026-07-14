@@ -26,6 +26,17 @@ struct GrantRule: Identifiable {
     var id: Int { index }
 }
 
+struct SSHRule: Identifiable {
+    var index: Int
+    var comments: [String]
+    var action: String   // "accept" or "check"
+    var src: [String]
+    var dst: [String]
+    var users: [String]
+
+    var id: Int { index }
+}
+
 struct ACLTest: Identifiable {
     var index: Int
     var src: String
@@ -46,6 +57,7 @@ struct PolicyModel {
     var ipsetOrder: [String] = []
     var rules: [ACLRule] = []
     var grants: [GrantRule] = []
+    var sshRules: [SSHRule] = []
     var tests: [ACLTest] = []
 
     init() {}
@@ -100,6 +112,19 @@ struct PolicyModel {
                     hasApp: e.value["app"] != nil,
                     via: e.value["via"]?.stringArray ?? [],
                     srcPosture: e.value["srcPosture"]?.stringArray ?? []
+                ))
+            }
+        }
+        if let elements = tree["ssh"]?.elements {
+            for (i, e) in elements.enumerated() {
+                guard case .object = e.value else { continue }
+                sshRules.append(SSHRule(
+                    index: i,
+                    comments: e.comments,
+                    action: e.value["action"]?.stringValue ?? "accept",
+                    src: e.value["src"]?.stringArray ?? [],
+                    dst: e.value["dst"]?.stringArray ?? [],
+                    users: e.value["users"]?.stringArray ?? []
                 ))
             }
         }

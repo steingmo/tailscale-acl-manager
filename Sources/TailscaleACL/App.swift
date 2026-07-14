@@ -26,7 +26,9 @@ enum Screen: String, CaseIterable, Identifiable {
     case accessMatrix = "Access Matrix"
     case visualBuilder = "Visual Builder"
     case accessSimulator = "Access Simulator"
+    case ssh = "SSH"
     case tests = "Tests"
+    case problems = "Problems"
 
     var id: String { rawValue }
 
@@ -36,7 +38,9 @@ enum Screen: String, CaseIterable, Identifiable {
         case .accessMatrix: return "tablecells"
         case .visualBuilder: return "point.3.connected.trianglepath.dotted"
         case .accessSimulator: return "play"
+        case .ssh: return "terminal"
         case .tests: return "checkmark.shield"
+        case .problems: return "exclamationmark.triangle"
         }
     }
 }
@@ -77,12 +81,17 @@ struct RootView: View {
             Spacer()
 
             let results = store.testResults
+            let problems = store.lintIssues.count
             VStack(alignment: .leading, spacing: 6) {
                 StatusPill(label: store.isValid ? "Policy valid" : "Policy invalid",
                            ok: store.isValid)
                 StatusPill(
                     label: "\(results.filter(\.passed).count)/\(results.count) tests pass",
                     ok: !results.isEmpty && results.allSatisfy(\.passed)
+                )
+                StatusPill(
+                    label: problems == 0 ? "No problems" : "\(problems) problem\(problems == 1 ? "" : "s")",
+                    ok: problems == 0
                 )
             }
             .padding(10)
@@ -121,7 +130,9 @@ struct RootView: View {
         case .accessMatrix: AccessMatrixScreen()
         case .visualBuilder: VisualBuilderScreen()
         case .accessSimulator: SimulatorScreen()
+        case .ssh: SSHScreen()
         case .tests: TestsScreen()
+        case .problems: ProblemsScreen()
         }
     }
 }

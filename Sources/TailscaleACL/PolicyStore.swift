@@ -13,6 +13,7 @@ final class PolicyStore: ObservableObject {
     @Published private(set) var model = PolicyModel()
     @Published private(set) var parseError: HuJSONError?
     @Published private(set) var testResults: [TestResult] = []
+    @Published private(set) var lintIssues: [LintIssue] = []
 
     private var parseTask: Task<Void, Never>?
 
@@ -45,12 +46,16 @@ final class PolicyStore: ObservableObject {
             model = PolicyModel(tree: parsed)
             parseError = nil
             testResults = evaluator.runTests()
+            lintIssues = lintPolicy(model)
         } catch let error as HuJSONError {
             parseError = error
             testResults = []
+            lintIssues = [LintIssue(severity: .error, title: "Policy does not parse",
+                                    detail: "Line \(error.line): \(error.message)")]
         } catch {
             parseError = HuJSONError(message: "\(error)", line: 0)
             testResults = []
+            lintIssues = []
         }
     }
 
@@ -237,6 +242,50 @@ final class PolicyStore: ObservableObject {
         }
     }
 
+    // MARK: - SSH rules
+
+    private func sshMembers(action: String, src: [String], dst: [String],
+                            users: [String]) -> [JSON.Member] {
+        [
+            .init(comments: [], key: "action", value: .string(action)),
+            .init(comments: [], key: "src", value: stringArrayJSON(src)),
+            .init(comments: [], key: "dst", value: stringArrayJSON(dst)),
+            .init(comments: [], key: "users", value: stringArrayJSON(users)),
+        ]
+    }
+
+    func addSSHRule(action: String, src: [String], dst: [String], users: [String]) {
+        mutate { tree in
+            var rules = tree["ssh"]?.elements ?? []
+            rules.append(JSON.Element(
+                comments: [],
+                value: .object(sshMembers(action: action, src: src, dst: dst, users: users))
+            ))
+            if tree["ssh"] == nil {
+                tree["ssh"] = .array(rules)
+            } else {
+                tree["ssh"]?.elements = rules
+            }
+        }
+    }
+
+    func updateSSHRule(index: Int, action: String, src: [String], dst: [String],
+                       users: [String]) {
+        mutate { tree in
+            guard var rules = tree["ssh"]?.elements, rules.indices.contains(index) else { return }
+            rules[index].value = .object(sshMembers(action: action, src: src, dst: dst, users: users))
+            tree["ssh"]?.elements = rules
+        }
+    }
+
+    func deleteSSHRule(index: Int) {
+        mutate { tree in
+            guard var rules = tree["ssh"]?.elements, rules.indices.contains(index) else { return }
+            rules.remove(at: index)
+            tree["ssh"]?.elements = rules
+        }
+    }
+
     // MARK: - Entity editing
 
     enum EntityKind: String, CaseIterable, Identifiable {
@@ -360,6 +409,23 @@ final class PolicyStore: ObservableObject {
                         || ($0.value["dst"]?.stringArray.isEmpty ?? true)
                 }
                 tree["grants"] = .array(grants)
+            }
+            // Clean ssh rules.
+            if var ssh = tree["ssh"]?.elements {
+                for i in ssh.indices {
+                    var rule = ssh[i].value
+                    for key in ["src", "dst"] where rule[key] != nil {
+                        var values = rule[key]?.stringArray ?? []
+                        values.removeAll { $0 == name || $0 == "host:\(name)" }
+                        rule[key] = stringArrayJSON(values)
+                    }
+                    ssh[i].value = rule
+                }
+                ssh.removeAll {
+                    ($0.value["src"]?.stringArray.isEmpty ?? true)
+                        || ($0.value["dst"]?.stringArray.isEmpty ?? true)
+                }
+                tree["ssh"] = .array(ssh)
             }
             // Clean tests.
             if var tests = tree["tests"]?.elements {

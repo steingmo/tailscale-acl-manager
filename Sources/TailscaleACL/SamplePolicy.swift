@@ -27,7 +27,7 @@ enum SamplePolicy {
     {
       "action": "accept",
       "src":    ["group:eng"],
-      "dst":    ["tag:server:22,80,443", "tag:ci:22,8080"],
+      "dst":    ["tag:server:22,80,443", "tag:ci:22,8080", "internal-net:443"],
     },
 
     // Ops can reach everything.
@@ -65,6 +65,23 @@ enum SamplePolicy {
       "src": ["group:eng"],
       "dst": ["tag:db"],
       "ip":  ["tcp:6379"],
+    },
+  ],
+
+  "ssh": [
+    // Everyone may SSH to their own devices; sessions periodically re-verify.
+    {
+      "action": "check",
+      "src":    ["autogroup:member"],
+      "dst":    ["autogroup:self"],
+      "users":  ["autogroup:nonroot", "root"],
+    },
+    // Ops may SSH into tagged servers.
+    {
+      "action": "accept",
+      "src":    ["group:ops"],
+      "dst":    ["tag:server"],
+      "users":  ["autogroup:nonroot", "root"],
     },
   ],
 

@@ -31,9 +31,13 @@ Swift Package (no Xcode project). All source in `Sources/TailscaleACL/`:
   and **deliberately no NSRulerView**: the ruler corrupts NSScrollView
   tiling inside SwiftUI on recent macOS and blanks the text. Line numbers
   are a sibling `GutterView` synced via bounds-change notifications.
-- `*Screen.swift` — the five screens (editor, matrix, visual builder,
-  simulator, tests). Visual builder draws ACL connections blue, grants
-  green.
+- `*Screen.swift` — the seven screens (editor, matrix, visual builder,
+  simulator, ssh, tests, problems). Visual builder draws ACL connections
+  blue, grants green. Matrix cells are clickable (add/edit/remove access
+  via the shared `ConnectionSheet` in `SharedSheets.swift`).
+- `Lint.swift` — pure `lintPolicy(model)`: undefined references, ownerless
+  tags, unused entities, empty groups, invalid addresses/port specs,
+  same-kind shadowed rules. Cached on `PolicyStore` per parse.
 - `App.swift` — app entry, sidebar navigation, Sparkle updater
   (`UpdaterViewModel`) + "Check for Updates…" menu item.
 
