@@ -3,7 +3,11 @@
 Native macOS SwiftUI app for editing, visualizing, simulating, and testing
 Tailscale ACL policies. Offline except Sparkle update checks and an opt-in
 Headscale connection (`Headscale.swift`: REST client + Keychain-stored API
-key; `HeadscaleScreen.swift`: pull/push policy, list nodes). Pushing needs
+key; `HeadscaleScreen.swift`: pull, reviewed push, push history/rollback,
+list nodes; `Impact.swift`: node-to-node access diff shown before a push;
+`History.swift`: push history in ~/Library/Application Support/TailscaleACL,
+written *before* each push so a rollback copy always exists; device checks
+in `lintNodes` in `Lint.swift`). Pushing needs
 the server in `policy.mode: database`. ATS allows plain HTTP only to local
 networks (`NSAllowsLocalNetworking`).
 Unofficial community tool, MIT licensed, distributed via GitHub Releases

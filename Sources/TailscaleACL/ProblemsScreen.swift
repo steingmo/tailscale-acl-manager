@@ -18,6 +18,11 @@ struct ProblemsScreen: View {
                     Text("Structure checks: undefined references, ownerless tags, unused entities, shadowed rules, invalid values")
                         .font(.system(size: 11.5))
                         .foregroundStyle(Theme.textSecondary)
+                    Text(store.headscaleNodes.isEmpty
+                         ? "Load nodes from Headscale to also check the policy against your real devices."
+                         : "Device checks are using \(store.headscaleNodes.count) devices from Headscale.")
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(Theme.textSecondary.opacity(0.8))
                 }
 
                 if issues.isEmpty {

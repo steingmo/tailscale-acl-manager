@@ -215,3 +215,57 @@ private func isValidIPSpec(_ spec: String) -> Bool {
     }
     return isValidPortToken(spec)
 }
+
+// MARK: - Device checks (need nodes loaded from Headscale)
+
+/// Checks that compare the policy against the real devices on the server.
+func lintNodes(_ m: PolicyModel, nodes: [HeadscaleNode]) -> [LintIssue] {
+    guard !nodes.isEmpty else { return [] }
+    var issues: [LintIssue] = []
+    let deviceTags = Set(nodes.flatMap(\.allTags))
+
+    for tag in m.tagOrder where !deviceTags.contains(tag) {
+        issues.append(.init(severity: .warning, title: "Tag not on any device",
+                            detail: "\(tag) is defined in \"tagOwners\" but no current device carries it — possibly left over from a retired device."))
+    }
+    for node in nodes {
+        for tag in node.allTags where m.tagOwners[tag] == nil {
+            issues.append(.init(severity: .warning, title: "Undeclared device tag",
+                                detail: "Device \(node.displayName) carries \(tag), which has no entry in \"tagOwners\"."))
+        }
+    }
+
+    // Rules whose sources, or whose device-type destinations, match no device.
+    // Host aliases, IP sets, raw IPs, "*" and autogroup:internet are skipped:
+    // they often point at subnet-routed machines that aren't Headscale nodes.
+    let ev = Evaluator(model: m)
+    func matchesSomeSource(_ spec: String) -> Bool {
+        nodes.contains { n in n.identities.contains { ev.sourceMatches(spec: spec, sourceID: $0) } }
+    }
+    func isDeviceSelector(_ t: String) -> Bool {
+        t.hasPrefix("tag:") || t.hasPrefix("group:") || t.contains("@")
+            || t == "autogroup:member" || t == "autogroup:members"
+    }
+    func matchesSomeDest(_ target: String) -> Bool {
+        nodes.contains { n in n.identities.contains { ev.targetMatches(target: target, destID: $0) } }
+    }
+    func check(_ name: String, src: [String], dstTargets: [String]) {
+        if !src.contains("*"), !src.contains(where: matchesSomeSource) {
+            issues.append(.init(severity: .warning, title: "Rule matches no device",
+                                detail: "No current device matches any source of \(name) (\(src.joined(separator: ", "))), so it never applies."))
+        }
+        let deviceDsts = dstTargets.filter(isDeviceSelector)
+        if !deviceDsts.isEmpty, deviceDsts.count == dstTargets.count,
+           !deviceDsts.contains(where: matchesSomeDest) {
+            issues.append(.init(severity: .warning, title: "Rule reaches no device",
+                                detail: "No current device matches any destination of \(name) (\(deviceDsts.joined(separator: ", ")))."))
+        }
+    }
+    for r in m.rules where r.action == "accept" {
+        check("acls[\(r.index)]", src: r.src, dstTargets: r.dst.map { DestSpec($0).target })
+    }
+    for g in m.grants {
+        check("grants[\(g.index)]", src: g.src, dstTargets: g.dst)
+    }
+    return issues
+}

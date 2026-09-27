@@ -15,7 +15,9 @@ final class PolicyStore: ObservableObject {
     @Published private(set) var testResults: [TestResult] = []
     @Published private(set) var lintIssues: [LintIssue] = []
     /// Nodes last fetched from Headscale (shared by the Headscale and simulator screens).
-    @Published var headscaleNodes: [HeadscaleNode] = []
+    @Published var headscaleNodes: [HeadscaleNode] = [] {
+        didSet { if isValid { lintIssues = lintPolicy(model) + lintNodes(model, nodes: headscaleNodes) } }
+    }
 
     private var parseTask: Task<Void, Never>?
 
@@ -48,7 +50,7 @@ final class PolicyStore: ObservableObject {
             model = PolicyModel(tree: parsed)
             parseError = nil
             testResults = evaluator.runTests()
-            lintIssues = lintPolicy(model)
+            lintIssues = lintPolicy(model) + lintNodes(model, nodes: headscaleNodes)
         } catch let error as HuJSONError {
             parseError = error
             testResults = []
