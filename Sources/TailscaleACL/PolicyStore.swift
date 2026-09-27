@@ -88,9 +88,14 @@ final class PolicyStore: ObservableObject {
         panel.message = "Choose a Tailscale ACL policy file (HuJSON)"
         if panel.runModal() == .OK, let url = panel.url,
            let contents = try? String(contentsOf: url, encoding: .utf8) {
-            text = contents
-            reparseNow()
+            loadPolicy(contents)
         }
+    }
+
+    /// Replace the whole policy (import, Headscale pull) and parse immediately.
+    func loadPolicy(_ contents: String) {
+        text = contents
+        reparseNow()
     }
 
     func exportToFile() {

@@ -1,0 +1,105 @@
+import Foundation
+import Security
+
+/// A node as returned by Headscale's `GET /api/v1/node`. Everything is
+/// optional so older and newer server versions both decode.
+struct HeadscaleNode: Decodable, Identifiable {
+    struct User: Decodable { var name: String? }
+
+    var id: String
+    var name: String?
+    var givenName: String?
+    var ipAddresses: [String]?
+    var user: User?
+    var online: Bool?
+    var lastSeen: String?
+    var tags: [String]?        // newer versions
+    var forcedTags: [String]?  // older versions
+    var validTags: [String]?   // older versions
+
+    var displayName: String {
+        if let g = givenName, !g.isEmpty { return g }
+        return name ?? id
+    }
+    var allTags: [String] { ((tags ?? []) + (forcedTags ?? []) + (validTags ?? [])).uniqued() }
+}
+
+/// Minimal client for the Headscale REST API (`/api/v1`, Bearer API key).
+struct HeadscaleClient {
+    var baseURL: URL
+    var apiKey: String
+
+    struct APIError: LocalizedError {
+        var message: String
+        var errorDescription: String? { message }
+    }
+
+    func getPolicy() async throws -> String {
+        struct Response: Decodable { var policy: String? }
+        let data = try await send("GET", "policy")
+        return try JSONDecoder().decode(Response.self, from: data).policy ?? ""
+    }
+
+    /// Headscale validates the policy server-side and applies it immediately.
+    /// Requires `policy.mode: database` in the server config.
+    func setPolicy(_ policy: String) async throws {
+        _ = try await send("PUT", "policy", body: ["policy": policy])
+    }
+
+    func listNodes() async throws -> [HeadscaleNode] {
+        struct Response: Decodable { var nodes: [HeadscaleNode]? }
+        let data = try await send("GET", "node")
+        return try JSONDecoder().decode(Response.self, from: data).nodes ?? []
+    }
+
+    private func send(_ method: String, _ path: String,
+                      body: [String: String]? = nil) async throws -> Data {
+        var req = URLRequest(url: baseURL.appendingPathComponent("api/v1/\(path)"))
+        req.httpMethod = method
+        req.timeoutInterval = 15
+        req.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        if let body {
+            req.httpBody = try JSONEncoder().encode(body)
+            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        }
+        let (data, response) = try await URLSession.shared.data(for: req)
+        guard let http = response as? HTTPURLResponse else {
+            throw APIError(message: "No HTTP response from server.")
+        }
+        guard (200..<300).contains(http.statusCode) else {
+            // grpc-gateway errors are {"code": n, "message": "..."}; auth failures are plain text.
+            let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+            let detail = (json?["message"] as? String)
+                ?? String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+            throw APIError(message: "HTTP \(http.statusCode): \(detail.isEmpty ? "request failed" : detail)")
+        }
+        return data
+    }
+}
+
+/// The Headscale API key lives in the login keychain, never in UserDefaults.
+enum HeadscaleKeychain {
+    private static let query: [String: Any] = [
+        kSecClass as String: kSecClassGenericPassword,
+        kSecAttrService as String: "com.local.tailscale-acl-manager.headscale",
+        kSecAttrAccount as String: "api-key",
+    ]
+
+    static func load() -> String? {
+        var q = query
+        q[kSecReturnData as String] = true
+        q[kSecMatchLimit as String] = kSecMatchLimitOne
+        var item: CFTypeRef?
+        guard SecItemCopyMatching(q as CFDictionary, &item) == errSecSuccess,
+              let data = item as? Data else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+
+    static func save(_ key: String) {
+        SecItemDelete(query as CFDictionary)
+        guard !key.isEmpty else { return }
+        var q = query
+        q[kSecValueData as String] = Data(key.utf8)
+        SecItemAdd(q as CFDictionary, nil)
+    }
+}

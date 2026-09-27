@@ -29,6 +29,7 @@ enum Screen: String, CaseIterable, Identifiable {
     case ssh = "SSH"
     case tests = "Tests"
     case problems = "Problems"
+    case headscale = "Headscale"
 
     var id: String { rawValue }
 
@@ -41,6 +42,7 @@ enum Screen: String, CaseIterable, Identifiable {
         case .ssh: return "terminal"
         case .tests: return "checkmark.shield"
         case .problems: return "exclamationmark.triangle"
+        case .headscale: return "network"
         }
     }
 }
@@ -133,6 +135,7 @@ struct RootView: View {
         case .ssh: SSHScreen()
         case .tests: TestsScreen()
         case .problems: ProblemsScreen()
+        case .headscale: HeadscaleScreen()
         }
     }
 }

@@ -1,7 +1,11 @@
 # Tailscale ACL Manager — project context
 
 Native macOS SwiftUI app for editing, visualizing, simulating, and testing
-Tailscale ACL policies. Fully offline except Sparkle update checks.
+Tailscale ACL policies. Offline except Sparkle update checks and an opt-in
+Headscale connection (`Headscale.swift`: REST client + Keychain-stored API
+key; `HeadscaleScreen.swift`: pull/push policy, list nodes). Pushing needs
+the server in `policy.mode: database`. ATS allows plain HTTP only to local
+networks (`NSAllowsLocalNetworking`).
 Unofficial community tool, MIT licensed, distributed via GitHub Releases
 and a Homebrew tap (`steingmo/homebrew-tap`, cask `tailscale-acl`).
 

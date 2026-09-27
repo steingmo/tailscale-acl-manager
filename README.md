@@ -1,8 +1,11 @@
 # Tailscale ACL — native macOS app
 
 A fully native SwiftUI app for editing, visualizing, simulating, and testing
-Tailscale ACL policies. 100% local/offline — the app never touches the network;
-policies only touch disk when you explicitly import or export.
+Tailscale ACL policies. Local-first: policies only touch disk when you
+explicitly import or export, and the network is used only for update checks
+and — if you configure one — your own [Headscale](https://headscale.net)
+server, where you can pull and push the policy and list nodes (API key kept
+in your Keychain; pushing requires `policy.mode: database`).
 
 Unofficial community tool, not affiliated with or endorsed by Tailscale Inc.
 Licensed under the [MIT License](LICENSE).
