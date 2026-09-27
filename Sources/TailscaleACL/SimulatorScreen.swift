@@ -5,6 +5,8 @@ struct SimulatorScreen: View {
     @State private var source = ""
     @State private var dest = ""
     @State private var port = 443
+    @State private var sshMode = false
+    @State private var login = "root"
     @State private var hasServer = false
     @State private var loadingNodes = false
     @State private var nodeError: String?
@@ -97,14 +99,33 @@ struct SimulatorScreen: View {
                         sectionedPicker(selection: $dest, sections: destSections)
                     }
 
-                    formRow(title: "Port", subtitle: "Destination port to test") {
-                        HStack(spacing: 4) {
-                            TextField("", value: $port, format: .number.grouping(.never))
+                    formRow(title: "Check", subtitle: "Network access on a port, or Tailscale SSH login") {
+                        Picker("", selection: $sshMode) {
+                            Text("Network").tag(false)
+                            Text("SSH").tag(true)
+                        }
+                        .pickerStyle(.segmented)
+                        .labelsHidden()
+                        .frame(width: 180)
+                    }
+
+                    if sshMode {
+                        formRow(title: "Login", subtitle: "Account on the destination device") {
+                            TextField("root", text: $login)
                                 .textFieldStyle(.roundedBorder)
                                 .font(.system(size: 13, design: .monospaced))
-                                .frame(width: 90)
-                            Stepper("", value: $port, in: 1...65535)
-                                .labelsHidden()
+                                .frame(width: 150)
+                        }
+                    } else {
+                        formRow(title: "Port", subtitle: "Destination port to test") {
+                            HStack(spacing: 4) {
+                                TextField("", value: $port, format: .number.grouping(.never))
+                                    .textFieldStyle(.roundedBorder)
+                                    .font(.system(size: 13, design: .monospaced))
+                                    .frame(width: 90)
+                                Stepper("", value: $port, in: 1...65535)
+                                    .labelsHidden()
+                            }
                         }
                     }
                 }
@@ -115,8 +136,10 @@ struct SimulatorScreen: View {
                 .padding(.horizontal, 16)
 
                 if store.isValid, !source.isEmpty, !dest.isEmpty {
-                    resultSection
-                        .padding(16)
+                    Group {
+                        if sshMode { sshResultSection } else { resultSection }
+                    }
+                    .padding(16)
                 } else if !store.isValid {
                     HStack(spacing: 8) {
                         Image(systemName: "exclamationmark.triangle.fill")
@@ -131,8 +154,14 @@ struct SimulatorScreen: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(Theme.background)
+        .onChange(of: store.currentWorkspaceID) {
+            hasServer = store.headscaleClient() != nil
+            nodeError = nil
+            source = sources.first ?? ""
+            dest = store.model.tagOrder.first ?? store.model.hostOrder.first ?? dests.first ?? ""
+        }
         .onAppear {
-            hasServer = HeadscaleClient.fromSettings() != nil
+            hasServer = store.headscaleClient() != nil
             if source.isEmpty { source = sources.first ?? "" }
             if dest.isEmpty {
                 dest = store.model.tagOrder.first
@@ -154,7 +183,7 @@ struct SimulatorScreen: View {
     }
 
     private func loadNodes() {
-        guard let client = HeadscaleClient.fromSettings() else { return }
+        guard let client = store.headscaleClient() else { return }
         loadingNodes = true
         nodeError = nil
         Task {
@@ -194,6 +223,85 @@ struct SimulatorScreen: View {
             Spacer()
             control()
         }
+    }
+
+    private var sshResultSection: some View {
+        let ev = store.evaluator
+        let src = identities(for: source)
+        let dst = identities(for: dest)
+        let user = login.trimmingCharacters(in: .whitespaces).isEmpty ? "root" : login.trimmingCharacters(in: .whitespaces)
+        let matches = ev.evaluateSSH(sourceIDs: src, destIDs: dst, login: user)
+        let network = ev.sshNetworkAllowed(sourceIDs: src, destIDs: dst)
+        let allowed = network && !matches.isEmpty
+        let check = matches.contains { $0.action == "check" } && !matches.contains { $0.action == "accept" }
+        let verdict: String = {
+            if allowed { return check ? "Allowed with check — the user must re-authenticate periodically." : "Allowed." }
+            if matches.isEmpty && !network { return "Denied. No SSH rule allows this login, and there is no network access to port 22." }
+            if matches.isEmpty { return "Denied. No SSH rule allows logging in as \(user)." }
+            return "Denied. An SSH rule matches, but the policy doesn't allow network access to port 22."
+        }()
+        let color = allowed ? (check ? Theme.orange : Theme.green) : Theme.red
+
+        return VStack(alignment: .leading, spacing: 16) {
+            HStack(spacing: 8) {
+                endpointChip(source)
+                Image(systemName: "arrow.right")
+                    .foregroundStyle(Theme.textSecondary)
+                endpointChip(dest)
+                Chip(text: "ssh \(user)", color: Theme.pink, icon: "terminal")
+            }
+            ForEach([source, dest].compactMap(node(for:)), id: \.id) { n in
+                Text(verbatim: "\(n.displayName) matches as: \(n.identities.isEmpty ? "nothing (no tags, user, or IPs)" : n.identities.joined(separator: ", "))")
+                    .font(.system(size: 10.5, design: .monospaced))
+                    .foregroundStyle(Theme.textSecondary)
+                    .textSelection(.enabled)
+            }
+
+            HStack(spacing: 8) {
+                Image(systemName: allowed ? "checkmark.shield" : "xmark.shield")
+                    .font(.system(size: 13, weight: .semibold))
+                Text(verbatim: verdict)
+                    .font(.system(size: 13, weight: .semibold))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .foregroundStyle(color)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(12)
+            .background(RoundedRectangle(cornerRadius: 8).fill(color.opacity(0.10)))
+            .overlay(RoundedRectangle(cornerRadius: 8).stroke(color.opacity(0.35), lineWidth: 1))
+
+            Label(network ? "Network access to port 22: allowed" : "Network access to port 22: denied",
+                  systemImage: network ? "checkmark.circle" : "xmark.circle")
+                .font(.system(size: 11.5))
+                .foregroundStyle(network ? Theme.green : Theme.red)
+
+            if !matches.isEmpty {
+                Text("Matching SSH rules")
+                    .font(.system(size: 13, weight: .bold))
+                    .foregroundStyle(Theme.textPrimary)
+                ForEach(matches) { m in
+                    HStack(spacing: 6) {
+                        Text("SSH rule #\(m.ruleIndex + 1)")
+                            .font(.system(size: 10.5, weight: .bold))
+                            .foregroundStyle(Theme.pink)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 3)
+                            .background(Theme.pink.opacity(0.15), in: RoundedRectangle(cornerRadius: 5))
+                        Text(m.action)
+                            .font(.system(size: 10.5, weight: .bold))
+                            .foregroundStyle(m.action == "check" ? Theme.orange : Theme.green)
+                        Text(verbatim: "\(m.srcSpec) → \(m.dstSpec)")
+                            .font(.system(size: 11.5, weight: .semibold, design: .monospaced))
+                            .foregroundStyle(Theme.textPrimary)
+                    }
+                    .padding(10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(RoundedRectangle(cornerRadius: 8).fill(Theme.panel))
+                    .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.panelBorder, lineWidth: 1))
+                }
+            }
+        }
+        .frame(maxWidth: 760, alignment: .leading)
     }
 
     private var resultSection: some View {

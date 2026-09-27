@@ -19,14 +19,99 @@ final class PolicyStore: ObservableObject {
         didSet { if isValid { lintIssues = lintPolicy(model) + lintNodes(model, nodes: headscaleNodes) } }
     }
 
+    @Published private(set) var workspaces: [Workspace]
+    @Published private(set) var currentWorkspaceID: UUID
+    /// The window's undo manager; visual edits register here so Cmd-Z works everywhere.
+    weak var undoManager: UndoManager?
+
     private var parseTask: Task<Void, Never>?
 
     var evaluator: Evaluator { Evaluator(model: model) }
     var isValid: Bool { parseError == nil && tree != nil }
 
+    var currentWorkspace: Workspace {
+        workspaces.first { $0.id == currentWorkspaceID } ?? workspaces[0]
+    }
+
     init() {
-        text = SamplePolicy.text
+        var list = WorkspaceStore.load()
+        if list.isEmpty { list = [WorkspaceStore.migrateLegacy()] }
+        let saved = UserDefaults.standard.string(forKey: "currentWorkspaceID").flatMap(UUID.init)
+        workspaces = list
+        currentWorkspaceID = list.first { $0.id == saved }?.id ?? list[0].id
+        text = currentWorkspace.policy
         reparseNow()
+    }
+
+    // MARK: - Workspaces
+
+    func switchWorkspace(to id: UUID) {
+        guard id != currentWorkspaceID, workspaces.contains(where: { $0.id == id }) else { return }
+        currentWorkspaceID = id
+        UserDefaults.standard.set(id.uuidString, forKey: "currentWorkspaceID")
+        headscaleNodes = []
+        text = currentWorkspace.policy
+        reparseNow()
+        undoManager?.removeAllActions() // undo must not cross into another workspace
+    }
+
+    /// New workspace, empty or a copy of the current one (policy, server, API key).
+    func addWorkspace(name: String, duplicatingCurrent: Bool) {
+        var ws = Workspace(name: name, serverURL: "", policy: "{\n}\n")
+        if duplicatingCurrent {
+            ws.serverURL = currentWorkspace.serverURL
+            ws.policy = text
+            if let key = HeadscaleKeychain.load(account: currentWorkspaceID.uuidString) {
+                HeadscaleKeychain.save(key, account: ws.id.uuidString)
+            }
+        }
+        workspaces.append(ws)
+        saveWorkspaces()
+        switchWorkspace(to: ws.id)
+    }
+
+    func renameWorkspace(_ id: UUID, to name: String) {
+        guard let i = workspaces.firstIndex(where: { $0.id == id }), !name.isEmpty else { return }
+        workspaces[i].name = name
+        saveWorkspaces()
+    }
+
+    func deleteWorkspace(_ id: UUID) {
+        guard workspaces.count > 1 else { return }
+        if id == currentWorkspaceID {
+            switchWorkspace(to: workspaces.first { $0.id != id }!.id)
+        }
+        workspaces.removeAll { $0.id == id }
+        HeadscaleKeychain.save("", account: id.uuidString)
+        saveWorkspaces()
+    }
+
+    func setServerURL(_ url: String) {
+        guard let i = workspaces.firstIndex(where: { $0.id == currentWorkspaceID }) else { return }
+        workspaces[i].serverURL = url
+        saveWorkspaces()
+    }
+
+    /// Client for the current workspace's server, or nil if not configured.
+    func headscaleClient() -> HeadscaleClient? {
+        HeadscaleClient.make(serverURL: currentWorkspace.serverURL,
+                             apiKey: HeadscaleKeychain.load(account: currentWorkspaceID.uuidString) ?? "")
+    }
+
+    private func saveWorkspaces() {
+        try? WorkspaceStore.save(workspaces)
+    }
+
+    /// Replace the whole policy text as one undoable step (Cmd-Z restores it).
+    private func replaceText(_ new: String) {
+        let old = text
+        guard new != old else { return }
+        text = new
+        reparseNow()
+        undoManager?.registerUndo(withTarget: self) { store in
+            MainActor.assumeIsolated { store.replaceText(old) }
+        }
+        undoManager?.setActionName("Policy Change")
     }
 
     private func scheduleReparse() {
@@ -41,6 +126,14 @@ final class PolicyStore: ObservableObject {
     private func reparseNow() {
         parseTask?.cancel()
         parseTask = nil
+        // Autosave: the editor text is the current workspace's policy.
+        // ponytail: saves on each (debounced) parse; a quit within 120 ms of the
+        // last keystroke can lose that keystroke.
+        if let i = workspaces.firstIndex(where: { $0.id == currentWorkspaceID }),
+           workspaces[i].policy != text {
+            workspaces[i].policy = text
+            saveWorkspaces()
+        }
         do {
             // Emptying the editor means "start from scratch", not a syntax error.
             let source = text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -69,13 +162,11 @@ final class PolicyStore: ObservableObject {
     func mutate(_ edit: (inout JSON) -> Void) {
         guard var t = tree else { return }
         edit(&t)
-        text = HuJSONSerializer.serialize(t)
-        reparseNow()
+        replaceText(HuJSONSerializer.serialize(t))
     }
 
     func reset() {
-        text = SamplePolicy.text
-        reparseNow()
+        replaceText(SamplePolicy.text)
     }
 
     // MARK: - Clipboard / files
@@ -98,8 +189,7 @@ final class PolicyStore: ObservableObject {
 
     /// Replace the whole policy (import, Headscale pull) and parse immediately.
     func loadPolicy(_ contents: String) {
-        text = contents
-        reparseNow()
+        replaceText(contents)
     }
 
     func exportToFile() {

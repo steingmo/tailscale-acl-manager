@@ -6,18 +6,23 @@ struct AccessChange: Identifiable {
     var dst: String
     var gained: [String]
     var lost: [String]
+    var sshGained: [String] = []
+    var sshLost: [String] = []
 
     var id: String { "\(src)→\(dst)" }
 }
 
 /// Port label used for "any port not named explicitly in either policy".
 let otherPortsLabel = "other ports"
+/// SSH login label used for "any non-root account not named in either policy".
+let otherLoginsLabel = "other users"
 
 /// Diff node-to-node access between `old` and `new`.
 /// ponytail: probes only ports named in either policy (singles and range
 /// endpoints) plus one unnamed port standing in for "everything else", on
-/// TCP/UDP. A change strictly inside a range, ICMP-only rules, and SSH rules
-/// are not detected; exhaustive port-interval diffing would cover them.
+/// TCP/UDP; SSH is probed for root, every login named in either policy, and
+/// one unnamed non-root login. A change strictly inside a port range, ICMP-only
+/// rules, and accept↔check action changes are not detected.
 func accessChanges(from old: PolicyModel, to new: PolicyModel,
                    nodes: [HeadscaleNode]) -> [AccessChange] {
     var named = mentionedPorts(old).union(mentionedPorts(new))
@@ -28,6 +33,15 @@ func accessChanges(from old: PolicyModel, to new: PolicyModel,
     let before = Evaluator(model: old)
     let after = Evaluator(model: new)
     func label(_ p: Int) -> String { p == unnamed ? otherPortsLabel : String(p) }
+
+    var logins = Set((old.sshRules + new.sshRules).flatMap(\.users).filter { !$0.hasPrefix("autogroup:") })
+    logins.insert("root")
+    let unnamedLogin = "tailscale-acl-probe-user"
+    let loginProbes = logins.sorted() + [unnamedLogin]
+    func sshOK(_ ev: Evaluator, _ s: HeadscaleNode, _ d: HeadscaleNode, _ login: String) -> Bool {
+        ev.sshNetworkAllowed(sourceIDs: s.identities, destIDs: d.identities)
+            && !ev.evaluateSSH(sourceIDs: s.identities, destIDs: d.identities, login: login).isEmpty
+    }
 
     var changes: [AccessChange] = []
     for s in nodes {
@@ -40,9 +54,19 @@ func accessChanges(from old: PolicyModel, to new: PolicyModel,
                 if now && !was { gained.append(label(p)) }
                 if was && !now { lost.append(label(p)) }
             }
-            if !gained.isEmpty || !lost.isEmpty {
+            var sshGained: [String] = []
+            var sshLost: [String] = []
+            for login in loginProbes {
+                let was = sshOK(before, s, d, login)
+                let now = sshOK(after, s, d, login)
+                let name = login == unnamedLogin ? otherLoginsLabel : login
+                if now && !was { sshGained.append(name) }
+                if was && !now { sshLost.append(name) }
+            }
+            if !gained.isEmpty || !lost.isEmpty || !sshGained.isEmpty || !sshLost.isEmpty {
                 changes.append(AccessChange(src: s.displayName, dst: d.displayName,
-                                            gained: gained, lost: lost))
+                                            gained: gained, lost: lost,
+                                            sshGained: sshGained, sshLost: sshLost))
             }
         }
     }

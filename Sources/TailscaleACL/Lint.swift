@@ -129,6 +129,12 @@ func lintPolicy(_ m: PolicyModel) -> [LintIssue] {
         }
     }
 
+    // --- SSH rules -------------------------------------------------------------
+    for r in m.sshRules where r.action == "check" && r.src.contains(where: { $0.hasPrefix("tag:") }) {
+        issues.append(.init(severity: .error, title: "Check mode from tagged source",
+                            detail: "ssh[\(r.index)] uses action \"check\" with a tagged source; Tailscale doesn't allow check mode from tagged devices."))
+    }
+
     // --- Duplicate / shadowed rules ------------------------------------------
     // ponytail: same-kind pairwise cover check only; no cross acl/grant analysis.
     func srcCovered(_ a: [String], by b: [String]) -> Bool {

@@ -86,6 +86,8 @@ struct CodeEditor: NSViewRepresentable {
         guard let textView = context.coordinator.textView else { return }
         if textView.string != text {
             let selection = textView.selectedRange()
+            // Keep earlier typing undo steps separate from this programmatic replace.
+            textView.breakUndoCoalescing()
             textView.string = text
             let limit = (text as NSString).length
             textView.setSelectedRange(NSRange(location: min(selection.location, limit), length: 0))

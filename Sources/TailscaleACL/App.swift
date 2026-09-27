@@ -49,7 +49,10 @@ enum Screen: String, CaseIterable, Identifiable {
 
 struct RootView: View {
     @EnvironmentObject var store: PolicyStore
+    @Environment(\.undoManager) private var undoManager
     @State private var screen: Screen = .policyEditor
+    @State private var workspaceSheet: WorkspaceSheet.Mode?
+    @State private var confirmingDelete = false
 
     var body: some View {
         HStack(spacing: 0) {
@@ -62,6 +65,46 @@ struct RootView: View {
         .background(Theme.background)
         .preferredColorScheme(.dark)
         .frame(minWidth: 980, minHeight: 620)
+        .onAppear { store.undoManager = undoManager }
+        .onChange(of: undoManager) { store.undoManager = undoManager }
+        .sheet(item: $workspaceSheet) { WorkspaceSheet(mode: $0) }
+        .confirmationDialog("Delete workspace \u{201C}\(store.currentWorkspace.name)\u{201D}?",
+                            isPresented: $confirmingDelete) {
+            Button("Delete", role: .destructive) { store.deleteWorkspace(store.currentWorkspaceID) }
+        } message: {
+            Text("Its policy and saved API key are removed from this Mac. The Headscale server itself is not changed.")
+        }
+    }
+
+    private var workspaceMenu: some View {
+        Menu {
+            Picker("Workspace", selection: Binding(
+                get: { store.currentWorkspaceID },
+                set: { store.switchWorkspace(to: $0) }
+            )) {
+                ForEach(store.workspaces) { Text($0.name).tag($0.id) }
+            }
+            .pickerStyle(.inline)
+            Divider()
+            Button("New Workspace…") { workspaceSheet = .new }
+            Button("Duplicate Workspace…") { workspaceSheet = .duplicate }
+            Button("Rename Workspace…") { workspaceSheet = .rename }
+            Button("Delete Workspace…") { confirmingDelete = true }
+                .disabled(store.workspaces.count < 2)
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "square.stack")
+                    .font(.system(size: 10.5))
+                Text(store.currentWorkspace.name)
+                    .font(.system(size: 12, weight: .semibold))
+                    .lineLimit(1)
+            }
+        }
+        .menuStyle(.borderlessButton)
+        .foregroundStyle(Theme.textPrimary)
+        .help("Switch between workspaces — each has its own policy and Headscale server")
+        .padding(.horizontal, 10)
+        .padding(.bottom, 8)
     }
 
     private var sidebar: some View {
@@ -71,7 +114,8 @@ struct RootView: View {
                 .foregroundStyle(Theme.textSecondary)
                 .padding(.horizontal, 16)
                 .padding(.top, 14)
-                .padding(.bottom, 9)
+                .padding(.bottom, 6)
+            workspaceMenu
 
             VStack(spacing: 1) {
                 ForEach(Screen.allCases) { s in
@@ -172,5 +216,77 @@ struct TailscaleACLApp: App {
                 .disabled(!updater.canCheckForUpdates)
             }
         }
+    }
+}
+
+
+/// Name a new, duplicated, or renamed workspace.
+struct WorkspaceSheet: View {
+    enum Mode: String, Identifiable {
+        case new, duplicate, rename
+        var id: String { rawValue }
+    }
+
+    var mode: Mode
+    @EnvironmentObject var store: PolicyStore
+    @Environment(\.dismiss) private var dismiss
+    @State private var name = ""
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text(title)
+                .font(.system(size: 16, weight: .bold))
+                .foregroundStyle(Theme.textPrimary)
+            Text(detail)
+                .font(.system(size: 11))
+                .foregroundStyle(Theme.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+            TextField("Name, e.g. Home lab or a customer", text: $name)
+                .textFieldStyle(.roundedBorder)
+                .onSubmit(save)
+            HStack {
+                Spacer()
+                Button("Cancel") { dismiss() }
+                    .keyboardShortcut(.cancelAction)
+                Button(mode == .rename ? "Rename" : "Create", action: save)
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(trimmed.isEmpty)
+            }
+        }
+        .padding(20)
+        .frame(width: 400)
+        .background(Theme.background)
+        .onAppear {
+            name = mode == .rename ? store.currentWorkspace.name
+                : mode == .duplicate ? "\(store.currentWorkspace.name) copy" : ""
+        }
+    }
+
+    private var trimmed: String { name.trimmingCharacters(in: .whitespaces) }
+
+    private var title: String {
+        switch mode {
+        case .new: return "New workspace"
+        case .duplicate: return "Duplicate workspace"
+        case .rename: return "Rename workspace"
+        }
+    }
+
+    private var detail: String {
+        switch mode {
+        case .new: return "Starts with an empty policy and no server. Pull from a Headscale server or import a policy file to fill it."
+        case .duplicate: return "Copies the current policy, server URL, and API key."
+        case .rename: return "Only the name changes."
+        }
+    }
+
+    private func save() {
+        guard !trimmed.isEmpty else { return }
+        switch mode {
+        case .new: store.addWorkspace(name: trimmed, duplicatingCurrent: false)
+        case .duplicate: store.addWorkspace(name: trimmed, duplicatingCurrent: true)
+        case .rename: store.renameWorkspace(store.currentWorkspaceID, to: trimmed)
+        }
+        dismiss()
     }
 }

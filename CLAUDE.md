@@ -46,8 +46,21 @@ Swift Package (no Xcode project). All source in `Sources/TailscaleACL/`:
 - `Lint.swift` — pure `lintPolicy(model)`: undefined references, ownerless
   tags, unused entities, empty groups, invalid addresses/port specs,
   same-kind shadowed rules. Cached on `PolicyStore` per parse.
-- `App.swift` — app entry, sidebar navigation, Sparkle updater
-  (`UpdaterViewModel`) + "Check for Updates…" menu item.
+- `App.swift` — app entry, sidebar navigation + workspace menu, Sparkle
+  updater (`UpdaterViewModel`) + "Check for Updates…" menu item.
+- `Workspaces.swift` — named workspaces (policy + Headscale URL) persisted
+  to Application Support; each workspace's API key is a Keychain item keyed
+  by workspace id. The editor text autosaves into the current workspace.
+  First launch migrates the old single URL/key into "Default".
+- Undo: every whole-text replacement goes through `PolicyStore.replaceText`,
+  which registers on the window's undo manager (the same one NSTextView
+  typing uses), so Cmd-Z covers visual edits; switching workspaces clears
+  undo. Test harnesses touching `PolicyStore` must back up and restore the
+  Application Support files and pre-seed `workspaces.json` so the Keychain
+  migration doesn't run.
+- SSH: `Evaluator.evaluateSSH` + `sshNetworkAllowed` (Tailscale needs both
+  an SSH rule and network access on port 22); the simulator has an SSH mode
+  and the push review diffs SSH logins.
 
 Gotcha: interpolating `Int` directly into SwiftUI `Text` applies
 locale-aware grouping separators ("3.389") — use `Text(verbatim:)` or

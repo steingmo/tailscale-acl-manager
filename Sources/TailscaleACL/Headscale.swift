@@ -52,14 +52,11 @@ struct HeadscaleClient {
         var errorDescription: String? { message }
     }
 
-    /// Client built from the saved server URL and Keychain API key, or nil
-    /// if no server is configured.
-    static func fromSettings() -> HeadscaleClient? {
-        let saved = UserDefaults.standard.string(forKey: "headscaleURL") ?? ""
-        guard let url = URL(string: saved.trimmingCharacters(in: .whitespaces)),
-              url.scheme != nil, url.host != nil,
-              let key = HeadscaleKeychain.load(), !key.isEmpty else { return nil }
-        return HeadscaleClient(baseURL: url, apiKey: key)
+    /// Client for a server URL + API key, or nil if either is missing/invalid.
+    static func make(serverURL: String, apiKey: String) -> HeadscaleClient? {
+        guard let url = URL(string: serverURL.trimmingCharacters(in: .whitespaces)),
+              url.scheme != nil, url.host != nil, !apiKey.isEmpty else { return nil }
+        return HeadscaleClient(baseURL: url, apiKey: apiKey)
     }
 
     func getPolicy() async throws -> String {
@@ -105,16 +102,22 @@ struct HeadscaleClient {
     }
 }
 
-/// The Headscale API key lives in the login keychain, never in UserDefaults.
+/// Headscale API keys live in the login keychain (one per workspace id),
+/// never in UserDefaults or the workspace file.
 enum HeadscaleKeychain {
-    private static let query: [String: Any] = [
-        kSecClass as String: kSecClassGenericPassword,
-        kSecAttrService as String: "com.local.tailscale-acl-manager.headscale",
-        kSecAttrAccount as String: "api-key",
-    ]
+    /// Account used before workspaces existed; migrated on first launch.
+    static let legacyAccount = "api-key"
 
-    static func load() -> String? {
-        var q = query
+    private static func query(_ account: String) -> [String: Any] {
+        [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: "com.local.tailscale-acl-manager.headscale",
+            kSecAttrAccount as String: account,
+        ]
+    }
+
+    static func load(account: String) -> String? {
+        var q = query(account)
         q[kSecReturnData as String] = true
         q[kSecMatchLimit as String] = kSecMatchLimitOne
         var item: CFTypeRef?
@@ -123,10 +126,11 @@ enum HeadscaleKeychain {
         return String(data: data, encoding: .utf8)
     }
 
-    static func save(_ key: String) {
-        SecItemDelete(query as CFDictionary)
+    /// Saving an empty key deletes the item.
+    static func save(_ key: String, account: String) {
+        SecItemDelete(query(account) as CFDictionary)
         guard !key.isEmpty else { return }
-        var q = query
+        var q = query(account)
         q[kSecValueData as String] = Data(key.utf8)
         SecItemAdd(q as CFDictionary, nil)
     }

@@ -219,3 +219,51 @@ extension Evaluator {
         }
     }
 }
+
+// MARK: - SSH
+
+struct SSHMatch: Identifiable {
+    var ruleIndex: Int
+    var action: String   // "accept" or "check"
+    var srcSpec: String
+    var dstSpec: String
+
+    var id: String { "\(ruleIndex)-\(srcSpec)-\(dstSpec)" }
+}
+
+extension Evaluator {
+    /// SSH rules letting `sourceIDs` log in to `destIDs` as `login`. Tailscale
+    /// also requires network access to the device (see `sshNetworkAllowed`).
+    func evaluateSSH(sourceIDs: [String], destIDs: [String], login: String) -> [SSHMatch] {
+        var matches: [SSHMatch] = []
+        for rule in model.sshRules where loginAllowed(login, users: rule.users) {
+            for src in rule.src where sourceIDs.contains(where: { sourceMatches(spec: src, sourceID: $0) }) {
+                for dst in rule.dst where sshDestMatches(dst, sourceIDs: sourceIDs, destIDs: destIDs) {
+                    matches.append(SSHMatch(ruleIndex: rule.index, action: rule.action,
+                                            srcSpec: src, dstSpec: dst))
+                }
+            }
+        }
+        return matches
+    }
+
+    /// Network access for SSH: the session runs over TCP 22.
+    func sshNetworkAllowed(sourceIDs: [String], destIDs: [String]) -> Bool {
+        evaluate(sourceIDs: sourceIDs, destIDs: destIDs, port: 22).allowed
+    }
+
+    func loginAllowed(_ login: String, users: [String]) -> Bool {
+        users.contains(login) || (users.contains("autogroup:nonroot") && login != "root")
+    }
+
+    private func sshDestMatches(_ spec: String, sourceIDs: [String], destIDs: [String]) -> Bool {
+        if spec == "autogroup:self" {
+            // Your own untagged devices: same user on both ends, neither tagged.
+            let tagged = { (ids: [String]) in ids.contains { $0.hasPrefix("tag:") } }
+            guard !tagged(sourceIDs), !tagged(destIDs) else { return false }
+            let users = { (ids: [String]) in Set(ids.filter { !$0.contains(":") && !isAddressLike($0) }) }
+            return !users(sourceIDs).isDisjoint(with: users(destIDs))
+        }
+        return destIDs.contains { targetMatches(target: spec, destID: $0) }
+    }
+}

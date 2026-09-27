@@ -4,8 +4,7 @@ import SwiftUI
 /// Opt-in — nothing touches the network until a server is configured here.
 struct HeadscaleScreen: View {
     @EnvironmentObject var store: PolicyStore
-    @AppStorage("headscaleURL") private var serverURL = ""
-    @State private var apiKey = HeadscaleKeychain.load() ?? ""
+    @State private var apiKey = ""
     @State private var status: (ok: Bool, text: String)?
     @State private var busy = false
     @State private var confirmingPull = false
@@ -13,11 +12,22 @@ struct HeadscaleScreen: View {
     @State private var history = PushHistory.load()
     @State private var openingRecord: PushRecord?
 
+    private var serverURL: Binding<String> {
+        Binding(get: { store.currentWorkspace.serverURL }, set: { store.setServerURL($0) })
+    }
+
     private var client: HeadscaleClient? {
-        let trimmed = serverURL.trimmingCharacters(in: .whitespaces)
-        guard let url = URL(string: trimmed), url.scheme != nil, url.host != nil,
-              !apiKey.isEmpty else { return nil }
-        return HeadscaleClient(baseURL: url, apiKey: apiKey)
+        HeadscaleClient.make(serverURL: store.currentWorkspace.serverURL, apiKey: apiKey)
+    }
+
+    /// Push history for this workspace's server only.
+    private var serverHistory: [PushRecord] {
+        let host = URL(string: store.currentWorkspace.serverURL.trimmingCharacters(in: .whitespaces))?.host
+        return history.filter { $0.server == host }
+    }
+
+    private func loadKey() {
+        apiKey = HeadscaleKeychain.load(account: store.currentWorkspaceID.uuidString) ?? ""
     }
 
     var body: some View {
@@ -27,14 +37,14 @@ struct HeadscaleScreen: View {
                     Text("Headscale")
                         .font(.system(size: 16, weight: .bold))
                         .foregroundStyle(Theme.textPrimary)
-                    Text("Pull and push the policy on your self-hosted Headscale server, and see its nodes")
+                    Text("Pull and push the policy for workspace \u{201C}\(store.currentWorkspace.name)\u{201D} on its Headscale server, and see its nodes")
                         .font(.system(size: 11.5))
                         .foregroundStyle(Theme.textSecondary)
                 }
 
                 connectionPanel
                 policyPanel
-                if !history.isEmpty { historyPanel }
+                if !serverHistory.isEmpty { historyPanel }
                 if !store.headscaleNodes.isEmpty { nodesPanel }
             }
             .padding(16)
@@ -42,6 +52,11 @@ struct HeadscaleScreen: View {
             .frame(maxWidth: .infinity, alignment: .topLeading)
         }
         .background(Theme.background)
+        .onAppear(perform: loadKey)
+        .onChange(of: store.currentWorkspaceID) {
+            loadKey()
+            status = nil
+        }
         .confirmationDialog("Replace the editor contents with the policy from Headscale?",
                             isPresented: $confirmingPull) {
             Button("Pull and replace", role: .destructive) { pull() }
@@ -80,7 +95,7 @@ struct HeadscaleScreen: View {
                 .font(.system(size: 13, weight: .bold))
                 .foregroundStyle(Theme.textPrimary)
             field("Server URL", hint: "e.g. https://headscale.example.com") {
-                TextField("https://headscale.example.com", text: $serverURL)
+                TextField("https://headscale.example.com", text: serverURL)
                     .textFieldStyle(.roundedBorder)
                     .font(.system(size: 12, design: .monospaced))
             }
@@ -91,7 +106,7 @@ struct HeadscaleScreen: View {
             }
             HStack(spacing: 10) {
                 Button("Save & test") {
-                    HeadscaleKeychain.save(apiKey)
+                    HeadscaleKeychain.save(apiKey, account: store.currentWorkspaceID.uuidString)
                     refreshNodes(announce: true)
                 }
                 .disabled(client == nil || busy)
@@ -136,7 +151,7 @@ struct HeadscaleScreen: View {
             Text("Before every push the server's previous policy is saved on this Mac. Restoring goes through the same review.")
                 .font(.system(size: 10.5))
                 .foregroundStyle(Theme.textSecondary)
-            ForEach(history) { record in
+            ForEach(serverHistory) { record in
                 HStack(spacing: 8) {
                     Image(systemName: "clock.arrow.circlepath")
                         .font(.system(size: 11))
@@ -311,7 +326,7 @@ struct PushReviewSheet: View {
                         .foregroundStyle(Theme.orange)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                Text("Compares TCP/UDP access between your current devices on every port named in either policy. SSH rules and ICMP aren't compared. The server's current policy is saved to Push history first.")
+                Text("Compares TCP/UDP access between your current devices on every port named in either policy, and SSH logins for root, every account named in either policy, and other non-root users. ICMP isn't compared. The server's current policy is saved to Push history first.")
                     .font(.system(size: 10.5))
                     .foregroundStyle(Theme.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -373,6 +388,16 @@ struct PushReviewSheet: View {
                         }
                         if !change.lost.isEmpty {
                             Text(verbatim: "− loses \(change.lost.joined(separator: ", "))")
+                                .font(.system(size: 11, design: .monospaced))
+                                .foregroundStyle(Theme.red)
+                        }
+                        if !change.sshGained.isEmpty {
+                            Text(verbatim: "+ gains SSH as \(change.sshGained.joined(separator: ", "))")
+                                .font(.system(size: 11, design: .monospaced))
+                                .foregroundStyle(Theme.green)
+                        }
+                        if !change.sshLost.isEmpty {
+                            Text(verbatim: "− loses SSH as \(change.sshLost.joined(separator: ", "))")
                                 .font(.system(size: 11, design: .monospaced))
                                 .foregroundStyle(Theme.red)
                         }
