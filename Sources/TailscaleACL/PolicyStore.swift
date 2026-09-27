@@ -14,6 +14,8 @@ final class PolicyStore: ObservableObject {
     @Published private(set) var parseError: HuJSONError?
     @Published private(set) var testResults: [TestResult] = []
     @Published private(set) var lintIssues: [LintIssue] = []
+    /// Nodes last fetched from Headscale (shared by the Headscale and simulator screens).
+    @Published var headscaleNodes: [HeadscaleNode] = []
 
     private var parseTask: Task<Void, Never>?
 

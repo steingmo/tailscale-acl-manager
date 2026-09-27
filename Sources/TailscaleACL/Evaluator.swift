@@ -51,6 +51,22 @@ struct Evaluator {
         return AccessResult(allowed: !matches.isEmpty, matches: matches)
     }
 
+    /// A real node matches as any of its identities (tags or user, plus IPs);
+    /// matches are merged across all identity pairs.
+    func evaluate(sourceIDs: [String], destIDs: [String], port: Int) -> AccessResult {
+        var seen = Set<String>()
+        var matches: [RuleMatch] = []
+        for s in sourceIDs {
+            for d in destIDs {
+                for m in evaluate(sourceID: s, destID: d, port: port).matches
+                where seen.insert(m.id).inserted {
+                    matches.append(m)
+                }
+            }
+        }
+        return AccessResult(allowed: !matches.isEmpty, matches: matches)
+    }
+
     /// Grant `ip` entries: "*", "443", "80-443", "proto:*", "proto:443",
     /// "proto:80-443". The simulator queries TCP/UDP-style ports, so specs
     /// pinned to other protocols (icmp, gre, …) don't match a port query.
@@ -83,16 +99,7 @@ struct Evaluator {
         if spec.hasPrefix("group:") {
             return model.groups[spec]?.contains(sourceID) ?? false
         }
-        // Host referenced by a CIDR host entry: spec is a host whose value is a
-        // CIDR that contains sourceID's IP.
-        if let cidr = model.hosts[spec], let ip = model.hosts[sourceID] {
-            return cidrContains(cidr: cidr, ip: ip)
-        }
-        // IP set containing the source host's address.
-        if let entries = model.ipsets[spec], let ip = model.hosts[sourceID] {
-            return entries.contains { cidrContains(cidr: $0, ip: ip) }
-        }
-        return false
+        return addressSelectorMatches(spec, id: sourceID)
     }
 
     func targetMatches(target rawTarget: String, destID rawDest: String) -> Bool {
@@ -106,14 +113,18 @@ struct Evaluator {
         if target.hasPrefix("group:") {
             return model.groups[target]?.contains(destID) ?? false
         }
-        if let cidr = model.hosts[target], let ip = model.hosts[destID] {
-            return cidrContains(cidr: cidr, ip: ip)
-        }
-        // IP set containing the destination host's address.
-        if let entries = model.ipsets[target], let ip = model.hosts[destID] {
+        return addressSelectorMatches(target, id: destID)
+    }
+
+    /// Does a host alias, IP set, or raw IP/CIDR selector contain the address
+    /// of `id` (a host alias or a bare IP, e.g. a Headscale node's address)?
+    private func addressSelectorMatches(_ selector: String, id: String) -> Bool {
+        guard let ip = model.hosts[id] ?? (isAddressLike(id) ? id : nil) else { return false }
+        if let cidr = model.hosts[selector] { return cidrContains(cidr: cidr, ip: ip) }
+        if let entries = model.ipsets[selector] {
             return entries.contains { cidrContains(cidr: $0, ip: ip) }
         }
-        return false
+        return isAddressLike(selector) && cidrContains(cidr: selector, ip: ip)
     }
 
     func portMatches(spec: String, port: Int) -> Bool {

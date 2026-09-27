@@ -80,7 +80,7 @@ No XCTest target. Logic is verified with small headless harnesses compiled
 directly against the source files (they're UI-free):
 
 ```sh
-swiftc -o /tmp/check Sources/TailscaleACL/{HuJSON,PolicyModel,Evaluator,SamplePolicy}.swift main.swift && /tmp/check
+swiftc -o /tmp/check Sources/TailscaleACL/{HuJSON,PolicyModel,Evaluator,Lint,SamplePolicy}.swift main.swift && /tmp/check
 ```
 
 For store/UI-adjacent checks, compile everything except `App.swift` (it has

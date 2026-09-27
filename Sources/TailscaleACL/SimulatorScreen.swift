@@ -5,6 +5,9 @@ struct SimulatorScreen: View {
     @State private var source = ""
     @State private var dest = ""
     @State private var port = 443
+    @State private var hasServer = false
+    @State private var loadingNodes = false
+    @State private var nodeError: String?
 
     private var sourceSections: [(name: String, items: [String])] {
         entitySections(special: ["*", "autogroup:members"])
@@ -17,6 +20,9 @@ struct SimulatorScreen: View {
     private func entitySections(special: [String]) -> [(name: String, items: [String])] {
         let m = store.model
         var sections: [(String, [String])] = []
+        if !store.headscaleNodes.isEmpty {
+            sections.append(("Headscale nodes", store.headscaleNodes.map { "node:\($0.id)" }))
+        }
         if !m.allUsers.isEmpty { sections.append(("Users", m.allUsers)) }
         if !m.groupOrder.isEmpty { sections.append(("Groups", m.groupOrder)) }
         if !m.tagOrder.isEmpty { sections.append(("Tags", m.tagOrder)) }
@@ -29,16 +35,52 @@ struct SimulatorScreen: View {
     private var sources: [String] { sourceSections.flatMap(\.items).uniqued() }
     private var dests: [String] { destSections.flatMap(\.items).uniqued() }
 
+    private func node(for selection: String) -> HeadscaleNode? {
+        guard selection.hasPrefix("node:") else { return nil }
+        let id = String(selection.dropFirst(5))
+        return store.headscaleNodes.first { $0.id == id }
+    }
+
+    private func label(for selection: String) -> String {
+        node(for: selection).map { "\($0.displayName) (\($0.identities.first ?? "no identity"))" } ?? selection
+    }
+
+    /// What the selection matches as in the policy: a node's identities, or itself.
+    private func identities(for selection: String) -> [String] {
+        node(for: selection)?.identities ?? [selection]
+    }
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("Access Simulator")
-                        .font(.system(size: 16, weight: .bold))
-                        .foregroundStyle(Theme.textPrimary)
-                    Text("Check whether a source can reach a destination on a port")
-                        .font(.system(size: 11.5))
-                        .foregroundStyle(Theme.textSecondary)
+                HStack(alignment: .top) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Access Simulator")
+                            .font(.system(size: 16, weight: .bold))
+                            .foregroundStyle(Theme.textPrimary)
+                        Text("Check whether a source can reach a destination on a port")
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(Theme.textSecondary)
+                    }
+                    Spacer()
+                    if hasServer {
+                        VStack(alignment: .trailing, spacing: 4) {
+                            HStack(spacing: 6) {
+                                if loadingNodes { ProgressView().controlSize(.small) }
+                                ToolbarButton(
+                                    label: store.headscaleNodes.isEmpty ? "Load Headscale nodes" : "Refresh nodes",
+                                    icon: "arrow.clockwise"
+                                ) { loadNodes() }
+                                .disabled(loadingNodes)
+                            }
+                            if let nodeError {
+                                Text(nodeError)
+                                    .font(.system(size: 10.5))
+                                    .foregroundStyle(Theme.red)
+                                    .lineLimit(2)
+                            }
+                        }
+                    }
                 }
                 .padding(16)
 
@@ -90,6 +132,7 @@ struct SimulatorScreen: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(Theme.background)
         .onAppear {
+            hasServer = HeadscaleClient.fromSettings() != nil
             if source.isEmpty { source = sources.first ?? "" }
             if dest.isEmpty {
                 dest = store.model.tagOrder.first
@@ -99,12 +142,37 @@ struct SimulatorScreen: View {
         }
     }
 
+    @ViewBuilder
+    private func endpointChip(_ selection: String) -> some View {
+        if let n = node(for: selection) {
+            Chip(text: n.displayName, color: Theme.textPrimary, icon: "desktopcomputer")
+        } else if selection.contains("@") {
+            Chip(text: selection, color: Theme.green, icon: "person")
+        } else {
+            EntityChip(name: selection)
+        }
+    }
+
+    private func loadNodes() {
+        guard let client = HeadscaleClient.fromSettings() else { return }
+        loadingNodes = true
+        nodeError = nil
+        Task {
+            do {
+                store.headscaleNodes = try await client.listNodes()
+            } catch {
+                nodeError = error.localizedDescription
+            }
+            loadingNodes = false
+        }
+    }
+
     private func sectionedPicker(selection: Binding<String>,
                                  sections: [(name: String, items: [String])]) -> some View {
         Picker("", selection: selection) {
             ForEach(sections, id: \.name) { section in
                 Section(section.name) {
-                    ForEach(section.items, id: \.self) { Text($0).tag($0) }
+                    ForEach(section.items, id: \.self) { Text(verbatim: label(for: $0)).tag($0) }
                 }
             }
         }
@@ -129,18 +197,21 @@ struct SimulatorScreen: View {
     }
 
     private var resultSection: some View {
-        let result = store.evaluator.evaluate(sourceID: source, destID: dest, port: port)
+        let result = store.evaluator.evaluate(sourceIDs: identities(for: source),
+                                              destIDs: identities(for: dest), port: port)
         return VStack(alignment: .leading, spacing: 16) {
             HStack(spacing: 8) {
-                if source.contains("@") {
-                    Chip(text: source, color: Theme.green, icon: "person")
-                } else {
-                    EntityChip(name: source)
-                }
+                endpointChip(source)
                 Image(systemName: "arrow.right")
                     .foregroundStyle(Theme.textSecondary)
-                EntityChip(name: dest)
+                endpointChip(dest)
                 Chip(text: ":\(port)", color: Theme.textSecondary)
+            }
+            ForEach([source, dest].compactMap(node(for:)), id: \.id) { n in
+                Text(verbatim: "\(n.displayName) matches as: \(n.identities.isEmpty ? "nothing (no tags, user, or IPs)" : n.identities.joined(separator: ", "))")
+                    .font(.system(size: 10.5, design: .monospaced))
+                    .foregroundStyle(Theme.textSecondary)
+                    .textSelection(.enabled)
             }
 
             HStack(spacing: 8) {

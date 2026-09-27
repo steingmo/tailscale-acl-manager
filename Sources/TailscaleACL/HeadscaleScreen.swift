@@ -6,7 +6,6 @@ struct HeadscaleScreen: View {
     @EnvironmentObject var store: PolicyStore
     @AppStorage("headscaleURL") private var serverURL = ""
     @State private var apiKey = HeadscaleKeychain.load() ?? ""
-    @State private var nodes: [HeadscaleNode] = []
     @State private var status: (ok: Bool, text: String)?
     @State private var busy = false
     @State private var confirmingPull = false
@@ -35,7 +34,7 @@ struct HeadscaleScreen: View {
 
                 connectionPanel
                 policyPanel
-                if !nodes.isEmpty { nodesPanel }
+                if !store.headscaleNodes.isEmpty { nodesPanel }
             }
             .padding(16)
             .frame(maxWidth: 820, alignment: .topLeading)
@@ -117,7 +116,7 @@ struct HeadscaleScreen: View {
     private var nodesPanel: some View {
         panel {
             HStack {
-                Text("Nodes (\(nodes.count))")
+                Text("Nodes (\(store.headscaleNodes.count))")
                     .font(.system(size: 13, weight: .bold))
                     .foregroundStyle(Theme.textPrimary)
                 Spacer()
@@ -132,7 +131,7 @@ struct HeadscaleScreen: View {
                 .disabled(busy)
                 .help("Refresh")
             }
-            ForEach(nodes) { node in
+            ForEach(store.headscaleNodes) { node in
                 HStack(spacing: 8) {
                     Circle()
                         .fill(node.online == true ? Theme.green : Theme.textSecondary.opacity(0.4))
@@ -194,7 +193,8 @@ struct HeadscaleScreen: View {
 
     private func refreshNodes(announce: Bool) {
         run { client in
-            nodes = try await client.listNodes()
+            let nodes = try await client.listNodes()
+            store.headscaleNodes = nodes
             return announce ? "Connected — \(nodes.count) node\(nodes.count == 1 ? "" : "s")" : "Nodes refreshed"
         }
     }

@@ -4,7 +4,10 @@ import Security
 /// A node as returned by Headscale's `GET /api/v1/node`. Everything is
 /// optional so older and newer server versions both decode.
 struct HeadscaleNode: Decodable, Identifiable {
-    struct User: Decodable { var name: String? }
+    struct User: Decodable {
+        var name: String?
+        var email: String?
+    }
 
     var id: String
     var name: String?
@@ -22,6 +25,21 @@ struct HeadscaleNode: Decodable, Identifiable {
         return name ?? id
     }
     var allTags: [String] { ((tags ?? []) + (forcedTags ?? []) + (validTags ?? [])).uniqued() }
+
+    /// Policy identities this node matches as, following Tailscale semantics:
+    /// a tagged node is its tags (it loses its user identity); an untagged
+    /// node is its user. Its IPs are always included so host, IP set, and
+    /// CIDR selectors match too.
+    var identities: [String] {
+        var ids = allTags
+        if ids.isEmpty, let user {
+            // Headscale policies name users as "name@" or by email.
+            ids = [user.email, user.name, user.name.map { $0.contains("@") ? $0 : "\($0)@" }]
+                .compactMap { $0 }
+                .filter { !$0.isEmpty }
+        }
+        return (ids + (ipAddresses ?? [])).uniqued()
+    }
 }
 
 /// Minimal client for the Headscale REST API (`/api/v1`, Bearer API key).
@@ -32,6 +50,16 @@ struct HeadscaleClient {
     struct APIError: LocalizedError {
         var message: String
         var errorDescription: String? { message }
+    }
+
+    /// Client built from the saved server URL and Keychain API key, or nil
+    /// if no server is configured.
+    static func fromSettings() -> HeadscaleClient? {
+        let saved = UserDefaults.standard.string(forKey: "headscaleURL") ?? ""
+        guard let url = URL(string: saved.trimmingCharacters(in: .whitespaces)),
+              url.scheme != nil, url.host != nil,
+              let key = HeadscaleKeychain.load(), !key.isEmpty else { return nil }
+        return HeadscaleClient(baseURL: url, apiKey: key)
     }
 
     func getPolicy() async throws -> String {
