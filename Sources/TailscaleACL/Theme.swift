@@ -35,6 +35,7 @@ enum Theme {
         if name.hasPrefix("autogroup:") { return pink }
         if name.hasPrefix("group:") { return blue }
         if name.hasPrefix("tag:") { return purple }
+        if name.contains("@") { return green } // users
         return orange // hosts / IP sets
     }
 
@@ -44,6 +45,7 @@ enum Theme {
         if name.hasPrefix("group:") { return "person.2" }
         if name.hasPrefix("tag:") { return "tag" }
         if name.hasPrefix("ipset:") { return "square.stack.3d.up" }
+        if name.contains("@") { return "person" }
         return "server.rack"
     }
 }

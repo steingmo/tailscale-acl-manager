@@ -68,6 +68,8 @@ struct RootView: View {
         .preferredColorScheme(.dark)
         .frame(minWidth: 980, minHeight: 620)
         .onAppear { store.undoManager = undoManager }
+        // Load devices for the open workspace so device views work without a manual refresh.
+        .task(id: store.currentWorkspaceID) { try? await store.refreshNodes() }
         .onChange(of: undoManager) { store.undoManager = undoManager }
         .sheet(item: $workspaceSheet) { WorkspaceSheet(mode: $0) }
         .confirmationDialog("Delete workspace \u{201C}\(store.currentWorkspace.name)\u{201D}?",

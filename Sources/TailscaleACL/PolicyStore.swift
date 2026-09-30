@@ -98,6 +98,14 @@ final class PolicyStore: ObservableObject {
                              apiKey: HeadscaleKeychain.load(account: currentWorkspaceID.uuidString) ?? "")
     }
 
+    /// Reload devices from the current workspace's server, if one is configured.
+    func refreshNodes() async throws {
+        guard let client = headscaleClient() else { return }
+        let workspace = currentWorkspaceID
+        let nodes = try await client.listNodes()
+        if workspace == currentWorkspaceID { headscaleNodes = nodes }
+    }
+
     private func saveWorkspaces() {
         try? WorkspaceStore.save(workspaces)
     }

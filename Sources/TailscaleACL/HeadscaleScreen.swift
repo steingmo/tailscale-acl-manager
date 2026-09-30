@@ -267,7 +267,8 @@ struct HeadscaleScreen: View {
             let policy = try await client.getPolicy()
             guard !policy.isEmpty else { return "Server returned an empty policy — editor left unchanged." }
             store.loadPolicy(policy)
-            return "Pulled policy into the editor."
+            store.headscaleNodes = try await client.listNodes()
+            return "Pulled policy and \(store.headscaleNodes.count) devices."
         }
     }
 }
