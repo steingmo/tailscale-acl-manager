@@ -18,6 +18,11 @@ let package = Package(
                 // Sparkle.framework is embedded in Contents/Frameworks by build_app.sh.
                 .unsafeFlags(["-Xlinker", "-rpath", "-Xlinker", "@executable_path/../Frameworks"]),
             ]
-        )
+        ),
+        .testTarget(
+            name: "TailscaleACLTests",
+            dependencies: ["TailscaleACL"],
+            path: "Tests/TailscaleACLTests"
+        ),
     ]
 )

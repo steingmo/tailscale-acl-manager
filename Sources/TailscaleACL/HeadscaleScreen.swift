@@ -11,6 +11,7 @@ struct HeadscaleScreen: View {
     @State private var review: PushCandidate?
     @State private var history = PushHistory.load()
     @State private var openingRecord: PushRecord?
+    @State private var comparing: DiffPresentation?
 
     private var serverURL: Binding<String> {
         Binding(get: { store.currentWorkspace.serverURL }, set: { store.setServerURL($0) })
@@ -67,6 +68,7 @@ struct HeadscaleScreen: View {
             if let client {
                 PushReviewSheet(client: client, candidate: candidate) {
                     history = PushHistory.load()
+                    store.markSynced(candidate.text)
                     if candidate.isRestore { store.loadPolicy(candidate.text) }
                     status = (true, candidate.isRestore
                               ? "Restored — the server and editor now have the earlier policy."
@@ -75,6 +77,7 @@ struct HeadscaleScreen: View {
                 .environmentObject(store)
             }
         }
+        .sheet(item: $comparing) { DiffSheet(diff: $0) }
         .confirmationDialog("Replace the editor contents with this policy?",
                             isPresented: Binding(get: { openingRecord != nil },
                                                  set: { if !$0 { openingRecord = nil } })) {
@@ -139,6 +142,8 @@ struct HeadscaleScreen: View {
                     review = PushCandidate(text: store.text, isRestore: false)
                 }
                 .disabled(client == nil || busy || !store.isValid)
+                ToolbarButton(label: "Compare with server…", icon: "doc.on.doc") { compareWithServer() }
+                    .disabled(client == nil || busy)
             }
         }
     }
@@ -163,6 +168,12 @@ struct HeadscaleScreen: View {
                         .font(.system(size: 11, design: .monospaced))
                         .foregroundStyle(Theme.textSecondary)
                     Spacer()
+                    Button("Compare…") {
+                        comparing = DiffPresentation(title: "Push on \(record.date.formatted(date: .abbreviated, time: .shortened))",
+                                                     oldLabel: "before the push", newLabel: "pushed",
+                                                     old: record.before, new: record.pushed)
+                    }
+                    .font(.system(size: 11))
                     Button("Open in editor…") { openingRecord = record }
                         .font(.system(size: 11))
                     Button("Restore on server…") {
@@ -208,6 +219,9 @@ struct HeadscaleScreen: View {
                     }
                     ForEach(node.allTags, id: \.self) { EntityChip(name: $0) }
                     Spacer()
+                    Text(node.statusText)
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(node.online == true ? Theme.green : Theme.textSecondary)
                     Text(verbatim: (node.ipAddresses ?? []).joined(separator: "  "))
                         .font(.system(size: 10.5, design: .monospaced))
                         .foregroundStyle(Theme.textSecondary)
@@ -262,11 +276,21 @@ struct HeadscaleScreen: View {
         }
     }
 
+    private func compareWithServer() {
+        run { client in
+            let server = try await client.getPolicy()
+            comparing = DiffPresentation(title: "Editor vs server", oldLabel: "on the server",
+                                         newLabel: "in the editor", old: server, new: store.text)
+            return server == store.text ? "The editor matches the server." : "Showing differences from the server."
+        }
+    }
+
     private func pull() {
         run { client in
             let policy = try await client.getPolicy()
             guard !policy.isEmpty else { return "Server returned an empty policy — editor left unchanged." }
             store.loadPolicy(policy)
+            store.markSynced(policy)
             store.headscaleNodes = try await client.listNodes()
             return "Pulled policy and \(store.headscaleNodes.count) devices."
         }
@@ -298,6 +322,10 @@ struct PushReviewSheet: View {
     @State private var blocker: String?
     @State private var loading = true
     @State private var pushing = false
+    /// The server text as of our last pull/push, when the server has changed since.
+    @State private var conflictBase: String?
+    @State private var noSyncRecord = false
+    @State private var comparing: DiffPresentation?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -318,8 +346,38 @@ struct PushReviewSheet: View {
                     .foregroundStyle(Theme.red)
                     .fixedSize(horizontal: false, vertical: true)
             } else {
+                if let conflictBase, let serverText {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Label("The server's policy changed since your last pull or push. Pushing overwrites those changes — cancel and pull first to keep them.",
+                              systemImage: "exclamationmark.triangle.fill")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(Theme.orange)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Button("Show what changed on the server…") {
+                            comparing = DiffPresentation(title: "Changes made on the server",
+                                                         oldLabel: "at your last pull/push", newLabel: "on the server now",
+                                                         old: conflictBase, new: serverText)
+                        }
+                        .font(.system(size: 11.5))
+                    }
+                    .padding(10)
+                    .background(RoundedRectangle(cornerRadius: 8).fill(Theme.orange.opacity(0.10)))
+                } else if noSyncRecord {
+                    Text("No record of a pull in this workspace, so changes made on the server by others can't be detected. Pull once to enable that check.")
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(Theme.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
                 summary
                 if !changes.isEmpty { changeList }
+                if let serverText, serverText != candidate.text {
+                    Button("Show text changes…") {
+                        comparing = DiffPresentation(title: "Text changes", oldLabel: "on the server",
+                                                     newLabel: candidate.isRestore ? "restored version" : "to be pushed",
+                                                     old: serverText, new: candidate.text)
+                    }
+                    .font(.system(size: 11.5))
+                }
                 if !candidateErrors.isEmpty {
                     Label("The Problems check reports \(candidateErrors.count) error\(candidateErrors.count == 1 ? "" : "s") in this policy — Headscale may reject it.",
                           systemImage: "exclamationmark.triangle.fill")
@@ -338,7 +396,8 @@ struct PushReviewSheet: View {
                 Spacer()
                 Button("Cancel") { dismiss() }
                     .keyboardShortcut(.cancelAction)
-                Button(candidate.isRestore ? "Restore on server" : "Push to Headscale") { push() }
+                Button(conflictBase != nil ? "Overwrite and push"
+                       : candidate.isRestore ? "Restore on server" : "Push to Headscale") { push() }
                     .keyboardShortcut(.defaultAction)
                     .disabled(loading || pushing || blocker != nil)
             }
@@ -347,6 +406,7 @@ struct PushReviewSheet: View {
         .frame(width: 560)
         .background(Theme.background)
         .task { await prepare() }
+        .sheet(item: $comparing) { DiffSheet(diff: $0) }
     }
 
     private var host: String { client.baseURL.host ?? "server" }
@@ -423,6 +483,11 @@ struct PushReviewSheet: View {
         do {
             let current = try await client.getPolicy()
             serverText = current
+            if let last = store.currentWorkspace.lastSyncedPolicy {
+                if last != current { conflictBase = last }
+            } else {
+                noSyncRecord = !current.isEmpty
+            }
             var nodes = store.headscaleNodes
             if nodes.isEmpty {
                 nodes = try await client.listNodes()

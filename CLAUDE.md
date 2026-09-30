@@ -96,18 +96,24 @@ clone of the tap repo at `~/Documents/homebrew-tap`.
 
 ## Testing
 
-No XCTest target. Logic is verified with small headless harnesses compiled
-directly against the source files (they're UI-free):
+`Tests/TailscaleACLTests` is an XCTest suite (policy logic, lint, SSH, access
+diff, line diff, report, and store/workspace/undo behavior). Run it with:
 
 ```sh
-swiftc -o /tmp/check Sources/TailscaleACL/{HuJSON,PolicyModel,Evaluator,Lint,SamplePolicy}.swift main.swift && /tmp/check
+swift test --scratch-path "${TMPDIR}tailscale-acl-test-build"
 ```
 
-For store/UI-adjacent checks, compile everything except `App.swift` (it has
-`@main`) and wrap in `MainActor.assumeIsolated`. Screens can be verified
-offscreen by hosting them in an `NSWindow` + `NSHostingView` and rendering
-to a PNG via `bitmapImageRepForCachingDisplay` — useful because standard
-screenshot tools may lack screen-recording permission.
+The scratch path must be outside the project: iCloud-synced folders stamp
+xattrs that make codesign reject the test bundle. `release.sh` runs the suite
+first and stops on failure; GitHub Actions (`.github/workflows/test.yml`) runs
+it on every push to main. Store tests set `TAILSCALE_ACL_DATA_DIR` to a temp
+folder and pre-seed `workspaces.json`, so they never touch real app data or
+the Keychain migration — keep it that way for new store tests.
+
+Screens can be checked offscreen by hosting them in an `NSWindow` +
+`NSHostingView` and rendering to a PNG via `bitmapImageRepForCachingDisplay`
+(screenshot tools may lack screen-recording permission). Point
+`TAILSCALE_ACL_DATA_DIR` at a temp folder when doing so.
 
 ## Conventions
 

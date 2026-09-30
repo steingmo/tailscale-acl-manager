@@ -86,6 +86,13 @@ final class PolicyStore: ObservableObject {
         saveWorkspaces()
     }
 
+    /// Record what the server holds after a pull or push.
+    func markSynced(_ serverPolicy: String) {
+        guard let i = workspaces.firstIndex(where: { $0.id == currentWorkspaceID }) else { return }
+        workspaces[i].lastSyncedPolicy = serverPolicy
+        saveWorkspaces()
+    }
+
     func setServerURL(_ url: String) {
         guard let i = workspaces.firstIndex(where: { $0.id == currentWorkspaceID }) else { return }
         workspaces[i].serverURL = url
@@ -198,6 +205,19 @@ final class PolicyStore: ObservableObject {
     /// Replace the whole policy (import, Headscale pull) and parse immediately.
     func loadPolicy(_ contents: String) {
         replaceText(contents)
+    }
+
+    /// Save a Markdown access report for the current workspace.
+    func exportReport() {
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [UTType(filenameExtension: "md") ?? .plainText]
+        panel.nameFieldStringValue = "\(currentWorkspace.name) access report.md"
+        panel.message = "Export an access report (groups, tags, devices, rules, who can reach what)"
+        if panel.runModal() == .OK, let url = panel.url {
+            let report = policyReport(workspace: currentWorkspace.name, model: model,
+                                      nodes: headscaleNodes, problems: lintIssues)
+            try? report.write(to: url, atomically: true, encoding: .utf8)
+        }
     }
 
     func exportToFile() {
@@ -382,6 +402,37 @@ final class PolicyStore: ObservableObject {
             guard var rules = tree["ssh"]?.elements, rules.indices.contains(index) else { return }
             rules[index].value = .object(sshMembers(action: action, src: src, dst: dst, users: users))
             tree["ssh"]?.elements = rules
+        }
+    }
+
+    /// Create (index nil) or update one rule in "acls", "grants", or "ssh".
+    /// Only the given keys change (nil removes a key), so fields the editor
+    /// doesn't show — proto, app, via, srcPosture — are kept. `name` is the
+    /// rule's first comment line.
+    func saveRule(section: String, index: Int?, name: String, fields: [(key: String, value: JSON?)]) {
+        mutate { tree in
+            var list = tree[section]?.elements ?? []
+            let existing = index.flatMap { list.indices.contains($0) ? $0 : nil }
+            var element = existing.map { list[$0] } ?? JSON.Element(comments: [], value: .object([]))
+            for field in fields { element.value[field.key] = field.value }
+            let trimmed = name.trimmingCharacters(in: .whitespaces)
+            if element.comments.isEmpty {
+                if !trimmed.isEmpty { element.comments = [trimmed] }
+            } else if trimmed.isEmpty {
+                element.comments.removeFirst()
+            } else {
+                element.comments[0] = trimmed
+            }
+            if let existing { list[existing] = element } else { list.append(element) }
+            tree[section] = .array(list)
+        }
+    }
+
+    func deleteRule(section: String, index: Int) {
+        mutate { tree in
+            guard var list = tree[section]?.elements, list.indices.contains(index) else { return }
+            list.remove(at: index)
+            tree[section] = .array(list)
         }
     }
 
@@ -591,7 +642,7 @@ final class PolicyStore: ObservableObject {
 
 // MARK: - Tree helpers
 
-private func stringArrayJSON(_ strings: [String]) -> JSON {
+func stringArrayJSON(_ strings: [String]) -> JSON {
     .array(strings.map { JSON.Element(comments: [], value: .string($0)) })
 }
 

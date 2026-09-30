@@ -8,17 +8,10 @@ struct AccessMapScreen: View {
     @State private var kind: Kind = .group
     @State private var selection = ""
     @State private var picking = false
+    @State private var editing: RuleSummary?
+    @State private var adding = false
 
     enum Kind: Hashable { case device, user, group, tag }
-
-    /// One rule (ACL, grant, or SSH) that applies to the focused source.
-    private struct RulePill: Identifiable {
-        var id: String
-        var name: String
-        var badge: String
-        var color: Color
-        var destinations: [String]
-    }
 
     // MARK: - Layout constants
 
@@ -43,6 +36,9 @@ struct AccessMapScreen: View {
                         .foregroundStyle(Theme.textSecondary)
                 }
                 Spacer()
+                if store.isValid && !items.isEmpty {
+                    ToolbarButton(label: "Add rule", icon: "plus") { adding = true }
+                }
             }
             .padding(.horizontal, 16)
             .padding(.top, 12)
@@ -67,6 +63,8 @@ struct AccessMapScreen: View {
         .onChange(of: kind) { validateSelection() }
         .onChange(of: store.currentWorkspaceID) { validateSelection() }
         .onChange(of: store.headscaleNodes.count) { validateSelection() }
+        .sheet(item: $editing) { RuleSheet(existing: $0) }
+        .sheet(isPresented: $adding) { RuleSheet(existing: nil, prefillSource: prefillSource) }
     }
 
     private var tabs: [(value: Kind, label: String, icon: String)] {
@@ -112,43 +110,23 @@ struct AccessMapScreen: View {
     /// Identities the focused source matches as in the policy.
     private var sourceIDs: [String] { node?.identities ?? [selection] }
 
+    /// How a new rule refers to the focused source: a device by its tag or user.
+    private var prefillSource: String {
+        guard let node else { return selection }
+        return node.identities.first { $0.hasPrefix("tag:") || $0.contains("@") } ?? selection
+    }
+
+    private func color(_ kind: RuleSummary.Kind) -> Color {
+        switch kind {
+        case .acl: return Theme.lineBlue
+        case .grant: return Theme.lineGreen
+        case .ssh: return Theme.pink
+        }
+    }
+
     // MARK: - Rules
 
-    private var pills: [RulePill] {
-        let ev = store.evaluator
-        func applies(_ src: [String]) -> Bool {
-            src.contains { spec in sourceIDs.contains { ev.sourceMatches(spec: spec, sourceID: $0) } }
-        }
-        func name(_ comments: [String], _ fallback: String) -> String {
-            comments.first ?? fallback
-        }
-        func portsBadge(_ entries: [String]) -> String {
-            let e = entries.uniqued()
-            return e == ["*"] ? "All" : e.map { $0 == "*" ? "all" : $0.uppercased() }.joined(separator: ", ")
-        }
-        func strip(_ t: String) -> String { t.hasPrefix("host:") ? String(t.dropFirst(5)) : t }
-
-        var out: [RulePill] = []
-        for r in store.model.rules where r.action == "accept" && applies(r.src) {
-            out.append(RulePill(id: "acl\(r.index)", name: name(r.comments, "Rule #\(r.index + 1)"),
-                                badge: portsBadge(r.dst.map { DestSpec($0).ports }),
-                                color: Theme.lineBlue,
-                                destinations: r.dst.map { strip(DestSpec($0).target) }.uniqued()))
-        }
-        for g in store.model.grants where applies(g.src) {
-            out.append(RulePill(id: "grant\(g.index)", name: name(g.comments, "Grant #\(g.index + 1)"),
-                                badge: g.ip.isEmpty ? "APP" : portsBadge(g.ip),
-                                color: Theme.lineGreen,
-                                destinations: g.dst.map(strip).uniqued()))
-        }
-        for s in store.model.sshRules where applies(s.src) {
-            out.append(RulePill(id: "ssh\(s.index)", name: name(s.comments, "SSH access"),
-                                badge: "SSH · \(s.users.joined(separator: ", "))",
-                                color: Theme.pink,
-                                destinations: s.dst.map(strip).uniqued()))
-        }
-        return out
-    }
+    private var pills: [RuleSummary] { ruleSummaries(store.model, sourceIDs: sourceIDs) }
 
     // MARK: - Map
 
@@ -171,12 +149,12 @@ struct AccessMapScreen: View {
             ForEach(Array(pills.enumerated()), id: \.element.id) { i, pill in
                 ConnectionCurve(from: CGPoint(x: 24 + cardSize.width, y: cardCenter.y),
                                 to: CGPoint(x: pillX, y: pillY(i)))
-                    .stroke(pill.color.opacity(0.85), style: dash)
+                    .stroke(color(pill.kind).opacity(0.85), style: dash)
                 ForEach(pill.destinations, id: \.self) { d in
                     if let j = dests.firstIndex(of: d) {
                         ConnectionCurve(from: CGPoint(x: pillX + pillSize.width, y: pillY(i)),
                                         to: CGPoint(x: destX, y: destY(j)))
-                            .stroke(pill.color.opacity(0.85), style: dash)
+                            .stroke(color(pill.kind).opacity(0.85), style: dash)
                     }
                 }
             }
@@ -244,9 +222,16 @@ struct AccessMapScreen: View {
                             selection = item
                             picking = false
                         } label: {
-                            Text(verbatim: title(item))
-                                .font(.system(size: 12, weight: item == selection ? .semibold : .regular))
-                                .frame(maxWidth: .infinity, alignment: .leading)
+                            HStack(spacing: 7) {
+                                if let n = kind == .device ? store.headscaleNodes.first(where: { $0.id == item }) : nil {
+                                    Circle()
+                                        .fill(n.online == true ? Theme.green : Theme.textSecondary.opacity(0.4))
+                                        .frame(width: 7, height: 7)
+                                }
+                                Text(verbatim: title(item))
+                                    .font(.system(size: 12, weight: item == selection ? .semibold : .regular))
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
                                 .padding(.horizontal, 10)
                                 .padding(.vertical, 5)
                                 .background(RoundedRectangle(cornerRadius: 5)
@@ -263,7 +248,7 @@ struct AccessMapScreen: View {
     }
 
     private var sourceSubtitle: String {
-        if let node { return node.ipAddresses?.first ?? node.identities.first ?? "" }
+        if let node { return [node.ipAddresses?.first, node.statusText].compactMap { $0 }.joined(separator: " · ") }
         switch kind {
         case .group:
             let n = store.model.groups[selection]?.count ?? 0
@@ -276,10 +261,16 @@ struct AccessMapScreen: View {
         }
     }
 
-    private func pillView(_ pill: RulePill) -> some View {
+    private func pillView(_ pill: RuleSummary) -> some View {
+        Button { editing = pill } label: { pillLabel(pill) }
+            .buttonStyle(.plain)
+            .help("\(pill.name) — click to edit")
+    }
+
+    private func pillLabel(_ pill: RuleSummary) -> some View {
         HStack(spacing: 0) {
             HStack(spacing: 7) {
-                Circle().fill(pill.color).frame(width: 7, height: 7)
+                Circle().fill(color(pill.kind)).frame(width: 7, height: 7)
                 Text(verbatim: pill.name)
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(Theme.textPrimary)
@@ -298,7 +289,7 @@ struct AccessMapScreen: View {
         }
         .background(Capsule().fill(Theme.panel))
         .overlay(Capsule().stroke(Theme.panelBorder, lineWidth: 1))
-        .help(pill.name)
+        .contentShape(Capsule())
     }
 
     private func destCard(_ name: String) -> some View {
@@ -340,9 +331,13 @@ struct AccessMapScreen: View {
         if let ip = m.hosts[name] { return ip }
         if let set = m.ipsets[name] { return "\(set.count) address\(set.count == 1 ? "" : "es")" }
         if let members = m.groups[name] { return "\(members.count) member\(members.count == 1 ? "" : "s")" }
-        if name.hasPrefix("tag:"), !store.headscaleNodes.isEmpty {
-            let n = store.headscaleNodes.filter { $0.allTags.contains(name) }.count
-            return "\(n) device\(n == 1 ? "" : "s")"
+        if !store.headscaleNodes.isEmpty, name.hasPrefix("tag:") || name.contains("@") {
+            let ev = store.evaluator
+            let matching = store.headscaleNodes.filter { n in
+                n.identities.contains { ev.targetMatches(target: name, destID: $0) }
+            }
+            let online = matching.filter { $0.online == true }.count
+            return matching.isEmpty ? "no devices" : "\(online) of \(matching.count) device\(matching.count == 1 ? "" : "s") online"
         }
         if name.hasPrefix("tag:") { return "tag" }
         if name.hasPrefix("autogroup:") { return "autogroup" }

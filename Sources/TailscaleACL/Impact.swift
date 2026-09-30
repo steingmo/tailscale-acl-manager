@@ -89,3 +89,113 @@ private func mentionedPorts(_ m: PolicyModel) -> Set<Int> {
     }
     return ports
 }
+
+// MARK: - Rule summaries
+
+/// One ACL, grant, or SSH rule, summarized for the access map and reports.
+struct RuleSummary: Identifiable {
+    enum Kind { case acl, grant, ssh }
+
+    var kind: Kind
+    var index: Int
+    var name: String          // first comment line, or "Grant #3"-style fallback
+    var badge: String         // ports / ip entries / SSH users
+    var sources: [String]
+    var destinations: [String] // targets, "host:" prefix removed
+
+    var id: String { "\(kind)\(index)" }
+    var section: String {
+        switch kind {
+        case .acl: return "acls"
+        case .grant: return "grants"
+        case .ssh: return "ssh"
+        }
+    }
+}
+
+/// Rules whose sources match any of `sourceIDs` (all rules when nil).
+func ruleSummaries(_ m: PolicyModel, sourceIDs: [String]?) -> [RuleSummary] {
+    let ev = Evaluator(model: m)
+    func applies(_ src: [String]) -> Bool {
+        guard let sourceIDs else { return true }
+        return src.contains { spec in sourceIDs.contains { ev.sourceMatches(spec: spec, sourceID: $0) } }
+    }
+    func badge(_ entries: [String]) -> String {
+        let e = entries.uniqued()
+        return e == ["*"] ? "All" : e.map { $0 == "*" ? "all" : $0.uppercased() }.joined(separator: ", ")
+    }
+    func strip(_ t: String) -> String { t.hasPrefix("host:") ? String(t.dropFirst(5)) : t }
+
+    var out: [RuleSummary] = []
+    for r in m.rules where r.action == "accept" && applies(r.src) {
+        out.append(RuleSummary(kind: .acl, index: r.index,
+                               name: r.comments.first ?? "Rule #\(r.index + 1)",
+                               badge: badge(r.dst.map { DestSpec($0).ports }), sources: r.src,
+                               destinations: r.dst.map { strip(DestSpec($0).target) }.uniqued()))
+    }
+    for g in m.grants where applies(g.src) {
+        out.append(RuleSummary(kind: .grant, index: g.index,
+                               name: g.comments.first ?? "Grant #\(g.index + 1)",
+                               badge: g.ip.isEmpty ? "APP" : badge(g.ip), sources: g.src,
+                               destinations: g.dst.map(strip).uniqued()))
+    }
+    for s in m.sshRules where applies(s.src) {
+        out.append(RuleSummary(kind: .ssh, index: s.index,
+                               name: s.comments.first ?? "SSH rule #\(s.index + 1)",
+                               badge: "SSH · \(s.users.joined(separator: ", "))", sources: s.src,
+                               destinations: s.dst.map(strip).uniqued()))
+    }
+    return out
+}
+
+// MARK: - Line diff
+
+struct DiffLine: Identifiable {
+    enum Kind { case same, added, removed, skipped }
+    var id: Int
+    var kind: Kind
+    var text: String
+}
+
+/// Unified line diff of `old` → `new`, keeping `context` unchanged lines
+/// around each change and collapsing longer unchanged runs into one
+/// `.skipped` line whose text is the number of lines hidden.
+func lineDiff(old: String, new: String, context: Int = 3) -> [DiffLine] {
+    let a = old.components(separatedBy: "\n")
+    let b = new.components(separatedBy: "\n")
+    let diff = b.difference(from: a)
+    var removed = Set<Int>(), inserted = Set<Int>()
+    for change in diff {
+        switch change {
+        case .remove(let offset, _, _): removed.insert(offset)
+        case .insert(let offset, _, _): inserted.insert(offset)
+        }
+    }
+    var full: [(DiffLine.Kind, String)] = []
+    var i = 0, j = 0
+    while i < a.count || j < b.count {
+        if i < a.count, removed.contains(i) {
+            full.append((.removed, a[i])); i += 1
+        } else if j < b.count, inserted.contains(j) {
+            full.append((.added, b[j])); j += 1
+        } else {
+            full.append((.same, a[i])); i += 1; j += 1
+        }
+    }
+    let changed = full.indices.filter { full[$0].0 != .same }
+    var keep = Set<Int>()
+    for c in changed { keep.formUnion(max(0, c - context)...min(full.count - 1, c + context)) }
+
+    var out: [DiffLine] = []
+    var hidden = 0
+    for (k, line) in full.enumerated() {
+        if keep.contains(k) {
+            if hidden > 0 { out.append(DiffLine(id: out.count, kind: .skipped, text: String(hidden))); hidden = 0 }
+            out.append(DiffLine(id: out.count, kind: line.0, text: line.1))
+        } else {
+            hidden += 1
+        }
+    }
+    if hidden > 0 { out.append(DiffLine(id: out.count, kind: .skipped, text: String(hidden))) }
+    return out
+}

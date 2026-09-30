@@ -26,6 +26,23 @@ struct HeadscaleNode: Decodable, Identifiable {
     }
     var allTags: [String] { ((tags ?? []) + (forcedTags ?? []) + (validTags ?? [])).uniqued() }
 
+    /// Headscale sends nanosecond timestamps, which ISO8601DateFormatter can't
+    /// parse, so the fraction is dropped.
+    var lastSeenDate: Date? {
+        guard let s = lastSeen else { return nil }
+        let trimmed = s.replacingOccurrences(of: #"\.\d+"#, with: "", options: .regularExpression)
+        return ISO8601DateFormatter().date(from: trimmed)
+    }
+
+    /// "online", "last seen 3 hr. ago", or "offline".
+    var statusText: String {
+        if online == true { return "online" }
+        guard let date = lastSeenDate else { return "offline" }
+        let f = RelativeDateTimeFormatter()
+        f.unitsStyle = .short
+        return "last seen \(f.localizedString(for: date, relativeTo: Date()))"
+    }
+
     /// Policy identities this node matches as, following Tailscale semantics:
     /// a tagged node is its tags (it loses its user identity); an untagged
     /// node is its user. Its IPs are always included so host, IP set, and

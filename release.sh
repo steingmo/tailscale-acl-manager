@@ -42,6 +42,10 @@ if [[ $DRY_RUN == 0 ]]; then
   [[ -d "$TAP_DIR/.git" ]] || { echo "error: tap clone not found at $TAP_DIR." >&2; exit 1; }
 fi
 
+# --- Tests -------------------------------------------------------------------
+# Built outside the project folder: iCloud-synced folders break test bundle signing.
+swift test --scratch-path "${TMPDIR:-/tmp/}tailscale-acl-test-build"
+
 # --- Bump version + build ----------------------------------------------------
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" Info.plist
 /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $VERSION" Info.plist

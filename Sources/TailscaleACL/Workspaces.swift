@@ -7,12 +7,15 @@ struct Workspace: Codable, Identifiable, Equatable {
     var name: String
     var serverURL: String
     var policy: String
+    /// Server policy text as of the last pull or push, to detect changes made
+    /// on the server by someone else before the next push.
+    var lastSyncedPolicy: String?
 }
 
 /// Workspaces persisted in ~/Library/Application Support/TailscaleACL.
 enum WorkspaceStore {
     static var fileURL: URL {
-        PushHistory.fileURL.deletingLastPathComponent().appendingPathComponent("workspaces.json")
+        appDataDirectory.appendingPathComponent("workspaces.json")
     }
 
     static func load() -> [Workspace] {

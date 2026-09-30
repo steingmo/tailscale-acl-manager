@@ -16,11 +16,7 @@ struct PushRecord: Codable, Identifiable {
 enum PushHistory {
     private static let limit = 50
 
-    static var fileURL: URL {
-        let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("TailscaleACL", isDirectory: true)
-        return dir.appendingPathComponent("push-history.json")
-    }
+    static var fileURL: URL { appDataDirectory.appendingPathComponent("push-history.json") }
 
     static func load() -> [PushRecord] {
         guard let data = try? Data(contentsOf: fileURL) else { return [] }
@@ -45,4 +41,14 @@ enum PushHistory {
         encoder.outputFormatting = [.prettyPrinted]
         try encoder.encode(records).write(to: fileURL, options: .atomic)
     }
+}
+
+/// The app's data folder. Tests point it at a temp folder with
+/// TAILSCALE_ACL_DATA_DIR so they never touch real workspaces or history.
+var appDataDirectory: URL {
+    if let dir = ProcessInfo.processInfo.environment["TAILSCALE_ACL_DATA_DIR"] {
+        return URL(fileURLWithPath: dir, isDirectory: true)
+    }
+    return FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        .appendingPathComponent("TailscaleACL", isDirectory: true)
 }

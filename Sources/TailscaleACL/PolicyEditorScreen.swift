@@ -27,6 +27,11 @@ struct PolicyEditorScreen: View {
                 ToolbarButton(label: "Export", icon: "square.and.arrow.down") {
                     store.exportToFile()
                 }
+                ToolbarButton(label: "Report", icon: "doc.richtext") {
+                    store.exportReport()
+                }
+                .disabled(!store.isValid)
+                .help("Export a Markdown access report for audits or customer documentation")
                 ToolbarButton(label: "Reset", icon: "arrow.counterclockwise") {
                     confirmingReset = true
                 }
