@@ -39,8 +39,11 @@ Swift Package (no Xcode project). All source in `Sources/TailscaleACL/`:
   and **deliberately no NSRulerView**: the ruler corrupts NSScrollView
   tiling inside SwiftUI on recent macOS and blanks the text. Line numbers
   are a sibling `GutterView` synced via bounds-change notifications.
-- `*Screen.swift` — the seven screens (editor, matrix, visual builder,
-  simulator, ssh, tests, problems). Visual builder draws ACL connections
+- `*Screen.swift` — the screens (access map, editor, matrix, visual
+  builder, simulator, ssh, tests, problems, headscale). `AccessMapScreen`
+  is a NetBird-style focused view: one device/user/group/tag → the rules
+  that apply to it → destinations. Maps use `DotGrid` and dashed
+  `ConnectionCurve`s; `PillTabs` is the shared segmented tab bar. Visual builder draws ACL connections
   blue, grants green. Matrix cells are clickable (add/edit/remove access
   via the shared `ConnectionSheet` in `SharedSheets.swift`).
 - `Lint.swift` — pure `lintPolicy(model)`: undefined references, ownerless

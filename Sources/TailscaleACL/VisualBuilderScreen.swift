@@ -231,16 +231,18 @@ struct VisualBuilderScreen: View {
 
     private var canvas: some View {
         ZStack(alignment: .topLeading) {
+            DotGrid()
             // Connection curves.
             ForEach(connections) { conn in
                 let from = dotPoint(for: Node(side: .source, name: conn.src))
                 let to = dotPoint(for: Node(side: .dest, name: conn.dstTarget))
-                let color = conn.kind == .grant ? Theme.green : Theme.blue
+                let color = conn.kind == .grant ? Theme.lineGreen : Theme.lineBlue
                 let active = hoveredConnection == conn.id || editingConnection?.id == conn.id
 
                 ConnectionCurve(from: from, to: to)
-                    .stroke(color.opacity(active ? 1 : 0.75),
-                            lineWidth: active ? 3.5 : 1.5)
+                    .stroke(color.opacity(active ? 1 : 0.8),
+                            style: StrokeStyle(lineWidth: active ? 3 : 1.5,
+                                               dash: active ? [] : [5, 4]))
                 if active {
                     // Mark both endpoints so it's obvious what the line connects.
                     Circle().fill(color).frame(width: 8, height: 8).position(from)
@@ -469,7 +471,7 @@ private struct NodeBox: View {
     }
 }
 
-private struct ConnectionCurve: Shape {
+struct ConnectionCurve: Shape {
     var from: CGPoint
     var to: CGPoint
 

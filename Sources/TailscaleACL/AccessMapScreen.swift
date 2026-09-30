@@ -1,0 +1,369 @@
+import SwiftUI
+
+/// Focused map in the style of NetBird's control center: pick one device,
+/// user, group, or tag and see every rule that applies to it fanning out to
+/// what it can reach.
+struct AccessMapScreen: View {
+    @EnvironmentObject var store: PolicyStore
+    @State private var kind: Kind = .group
+    @State private var selection = ""
+    @State private var picking = false
+
+    enum Kind: Hashable { case device, user, group, tag }
+
+    /// One rule (ACL, grant, or SSH) that applies to the focused source.
+    private struct RulePill: Identifiable {
+        var id: String
+        var name: String
+        var badge: String
+        var color: Color
+        var destinations: [String]
+    }
+
+    // MARK: - Layout constants
+
+    private let cardSize = CGSize(width: 240, height: 54)
+    private let pillSize = CGSize(width: 380, height: 32)
+    private let destSize = CGSize(width: 230, height: 46)
+    private let pillX: CGFloat = 360
+    private let destX: CGFloat = 860
+    private let pillRow: CGFloat = 52
+    private let destRow: CGFloat = 60
+    private var canvasWidth: CGFloat { destX + destSize.width + 24 }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Access Map")
+                        .font(.system(size: 16, weight: .bold))
+                        .foregroundStyle(Theme.textPrimary)
+                    Text("Pick a device, user, group, or tag to see every rule that applies to it and what it can reach")
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(Theme.textSecondary)
+                }
+                Spacer()
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 12)
+
+            PillTabs(tabs: tabs, selection: $kind)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 12)
+
+            if !store.isValid {
+                notice("Fix the policy in the editor to see the access map.")
+            } else if items.isEmpty {
+                notice(kind == .device
+                       ? "Load devices from Headscale (Headscale screen or Access Simulator) to map them."
+                       : "The policy has no \(kindName)s.")
+            } else {
+                ScrollView([.horizontal, .vertical]) { map }
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(Theme.background)
+        .onAppear(perform: validateSelection)
+        .onChange(of: kind) { validateSelection() }
+        .onChange(of: store.currentWorkspaceID) { validateSelection() }
+        .onChange(of: store.headscaleNodes.count) { validateSelection() }
+    }
+
+    private var tabs: [(value: Kind, label: String, icon: String)] {
+        var t: [(value: Kind, label: String, icon: String)] = []
+        if !store.headscaleNodes.isEmpty { t.append((.device, "Device", "desktopcomputer")) }
+        t.append((.user, "User", "person"))
+        t.append((.group, "Group", "person.2"))
+        t.append((.tag, "Tag", "tag"))
+        return t
+    }
+
+    private var kindName: String {
+        switch kind {
+        case .device: return "device"
+        case .user: return "user"
+        case .group: return "group"
+        case .tag: return "tag"
+        }
+    }
+
+    private var items: [String] {
+        switch kind {
+        case .device: return store.headscaleNodes.map(\.id)
+        case .user: return store.model.allUsers
+        case .group: return store.model.groupOrder
+        case .tag: return store.model.tagOrder
+        }
+    }
+
+    private func validateSelection() {
+        if kind == .device && store.headscaleNodes.isEmpty { kind = .group }
+        if !items.contains(selection) { selection = items.first ?? "" }
+    }
+
+    private var node: HeadscaleNode? {
+        kind == .device ? store.headscaleNodes.first { $0.id == selection } : nil
+    }
+
+    private func title(_ item: String) -> String {
+        kind == .device ? (store.headscaleNodes.first { $0.id == item }?.displayName ?? item) : item
+    }
+
+    /// Identities the focused source matches as in the policy.
+    private var sourceIDs: [String] { node?.identities ?? [selection] }
+
+    // MARK: - Rules
+
+    private var pills: [RulePill] {
+        let ev = store.evaluator
+        func applies(_ src: [String]) -> Bool {
+            src.contains { spec in sourceIDs.contains { ev.sourceMatches(spec: spec, sourceID: $0) } }
+        }
+        func name(_ comments: [String], _ fallback: String) -> String {
+            comments.first ?? fallback
+        }
+        func portsBadge(_ entries: [String]) -> String {
+            let e = entries.uniqued()
+            return e == ["*"] ? "All" : e.map { $0 == "*" ? "all" : $0.uppercased() }.joined(separator: ", ")
+        }
+        func strip(_ t: String) -> String { t.hasPrefix("host:") ? String(t.dropFirst(5)) : t }
+
+        var out: [RulePill] = []
+        for r in store.model.rules where r.action == "accept" && applies(r.src) {
+            out.append(RulePill(id: "acl\(r.index)", name: name(r.comments, "Rule #\(r.index + 1)"),
+                                badge: portsBadge(r.dst.map { DestSpec($0).ports }),
+                                color: Theme.lineBlue,
+                                destinations: r.dst.map { strip(DestSpec($0).target) }.uniqued()))
+        }
+        for g in store.model.grants where applies(g.src) {
+            out.append(RulePill(id: "grant\(g.index)", name: name(g.comments, "Grant #\(g.index + 1)"),
+                                badge: g.ip.isEmpty ? "APP" : portsBadge(g.ip),
+                                color: Theme.lineGreen,
+                                destinations: g.dst.map(strip).uniqued()))
+        }
+        for s in store.model.sshRules where applies(s.src) {
+            out.append(RulePill(id: "ssh\(s.index)", name: name(s.comments, "SSH access"),
+                                badge: "SSH · \(s.users.joined(separator: ", "))",
+                                color: Theme.pink,
+                                destinations: s.dst.map(strip).uniqued()))
+        }
+        return out
+    }
+
+    // MARK: - Map
+
+    private var map: some View {
+        let pills = self.pills
+        let dests = pills.flatMap(\.destinations).uniqued()
+        let height = max(CGFloat(pills.count) * pillRow, CGFloat(dests.count) * destRow, 140) + 40
+        let cardCenter = CGPoint(x: 24 + cardSize.width / 2, y: height / 2)
+        func pillY(_ i: Int) -> CGFloat {
+            height / 2 + (CGFloat(i) - CGFloat(pills.count - 1) / 2) * pillRow
+        }
+        func destY(_ i: Int) -> CGFloat {
+            height / 2 + (CGFloat(i) - CGFloat(dests.count - 1) / 2) * destRow
+        }
+        let dash = StrokeStyle(lineWidth: 1.5, dash: [5, 4])
+
+        return ZStack(alignment: .topLeading) {
+            DotGrid()
+
+            ForEach(Array(pills.enumerated()), id: \.element.id) { i, pill in
+                ConnectionCurve(from: CGPoint(x: 24 + cardSize.width, y: cardCenter.y),
+                                to: CGPoint(x: pillX, y: pillY(i)))
+                    .stroke(pill.color.opacity(0.85), style: dash)
+                ForEach(pill.destinations, id: \.self) { d in
+                    if let j = dests.firstIndex(of: d) {
+                        ConnectionCurve(from: CGPoint(x: pillX + pillSize.width, y: pillY(i)),
+                                        to: CGPoint(x: destX, y: destY(j)))
+                            .stroke(pill.color.opacity(0.85), style: dash)
+                    }
+                }
+            }
+
+            sourceCard
+                .frame(width: cardSize.width, height: cardSize.height)
+                .position(cardCenter)
+
+            if pills.isEmpty {
+                Text("No rules apply to \(title(selection)).")
+                    .font(.system(size: 12))
+                    .foregroundStyle(Theme.textSecondary)
+                    .position(x: pillX + pillSize.width / 2, y: height / 2)
+            }
+
+            ForEach(Array(pills.enumerated()), id: \.element.id) { i, pill in
+                pillView(pill)
+                    .frame(width: pillSize.width, height: pillSize.height)
+                    .position(x: pillX + pillSize.width / 2, y: pillY(i))
+            }
+
+            ForEach(Array(dests.enumerated()), id: \.element) { j, d in
+                destCard(d)
+                    .frame(width: destSize.width, height: destSize.height)
+                    .position(x: destX + destSize.width / 2, y: destY(j))
+            }
+        }
+        .frame(width: canvasWidth, height: height, alignment: .topLeading)
+        .padding(.horizontal, 16)
+        .padding(.bottom, 16)
+    }
+
+    private var sourceCard: some View {
+        Button { picking = true } label: {
+            HStack(spacing: 10) {
+                iconSquare(kind == .device ? "desktopcomputer" : Theme.entityIcon(selection),
+                           color: kind == .device || kind == .user ? Theme.textPrimary : Theme.entityColor(selection))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(verbatim: title(selection))
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(Theme.textPrimary)
+                        .lineLimit(1)
+                    Text(verbatim: sourceSubtitle)
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(Theme.textSecondary)
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 4)
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Theme.textSecondary)
+            }
+            .padding(.horizontal, 10)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(RoundedRectangle(cornerRadius: 10).fill(Theme.panel))
+            .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.panelBorder, lineWidth: 1))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .popover(isPresented: $picking, arrowEdge: .bottom) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 1) {
+                    ForEach(items, id: \.self) { item in
+                        Button {
+                            selection = item
+                            picking = false
+                        } label: {
+                            Text(verbatim: title(item))
+                                .font(.system(size: 12, weight: item == selection ? .semibold : .regular))
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 5)
+                                .background(RoundedRectangle(cornerRadius: 5)
+                                    .fill(item == selection ? Color.white.opacity(0.08) : .clear))
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(6)
+            }
+            .frame(width: 260, height: min(CGFloat(items.count) * 27 + 12, 360))
+        }
+    }
+
+    private var sourceSubtitle: String {
+        if let node { return node.ipAddresses?.first ?? node.identities.first ?? "" }
+        switch kind {
+        case .group:
+            let n = store.model.groups[selection]?.count ?? 0
+            return "\(n) member\(n == 1 ? "" : "s")"
+        case .tag:
+            let n = store.headscaleNodes.filter { $0.allTags.contains(selection) }.count
+            return store.headscaleNodes.isEmpty ? "tag" : "\(n) device\(n == 1 ? "" : "s")"
+        default:
+            return "user"
+        }
+    }
+
+    private func pillView(_ pill: RulePill) -> some View {
+        HStack(spacing: 0) {
+            HStack(spacing: 7) {
+                Circle().fill(pill.color).frame(width: 7, height: 7)
+                Text(verbatim: pill.name)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(Theme.textPrimary)
+                    .lineLimit(1)
+            }
+            .padding(.horizontal, 10)
+            Spacer(minLength: 0)
+            Text(verbatim: pill.badge)
+                .font(.system(size: 10.5, design: .monospaced))
+                .foregroundStyle(Theme.textSecondary)
+                .lineLimit(1)
+                .frame(maxWidth: 120)
+                .padding(.horizontal, 8)
+                .frame(maxHeight: .infinity)
+                .overlay(Rectangle().fill(Theme.panelBorder).frame(width: 1), alignment: .leading)
+        }
+        .background(Capsule().fill(Theme.panel))
+        .overlay(Capsule().stroke(Theme.panelBorder, lineWidth: 1))
+        .help(pill.name)
+    }
+
+    private func destCard(_ name: String) -> some View {
+        let focusable = name.hasPrefix("group:") || name.hasPrefix("tag:") || name.contains("@")
+        return Button {
+            guard focusable else { return }
+            kind = name.hasPrefix("group:") ? .group : name.hasPrefix("tag:") ? .tag : .user
+            selection = name
+        } label: {
+            HStack(spacing: 9) {
+                iconSquare(Theme.entityIcon(name), color: Theme.entityColor(name))
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(verbatim: name)
+                        .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(Theme.textPrimary)
+                        .lineLimit(1)
+                    Text(verbatim: destSubtitle(name))
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(Theme.textSecondary)
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 9)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(RoundedRectangle(cornerRadius: 10).fill(Theme.panel))
+            .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.panelBorder, lineWidth: 1))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(focusable ? "Click to focus the map on \(name)" : name)
+    }
+
+    private func destSubtitle(_ name: String) -> String {
+        let m = store.model
+        if name == "*" { return "everything" }
+        if name == "autogroup:internet" { return "internet via exit node" }
+        if name == "autogroup:self" { return "the user's own devices" }
+        if let ip = m.hosts[name] { return ip }
+        if let set = m.ipsets[name] { return "\(set.count) address\(set.count == 1 ? "" : "es")" }
+        if let members = m.groups[name] { return "\(members.count) member\(members.count == 1 ? "" : "s")" }
+        if name.hasPrefix("tag:"), !store.headscaleNodes.isEmpty {
+            let n = store.headscaleNodes.filter { $0.allTags.contains(name) }.count
+            return "\(n) device\(n == 1 ? "" : "s")"
+        }
+        if name.hasPrefix("tag:") { return "tag" }
+        if name.hasPrefix("autogroup:") { return "autogroup" }
+        return isAddressLike(name) ? "address" : "user"
+    }
+
+    private func iconSquare(_ icon: String, color: Color) -> some View {
+        Image(systemName: icon)
+            .font(.system(size: 12, weight: .medium))
+            .foregroundStyle(color)
+            .frame(width: 30, height: 30)
+            .background(RoundedRectangle(cornerRadius: 7).fill(Color.white.opacity(0.06)))
+    }
+
+    private func notice(_ text: String) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "info.circle")
+                .foregroundStyle(Theme.textSecondary)
+            Text(text)
+                .foregroundStyle(Theme.textSecondary)
+        }
+        .padding(16)
+    }
+}

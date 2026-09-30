@@ -22,6 +22,7 @@ final class UpdaterViewModel: ObservableObject {
 }
 
 enum Screen: String, CaseIterable, Identifiable {
+    case accessMap = "Access Map"
     case policyEditor = "Policy Editor"
     case accessMatrix = "Access Matrix"
     case visualBuilder = "Visual Builder"
@@ -35,6 +36,7 @@ enum Screen: String, CaseIterable, Identifiable {
 
     var icon: String {
         switch self {
+        case .accessMap: return "circle.hexagongrid"
         case .policyEditor: return "doc.text"
         case .accessMatrix: return "tablecells"
         case .visualBuilder: return "point.3.connected.trianglepath.dotted"
@@ -109,15 +111,20 @@ struct RootView: View {
 
     private var sidebar: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text("Tailscale ACL")
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(Theme.textSecondary)
-                .padding(.horizontal, 16)
-                .padding(.top, 14)
-                .padding(.bottom, 6)
+            HStack(spacing: 8) {
+                Image(nsImage: NSApp.applicationIconImage)
+                    .resizable()
+                    .frame(width: 24, height: 24)
+                Text("Tailscale ACL")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(Theme.textPrimary)
+            }
+            .padding(.horizontal, 14)
+            .padding(.top, 14)
+            .padding(.bottom, 10)
             workspaceMenu
 
-            VStack(spacing: 1) {
+            VStack(spacing: 2) {
                 ForEach(Screen.allCases) { s in
                     sidebarItem(s)
                 }
@@ -142,7 +149,7 @@ struct RootView: View {
             }
             .padding(10)
         }
-        .frame(width: 190)
+        .frame(width: 210)
         .background(Theme.sidebar)
     }
 
@@ -150,21 +157,22 @@ struct RootView: View {
         Button {
             screen = s
         } label: {
-            HStack(spacing: 8) {
+            HStack(spacing: 10) {
                 Image(systemName: s.icon)
-                    .font(.system(size: 11, weight: .medium))
-                    .frame(width: 15)
+                    .font(.system(size: 12, weight: .medium))
+                    .frame(width: 17)
                 Text(s.rawValue)
-                    .font(.system(size: 12, weight: screen == s ? .semibold : .regular))
+                    .font(.system(size: 12.5, weight: screen == s ? .semibold : .regular))
                 Spacer()
             }
-            .foregroundStyle(Theme.textPrimary)
-            .padding(.horizontal, 9)
-            .padding(.vertical, 6)
+            .foregroundStyle(screen == s ? Theme.textPrimary : Theme.textPrimary.opacity(0.78))
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
             .background(
-                RoundedRectangle(cornerRadius: 6)
-                    .fill(screen == s ? Color.white.opacity(0.09) : Color.clear)
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(screen == s ? Color.white.opacity(0.08) : Color.clear)
             )
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
     }
@@ -172,6 +180,7 @@ struct RootView: View {
     @ViewBuilder
     private var content: some View {
         switch screen {
+        case .accessMap: AccessMapScreen()
         case .policyEditor: PolicyEditorScreen()
         case .accessMatrix: AccessMatrixScreen()
         case .visualBuilder: VisualBuilderScreen()
