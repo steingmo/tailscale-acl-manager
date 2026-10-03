@@ -81,6 +81,16 @@ Use `-` to read the policy from standard input.
   expires and offers to delete it after.
 - **Device clean-up** — find devices not seen in 30 days or with expiring
   keys, and expire, rename, or delete them on the server.
+- **Problems in context** — click a problem to jump to its line; the editor
+  gutter marks lines with problems, and the command-line tool prints
+  `file:line:` locations.
+- **ACLs → grants** — convert legacy ACL rules to grants in one step, with
+  a check that every user, group, tag, and device keeps exactly the same
+  access.
+- **Editor help** — completes group, tag, host, IP set, posture, and
+  autogroup names inside strings, and shows what a name is on hover.
+- **Who changed it** — for Tailscale, the configuration audit log shows who
+  changed the policy and when (needs the `logs:configuration:read` scope).
 
 All structural edits (visual builder, tests) write back into the underlying
 HuJSON while preserving your comments.
@@ -90,7 +100,7 @@ HuJSON while preserving your comments.
 - `Sources/TailscaleACL/HuJSON.swift` — comment-preserving HuJSON parser/serializer
 - `Sources/TailscaleACL/PolicyModel.swift` — parsed policy model + dst-spec handling
 - `Sources/TailscaleACL/Evaluator.swift` — ACL semantics (default-deny, groups,
-  tags, autogroups, wildcard, port ranges, IPv4 CIDR) + test runner
+  tags, autogroups, wildcard, port ranges, IPv4/IPv6 CIDR) + test runner
 - `Sources/TailscaleACL/PolicyStore.swift` — app state, tree mutations, import/export
 - `Sources/TailscaleACL/*Screen.swift` — the five screens
 - `Sources/TailscaleACL/CodeEditor.swift` — NSTextView-based editor with highlighting

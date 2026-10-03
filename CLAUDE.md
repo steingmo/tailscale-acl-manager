@@ -34,9 +34,12 @@ Swift Package (no Xcode project). All source in `Sources/TailscaleACL/`:
   port-shaped).
 - `Evaluator.swift` — access semantics: default deny, accept-only ACLs,
   grants (`ip` grammar: `*`, `443`, `80-443`, `proto:port`, `proto:*`;
-  app-only grants confer no network access; non-TCP/UDP proto specs never
-  match port queries), groups/tags/hosts/autogroup/wildcard sources, IPv4
-  CIDR containment, test runner.
+  app-only grants confer no network access; non-TCP/UDP proto specs — and
+  ACLs with such a `proto` — never match port queries), groups/tags/hosts/
+  wildcard sources, autogroups (member, tagged, self, internet, danger-all;
+  role autogroups match only when simulated as the source), IPv4/IPv6 CIDR
+  containment (`parseCIDR`/`cidrContains` in Lint.swift), test runner.
+  IPv6 ACL destinations with ports are bracketed: `[fd7a::1]:22`.
 - `PolicyStore.swift` — `@MainActor ObservableObject`; owns the text, the
   tree, and all mutations (rules, grants, tests, entities, rename cascade).
   Typing reparses on a 120 ms debounce; programmatic mutations reparse
@@ -60,6 +63,17 @@ Swift Package (no Xcode project). All source in `Sources/TailscaleACL/`:
   inside ranges are exact. `generateTests` pins current access as tests;
   `explainFailure` says why a test assertion fails.
 - `LintIssue.fixes` are one-click fixes applied by `PolicyStore.apply`.
+  `LintIssue.path` ("grants[3].src", "groups[group:eng]") resolves to a line
+  via `JSON.line(at:)` (the parser records each member's/element's line);
+  Problems links to it (`PolicyStore.editorLineRequest`), the gutter marks
+  it, and the CLI prints `file:line:`.
+- `convertACLsToGrants` (Templates.swift) rewrites ACLs as grants; the sheet
+  proves equivalence with `entityAccessDifferences` (+ `accessChanges` on
+  devices). Headscale accepts grants from 0.29.0.
+- Editor: `PolicyTextView` completes `EditorVocabulary` names inside string
+  literals (only a chosen completion is inserted) and shows definitions as
+  tooltips. `PolicyServer.policyChanges` reads Tailscale's configuration
+  audit log (nil for Headscale) for the drift banner and Server screen.
 - `Snapshots.swift`: per-workspace version history (<data>/snapshots/),
   recorded on open and around every whole-policy replacement
   (`loadPolicy(_:reason:)`), pushes, and by hand.

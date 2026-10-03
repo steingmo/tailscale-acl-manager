@@ -35,9 +35,9 @@ func runCommandLine(_ args: [String], output: (String) -> Void = { print($0) }) 
         output("\(path): cannot read file")
         return 2
     }
-    let model: PolicyModel
+    let tree: JSON
     do {
-        model = PolicyModel(tree: try HuJSONParser.parse(text))
+        tree = try HuJSONParser.parse(text)
     } catch let e as HuJSONError {
         output("\(path):\(e.line): error: \(e.message)")
         return 1
@@ -46,17 +46,21 @@ func runCommandLine(_ args: [String], output: (String) -> Void = { print($0) }) 
         return 1
     }
 
+    let model = PolicyModel(tree: tree)
     let issues = lintPolicy(model)
     for i in issues {
-        output("\(path): \(i.severity == .error ? "error" : "warning"): \(i.title): \(i.detail)")
+        // file:line: like compilers, so editors and CI can link to it.
+        let at = i.path.flatMap(tree.line(at:)).map { "\(path):\($0)" } ?? path
+        output("\(at): \(i.severity == .error ? "error" : "warning"): \(i.title): \(i.detail)")
     }
     let errors = issues.filter { $0.severity == .error }.count
     var failed = 0
     if command == "test" {
         let results = Evaluator(model: model).runTests()
         for r in results {
+            let at = tree.line(at: "tests[\(r.testIndex)]").map { "\(path):\($0)" } ?? path
             for a in r.assertions where !a.passed {
-                output("\(path): FAIL tests[\(r.testIndex)] \(r.src) should \(a.kind == .accept ? "reach" : "not reach") \(a.dst)")
+                output("\(at): FAIL tests[\(r.testIndex)] \(r.src) should \(a.kind == .accept ? "reach" : "not reach") \(a.dst)")
             }
         }
         failed = results.filter { !$0.passed }.count

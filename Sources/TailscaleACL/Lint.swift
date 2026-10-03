@@ -8,6 +8,10 @@ struct LintIssue: Identifiable {
     var detail: String
     /// One-click fixes, when the right fix is unambiguous.
     var fixes: [LintFix] = []
+    /// Where in the policy, e.g. "grants[3].src" or "groups[group:eng]" (see JSON.line(at:)).
+    var path: String?
+    /// A line given directly (parse errors), when there is no path.
+    var line: Int?
 
     var id: String { "\(severity)-\(title)-\(detail)" }
 }
@@ -70,31 +74,49 @@ func lintPolicy(_ m: PolicyModel, now: Date = Date()) -> [LintIssue] {
         for t in n.target { references.append((t, "nodeAttrs[\(n.index)].target")) }
     }
 
+    let knownAutogroups = Set(EditorVocabulary.autogroups.map(\.0) + ["autogroup:members"])
     for (raw, where_) in references {
         let name = raw.hasPrefix("host:") ? String(raw.dropFirst(5)) : raw
+        if name.hasPrefix("autogroup:") {
+            let side = where_.hasSuffix(".src") ? "src" : where_.hasSuffix(".dst") ? "dst" : nil
+            if !knownAutogroups.contains(name) {
+                issues.append(.init(severity: .error, title: "Unknown autogroup",
+                                    detail: "\(name) in \(where_) is not a Tailscale autogroup.", path: where_))
+            } else if name == "autogroup:nonroot" && side != nil {
+                issues.append(.init(severity: .error, title: "Misplaced autogroup",
+                                    detail: "autogroup:nonroot in \(where_) only works in an SSH rule's \"users\".", path: where_))
+            } else if side == "src" && ["autogroup:self", "autogroup:internet"].contains(name) {
+                issues.append(.init(severity: .error, title: "Misplaced autogroup",
+                                    detail: "\(name) in \(where_) can only be a destination.", path: where_))
+            } else if side == "dst" && ["autogroup:shared", "autogroup:danger-all"].contains(name) {
+                issues.append(.init(severity: .error, title: "Misplaced autogroup",
+                                    detail: "\(name) in \(where_) can only be a source.", path: where_))
+            }
+            continue
+        }
         if isSelfEvident(name) { continue }
         if name.hasPrefix("group:") {
             if m.groups[name] == nil {
                 issues.append(.init(severity: .error, title: "Undefined group",
                                     detail: "\(name) is referenced in \(where_) but not defined in \"groups\".",
                                     fixes: [.init(label: "Define empty group", action: .defineGroup(name)),
-                                            .init(label: "Remove from rules", action: .deleteEntity(name))]))
+                                            .init(label: "Remove from rules", action: .deleteEntity(name))], path: where_))
             }
         } else if name.hasPrefix("tag:") {
             if m.tagOwners[name] == nil {
                 issues.append(.init(severity: .error, title: "Tag without owner",
                                     detail: "\(name) is referenced in \(where_) but has no entry in \"tagOwners\".",
-                                    fixes: [.init(label: "Add to tagOwners", action: .addTagOwner(name))]))
+                                    fixes: [.init(label: "Add to tagOwners", action: .addTagOwner(name))], path: where_))
             }
         } else if name.hasPrefix("ipset:") {
             if m.ipsets[name] == nil {
                 issues.append(.init(severity: .error, title: "Undefined IP set",
                                     detail: "\(name) is referenced in \(where_) but not defined in \"ipsets\".",
-                                    fixes: [.init(label: "Remove from rules", action: .deleteEntity(name))]))
+                                    fixes: [.init(label: "Remove from rules", action: .deleteEntity(name))], path: where_))
             }
         } else if m.hosts[name] == nil {
             issues.append(.init(severity: .error, title: "Unknown host",
-                                detail: "\"\(name)\" in \(where_) is not a host alias, tag, group, IP set, IP, or user."))
+                                detail: "\"\(name)\" in \(where_) is not a host alias, tag, group, IP set, IP, or user.", path: where_))
         }
     }
 
@@ -105,49 +127,49 @@ func lintPolicy(_ m: PolicyModel, now: Date = Date()) -> [LintIssue] {
     for g in m.groupOrder where !referenced.contains(g) {
         issues.append(.init(severity: .warning, title: "Unused group",
                             detail: "\(g) is defined but never used in any rule, grant, SSH rule, tag owner, or test.",
-                            fixes: [.init(label: "Delete \(g)", action: .deleteEntity(g))]))
+                            fixes: [.init(label: "Delete \(g)", action: .deleteEntity(g))], path: "groups[\(g)]"))
     }
     for t in m.tagOrder where !referenced.contains(t) {
         issues.append(.init(severity: .warning, title: "Unused tag",
                             detail: "\(t) has owners but is never used in any rule, grant, SSH rule, or test.",
-                            fixes: [.init(label: "Delete \(t)", action: .deleteEntity(t))]))
+                            fixes: [.init(label: "Delete \(t)", action: .deleteEntity(t))], path: "tagOwners[\(t)]"))
     }
     for h in m.hostOrder where !referenced.contains(h) {
         issues.append(.init(severity: .warning, title: "Unused host",
                             detail: "Host \"\(h)\" is defined but never referenced.",
-                            fixes: [.init(label: "Delete \(h)", action: .deleteEntity(h))]))
+                            fixes: [.init(label: "Delete \(h)", action: .deleteEntity(h))], path: "hosts[\(h)]"))
     }
     for s in m.ipsetOrder where !referenced.contains(s) {
         issues.append(.init(severity: .warning, title: "Unused IP set",
                             detail: "\(s) is defined but never referenced.",
-                            fixes: [.init(label: "Delete \(s)", action: .deleteEntity(s))]))
+                            fixes: [.init(label: "Delete \(s)", action: .deleteEntity(s))], path: "ipsets[\(s)]"))
     }
 
     // --- Empty groups ------------------------------------------------------
     for (name, members) in m.groups where members.isEmpty {
         issues.append(.init(severity: .warning, title: "Empty group",
-                            detail: "\(name) has no members, so rules using it match nobody."))
+                            detail: "\(name) has no members, so rules using it match nobody.", path: "groups[\(name)]"))
     }
 
     // --- Invalid addresses and port specs -----------------------------------
     for (name, addr) in m.hosts where !isAddressLike(addr) {
         issues.append(.init(severity: .warning, title: "Invalid host address",
-                            detail: "Host \"\(name)\" has value \"\(addr)\", which is not an IPv4 address or CIDR."))
+                            detail: "Host \"\(name)\" has value \"\(addr)\", which is not an IP address or CIDR.", path: "hosts[\(name)]"))
     }
     for (name, entries) in m.ipsets {
         for e in entries where !isAddressLike(e) {
             issues.append(.init(severity: .warning, title: "Invalid IP set entry",
-                                detail: "\(name) contains \"\(e)\", which is not an IPv4 address or CIDR."))
+                                detail: "\(name) contains \"\(e)\", which is not an IP address or CIDR.", path: "ipsets[\(name)]"))
         }
     }
     for g in m.grants {
         for spec in g.ip where !isValidIPSpec(spec) {
             issues.append(.init(severity: .error, title: "Invalid grant ip entry",
-                                detail: "grants[\(g.index)] has ip \"\(spec)\" — expected \"*\", a port, a range, or proto:port."))
+                                detail: "grants[\(g.index)] has ip \"\(spec)\" — expected \"*\", a port, a range, or proto:port.", path: "grants[\(g.index)].ip"))
         }
         if g.ip.isEmpty && !g.hasApp {
             issues.append(.init(severity: .error, title: "Grant grants nothing",
-                                detail: "grants[\(g.index)] has neither \"ip\" nor \"app\", so it grants no access."))
+                                detail: "grants[\(g.index)] has neither \"ip\" nor \"app\", so it grants no access.", path: "grants[\(g.index)]"))
         }
     }
     for r in m.rules {
@@ -155,7 +177,7 @@ func lintPolicy(_ m: PolicyModel, now: Date = Date()) -> [LintIssue] {
             let ports = DestSpec(d).ports
             if !(ports == "*" || ports.split(separator: ",").allSatisfy { isValidPortToken(String($0)) }) {
                 issues.append(.init(severity: .error, title: "Invalid ACL ports",
-                                    detail: "acls[\(r.index)] dst \"\(d)\" has an invalid port list."))
+                                    detail: "acls[\(r.index)] dst \"\(d)\" has an invalid port list.", path: "acls[\(r.index)].dst"))
             }
         }
     }
@@ -163,7 +185,7 @@ func lintPolicy(_ m: PolicyModel, now: Date = Date()) -> [LintIssue] {
     // --- SSH rules -------------------------------------------------------------
     for r in m.sshRules where r.action == "check" && r.src.contains(where: { $0.hasPrefix("tag:") }) {
         issues.append(.init(severity: .error, title: "Check mode from tagged source",
-                            detail: "ssh[\(r.index)] uses action \"check\" with a tagged source; Tailscale doesn't allow check mode from tagged devices."))
+                            detail: "ssh[\(r.index)] uses action \"check\" with a tagged source; Tailscale doesn't allow check mode from tagged devices.", path: "ssh[\(r.index)]"))
     }
 
     // --- Postures -------------------------------------------------------------
@@ -172,26 +194,26 @@ func lintPolicy(_ m: PolicyModel, now: Date = Date()) -> [LintIssue] {
     for g in m.grants { postureRefs += g.srcPosture.map { ($0, "grants[\(g.index)].srcPosture") } }
     for (name, where_) in postureRefs where m.postures[name] == nil {
         issues.append(.init(severity: .error, title: "Undefined posture",
-                            detail: "\(name) is required in \(where_) but not defined in \"postures\", so no device can meet it."))
+                            detail: "\(name) is required in \(where_) but not defined in \"postures\", so no device can meet it.", path: where_))
     }
     for name in m.postureOrder {
         if !name.hasPrefix("posture:") {
             issues.append(.init(severity: .error, title: "Invalid posture name",
-                                detail: "\"\(name)\" in \"postures\" must start with \"posture:\"."))
+                                detail: "\"\(name)\" in \"postures\" must start with \"posture:\".", path: "postures[\(name)]"))
         }
         for c in m.postures[name] ?? [] where PostureCondition(c) == nil {
             issues.append(.init(severity: .error, title: "Invalid posture condition",
-                                detail: "\(name) has \"\(c)\" — expected e.g. node:os == 'macos', node:tsVersion >= '1.60', or node:os IN ['macos', 'ios']."))
+                                detail: "\(name) has \"\(c)\" — expected e.g. node:os == 'macos', node:tsVersion >= '1.60', or node:os IN ['macos', 'ios'].", path: "postures[\(name)]"))
         }
         if !postureRefs.contains(where: { $0.name == name }) {
             issues.append(.init(severity: .warning, title: "Unused posture",
-                                detail: "\(name) is defined but no rule or defaultSrcPosture requires it."))
+                                detail: "\(name) is defined but no rule or defaultSrcPosture requires it.", path: "postures[\(name)]"))
         }
     }
     for g in m.grants {
         for v in g.via where !v.hasPrefix("tag:") {
             issues.append(.init(severity: .error, title: "Invalid via",
-                                detail: "grants[\(g.index)] routes via \"\(v)\"; via only takes tags (of subnet routers, exit nodes, or app connectors)."))
+                                detail: "grants[\(g.index)] routes via \"\(v)\"; via only takes tags (of subnet routers, exit nodes, or app connectors).", path: "grants[\(g.index)].via"))
         }
     }
 
@@ -202,27 +224,27 @@ func lintPolicy(_ m: PolicyModel, now: Date = Date()) -> [LintIssue] {
         guard let expires else { continue }
         guard let days = RuleExpiry.daysLeft(expires, now: now) else {
             issues.append(.init(severity: .warning, title: "Invalid expiry date",
-                                detail: "\(section)[\(index)] has \"expires: \(expires)\", which is not a real date."))
+                                detail: "\(section)[\(index)] has \"expires: \(expires)\", which is not a real date.", path: "\(section)[\(index)]"))
             continue
         }
         if days < 0 {
             issues.append(.init(severity: .warning, title: "Expired rule",
                                 detail: "\(section)[\(index)] expired on \(expires) but still grants access.",
-                                fixes: [.init(label: "Delete \(section)[\(index)]", action: .deleteRule(section: section, index: index))]))
+                                fixes: [.init(label: "Delete \(section)[\(index)]", action: .deleteRule(section: section, index: index))], path: "\(section)[\(index)]"))
         } else if days <= 7 {
             issues.append(.init(severity: .warning, title: "Rule expires soon",
-                                detail: "\(section)[\(index)] expires on \(expires) (\(days == 0 ? "today" : "in \(days) day\(days == 1 ? "" : "s")"))."))
+                                detail: "\(section)[\(index)] expires on \(expires) (\(days == 0 ? "today" : "in \(days) day\(days == 1 ? "" : "s")")).", path: "\(section)[\(index)]"))
         }
     }
 
     // --- Wide-open rules ---------------------------------------------------------
     for r in m.rules where r.action == "accept" && r.src.contains("*") && r.dst.contains("*:*") {
         issues.append(.init(severity: .warning, title: "Allows everything",
-                            detail: "acls[\(r.index)] lets every device reach every device on every port. Narrow it to the groups, tags, and ports that need access."))
+                            detail: "acls[\(r.index)] lets every device reach every device on every port. Narrow it to the groups, tags, and ports that need access.", path: "acls[\(r.index)]"))
     }
     for g in m.grants where g.src.contains("*") && g.dst.contains("*") && g.ip.contains("*") {
         issues.append(.init(severity: .warning, title: "Allows everything",
-                            detail: "grants[\(g.index)] lets every device reach every device on every port. Narrow it to the groups, tags, and ports that need access."))
+                            detail: "grants[\(g.index)] lets every device reach every device on every port. Narrow it to the groups, tags, and ports that need access.", path: "grants[\(g.index)]"))
     }
 
     // --- Duplicate / shadowed rules ------------------------------------------
@@ -249,7 +271,7 @@ func lintPolicy(_ m: PolicyModel, now: Date = Date()) -> [LintIssue] {
             if dstCovered && ipCovered && (b.index < a.index || !srcCovered(b.src, by: a.src)) {
                 issues.append(.init(severity: .warning, title: "Shadowed grant",
                                     detail: "grants[\(a.index)] (\(a.src.joined(separator: ", ")) → \(a.dst.joined(separator: ", "))) is already fully covered by grants[\(b.index)].",
-                                    fixes: [.init(label: "Delete grants[\(a.index)]", action: .deleteRule(section: "grants", index: a.index))]))
+                                    fixes: [.init(label: "Delete grants[\(a.index)]", action: .deleteRule(section: "grants", index: a.index))], path: "grants[\(a.index)]"))
             }
         }
     }
@@ -268,7 +290,7 @@ func lintPolicy(_ m: PolicyModel, now: Date = Date()) -> [LintIssue] {
             if covered && (b.index < a.index || !srcCovered(b.src, by: a.src)) {
                 issues.append(.init(severity: .warning, title: "Shadowed rule",
                                     detail: "acls[\(a.index)] is already fully covered by acls[\(b.index)].",
-                                    fixes: [.init(label: "Delete acls[\(a.index)]", action: .deleteRule(section: "acls", index: a.index))]))
+                                    fixes: [.init(label: "Delete acls[\(a.index)]", action: .deleteRule(section: "acls", index: a.index))], path: "acls[\(a.index)]"))
             }
         }
     }
@@ -281,15 +303,44 @@ func lintPolicy(_ m: PolicyModel, now: Date = Date()) -> [LintIssue] {
 
 // MARK: - Token validation
 
-/// IPv4 address or CIDR ("10.0.0.1", "10.0.0.0/16").
-func isAddressLike(_ s: String) -> Bool {
-    let parts = s.split(separator: "/")
-    guard parts.count <= 2, !parts.isEmpty else { return false }
-    if parts.count == 2 {
-        guard let bits = Int(parts[1]), (0...32).contains(bits) else { return false }
+/// IPv4 or IPv6 address or CIDR ("10.0.0.1", "10.0.0.0/16", "fd7a:115c:a1e0::/48").
+func isAddressLike(_ s: String) -> Bool { parseCIDR(s) != nil }
+
+/// An address's bytes (4 or 16) and prefix length (full length if none given).
+func parseCIDR(_ s: String) -> (bytes: [UInt8], bits: Int)? {
+    let parts = s.split(separator: "/", omittingEmptySubsequences: false)
+    guard parts.count <= 2, let bytes = ipBytes(String(parts[0])) else { return nil }
+    guard parts.count == 2 else { return (bytes, bytes.count * 8) }
+    guard let bits = Int(parts[1]), (0...bytes.count * 8).contains(bits) else { return nil }
+    return (bytes, bits)
+}
+
+func ipBytes(_ s: String) -> [UInt8]? {
+    var v4 = in_addr()
+    if inet_pton(AF_INET, s, &v4) == 1 { return withUnsafeBytes(of: &v4) { Array($0) } }
+    var v6 = in6_addr()
+    if inet_pton(AF_INET6, s, &v6) == 1 { return withUnsafeBytes(of: &v6) { Array($0) } }
+    return nil
+}
+
+/// Does `cidr` (an address or prefix) contain `ip` (an address, or a prefix's base)?
+func cidrContains(cidr: String, ip: String) -> Bool {
+    guard let net = parseCIDR(cidr), let addr = parseCIDR(ip), net.bytes.count == addr.bytes.count else { return false }
+    for i in 0..<net.bytes.count {
+        let bits = min(8, max(0, net.bits - i * 8))
+        let mask: UInt8 = bits == 0 ? 0 : ~UInt8(0) << (8 - bits)
+        if net.bytes[i] & mask != addr.bytes[i] & mask { return false }
     }
-    let octets = parts[0].split(separator: ".")
-    return octets.count == 4 && octets.allSatisfy { Int($0).map { (0...255).contains($0) } ?? false }
+    return true
+}
+
+/// Public internet addresses (what autogroup:internet means): not private,
+/// CGNAT/Tailscale, loopback, link-local, multicast, or reserved.
+func isPublicAddress(_ s: String) -> Bool {
+    guard let a = parseCIDR(s) else { return false }
+    if a.bytes.count == 16 { return cidrContains(cidr: "2000::/3", ip: s) }
+    return !["0.0.0.0/8", "10.0.0.0/8", "100.64.0.0/10", "127.0.0.0/8", "169.254.0.0/16",
+             "172.16.0.0/12", "192.168.0.0/16", "224.0.0.0/3"].contains { cidrContains(cidr: $0, ip: s) }
 }
 
 private func isValidPortToken(_ s: String) -> Bool {
@@ -328,7 +379,7 @@ func lintNodes(_ m: PolicyModel, nodes: [HeadscaleNode]) -> [LintIssue] {
     for tag in m.tagOrder where !deviceTags.contains(tag) {
         issues.append(.init(severity: .warning, title: "Tag not on any device",
                             detail: "\(tag) is defined in \"tagOwners\" but no current device carries it — possibly left over from a retired device.",
-                            fixes: [.init(label: "Delete \(tag)", action: .deleteEntity(tag))]))
+                            fixes: [.init(label: "Delete \(tag)", action: .deleteEntity(tag))], path: "tagOwners[\(tag)]"))
     }
     for node in nodes {
         for tag in node.allTags where m.tagOwners[tag] == nil {
@@ -347,7 +398,7 @@ func lintNodes(_ m: PolicyModel, nodes: [HeadscaleNode]) -> [LintIssue] {
     }
     func isDeviceSelector(_ t: String) -> Bool {
         t.hasPrefix("tag:") || t.hasPrefix("group:") || t.contains("@")
-            || t == "autogroup:member" || t == "autogroup:members"
+            || t == "autogroup:member" || t == "autogroup:members" || t == "autogroup:tagged"
     }
     func matchesSomeDest(_ target: String) -> Bool {
         nodes.contains { n in n.identities.contains { ev.targetMatches(target: target, destID: $0) } }
@@ -355,13 +406,13 @@ func lintNodes(_ m: PolicyModel, nodes: [HeadscaleNode]) -> [LintIssue] {
     func check(_ name: String, src: [String], dstTargets: [String]) {
         if !src.contains("*"), !src.contains(where: matchesSomeSource) {
             issues.append(.init(severity: .warning, title: "Rule matches no device",
-                                detail: "No current device matches any source of \(name) (\(src.joined(separator: ", "))), so it never applies."))
+                                detail: "No current device matches any source of \(name) (\(src.joined(separator: ", "))), so it never applies.", path: name))
         }
         let deviceDsts = dstTargets.filter(isDeviceSelector)
         if !deviceDsts.isEmpty, deviceDsts.count == dstTargets.count,
            !deviceDsts.contains(where: matchesSomeDest) {
             issues.append(.init(severity: .warning, title: "Rule reaches no device",
-                                detail: "No current device matches any destination of \(name) (\(deviceDsts.joined(separator: ", ")))."))
+                                detail: "No current device matches any destination of \(name) (\(deviceDsts.joined(separator: ", "))).", path: name))
         }
     }
     for r in m.rules where r.action == "accept" {

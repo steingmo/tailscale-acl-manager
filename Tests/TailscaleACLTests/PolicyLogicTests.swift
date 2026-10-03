@@ -46,9 +46,9 @@ final class EvaluatorTests: XCTestCase {
     }
 
     func testCIDR() {
-        XCTAssertTrue(ev.cidrContains(cidr: "10.0.0.0/16", ip: "10.0.42.7"))
-        XCTAssertFalse(ev.cidrContains(cidr: "10.0.0.0/16", ip: "10.1.0.1"))
-        XCTAssertTrue(ev.cidrContains(cidr: "10.0.0.5", ip: "10.0.0.5"))
+        XCTAssertTrue(cidrContains(cidr: "10.0.0.0/16", ip: "10.0.42.7"))
+        XCTAssertFalse(cidrContains(cidr: "10.0.0.0/16", ip: "10.1.0.1"))
+        XCTAssertTrue(cidrContains(cidr: "10.0.0.5", ip: "10.0.0.5"))
     }
 
     func testHostPrefixAndIPSets() {

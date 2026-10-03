@@ -59,11 +59,13 @@ struct Evaluator {
     func evaluate(sourceID: String, destID: String, port: Int) -> AccessResult {
         var matches: [RuleMatch] = []
         for rule in model.rules where rule.action == "accept" {
+            // Port queries are TCP/UDP, like grants' proto:port entries.
+            if let proto = rule.proto?.lowercased(), !["tcp", "udp", "6", "17"].contains(proto) { continue }
             guard let posture = pendingPostures(rule.srcPosture) else { continue }
             for src in rule.src where sourceMatches(spec: src, sourceID: sourceID) {
                 for dst in rule.dst {
                     let d = DestSpec(dst)
-                    if targetMatches(target: d.target, destID: destID)
+                    if destMatches(d.target, sourceID: sourceID, destID: destID)
                         && portMatches(spec: d.ports, port: port) {
                         matches.append(RuleMatch(kind: .acl, ruleIndex: rule.index,
                                                  srcSpec: src, dstSpec: dst, posture: posture))
@@ -75,7 +77,7 @@ struct Evaluator {
         for grant in model.grants {
             guard let posture = pendingPostures(grant.srcPosture) else { continue }
             for src in grant.src where sourceMatches(spec: src, sourceID: sourceID) {
-                for dst in grant.dst where targetMatches(target: dst, destID: destID) {
+                for dst in grant.dst where destMatches(dst, sourceID: sourceID, destID: destID) {
                     for spec in grant.ip where ipSpecMatches(spec: spec, port: port) {
                         matches.append(RuleMatch(kind: .grant, ruleIndex: grant.index,
                                                  srcSpec: src, dstSpec: dst, ipSpec: spec,
@@ -122,16 +124,25 @@ struct Evaluator {
         s.hasPrefix("host:") ? String(s.dropFirst(5)) : s
     }
 
+    /// Role-based autogroups: the app can't know who has a role, so they
+    /// match only when simulating that role itself as the source.
+    static let roleAutogroups: Set<String> = [
+        "autogroup:owner", "autogroup:admin", "autogroup:it-admin", "autogroup:network-admin",
+        "autogroup:billing-admin", "autogroup:auditor",
+    ]
+
     func sourceMatches(spec rawSpec: String, sourceID rawSource: String) -> Bool {
         let spec = stripHost(rawSpec)
         let sourceID = stripHost(rawSource)
         if spec == sourceID { return true }
-        if spec == "*" { return true }
+        if spec == "*" || spec == "autogroup:danger-all" { return true }
         if spec == "autogroup:members" || spec == "autogroup:member" {
             // Group members are tailnet users, so a group-as-source query
-            // ("would a member of group:X be allowed?") is covered too.
-            return sourceID.contains("@") || sourceID.hasPrefix("group:")
+            // ("would a member of group:X be allowed?") is covered too; so is
+            // a role, since everyone with a role is a member.
+            return sourceID.contains("@") || sourceID.hasPrefix("group:") || Self.roleAutogroups.contains(sourceID)
         }
+        if spec == "autogroup:tagged" { return sourceID.hasPrefix("tag:") }
         if spec.hasPrefix("group:") {
             return model.groups[spec]?.contains(sourceID) ?? false
         }
@@ -146,10 +157,19 @@ struct Evaluator {
         if target == "autogroup:members" || target == "autogroup:member" {
             return destID.contains("@") || destID.hasPrefix("group:")
         }
+        if target == "autogroup:tagged" { return destID.hasPrefix("tag:") }
+        if target == "autogroup:internet" { return isPublicAddress(destID) }
         if target.hasPrefix("group:") {
             return model.groups[target]?.contains(destID) ?? false
         }
         return addressSelectorMatches(target, id: destID)
+    }
+
+    /// A rule destination, including autogroup:self: the source user's own
+    /// devices, i.e. the same user on both ends.
+    func destMatches(_ target: String, sourceID: String, destID: String) -> Bool {
+        target == "autogroup:self" ? sourceID == destID && sourceID.contains("@")
+            : targetMatches(target: target, destID: destID)
     }
 
     /// Does a host alias, IP set, or raw IP/CIDR selector contain the address
@@ -181,37 +201,14 @@ struct Evaluator {
     /// Used by the access matrix, where rows are entities rather than identities.
     func sourceSpecCovers(spec: String, row: String) -> Bool {
         if spec == row { return true }
-        if spec == "*" { return true }
+        if spec == "*" || spec == "autogroup:danger-all" { return true }
+        if spec == "autogroup:tagged" { return row.hasPrefix("tag:") }
         if spec == "autogroup:members" || spec == "autogroup:member" {
             return row.hasPrefix("group:") || row.contains("@")
         }
         return false
     }
 
-    // MARK: - IPv4 / CIDR
-
-    /// `cidr` may be a bare IP (treated as /32) or "a.b.c.d/n".
-    func cidrContains(cidr: String, ip: String) -> Bool {
-        let parts = cidr.split(separator: "/")
-        let bits = parts.count == 2 ? Int(parts[1]) ?? -1 : 32
-        guard bits >= 0, bits <= 32,
-              let base = ipv4(String(parts[0])),
-              let addr = ipv4(ip.split(separator: "/").first.map(String.init) ?? ip)
-        else { return false }
-        let mask: UInt32 = bits == 0 ? 0 : ~UInt32(0) << (32 - bits)
-        return (base & mask) == (addr & mask)
-    }
-
-    private func ipv4(_ s: String) -> UInt32? {
-        let octets = s.split(separator: ".")
-        guard octets.count == 4 else { return nil }
-        var value: UInt32 = 0
-        for o in octets {
-            guard let byte = UInt32(o), byte <= 255 else { return nil }
-            value = value << 8 | byte
-        }
-        return value
-    }
 }
 
 // MARK: - Test running

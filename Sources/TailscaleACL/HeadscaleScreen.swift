@@ -15,6 +15,8 @@ struct HeadscaleScreen: View {
     @State private var openingRecord: PushRecord?
     @State private var comparing: DiffPresentation?
     @State private var editingTags: HeadscaleNode?
+    @State private var policyChanges: [PolicyChange] = []
+    @State private var policyChangesError: String?
     @State private var deviceFilter = DeviceFilter.all
     @State private var nodeAction: NodeAction?
     @State private var renaming: HeadscaleNode?
@@ -96,6 +98,7 @@ struct HeadscaleScreen: View {
 
                 connectionPanel
                 policyPanel
+                if kind == .tailscale, client != nil { changesPanel }
                 if client != nil { authKeyPanel }
                 if !serverHistory.isEmpty { historyPanel }
                 if !store.headscaleNodes.isEmpty { nodesPanel }
@@ -106,6 +109,7 @@ struct HeadscaleScreen: View {
         }
         .background(Theme.background)
         .onAppear(perform: loadKey)
+        .task(id: "\(store.currentWorkspaceID)\(kind)") { await loadPolicyChanges() }
         .onChange(of: store.currentWorkspaceID) {
             loadKey()
             status = nil
@@ -387,6 +391,61 @@ struct HeadscaleScreen: View {
                     .help("Put the policy from before this push back on the server")
                 }
             }
+        }
+    }
+
+    /// Who changed the policy on Tailscale recently (configuration audit log).
+    private var changesPanel: some View {
+        panel {
+            HStack {
+                Text("Recent policy changes")
+                    .font(.system(size: 13, weight: .bold))
+                    .foregroundStyle(Theme.textPrimary)
+                Spacer()
+                Button { Task { await loadPolicyChanges() } } label: {
+                    Image(systemName: "arrow.clockwise").font(.system(size: 11))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(Theme.textSecondary)
+                .help("Refresh")
+            }
+            if let policyChangesError {
+                Text(policyChangesError)
+                    .font(.system(size: 11))
+                    .foregroundStyle(Theme.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else if policyChanges.isEmpty {
+                Text("No policy changes in the last 30 days.")
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(Theme.textSecondary)
+            }
+            ForEach(policyChanges.prefix(10)) { c in
+                HStack(spacing: 8) {
+                    Image(systemName: "person.crop.circle").foregroundStyle(Theme.textSecondary)
+                    Text(verbatim: c.who)
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(Theme.textPrimary)
+                    if !c.origin.isEmpty {
+                        Text(verbatim: "via \(c.origin)").font(.system(size: 11)).foregroundStyle(Theme.textSecondary)
+                    }
+                    Spacer()
+                    Text(c.date, format: .dateTime.day().month().year().hour().minute())
+                        .font(.system(size: 11))
+                        .foregroundStyle(Theme.textSecondary)
+                }
+            }
+        }
+    }
+
+    private func loadPolicyChanges() async {
+        guard kind == .tailscale, let client else { return }
+        do {
+            policyChanges = try await client.policyChanges(days: 30) ?? []
+            policyChangesError = nil
+        } catch let error as ServerError where error.status == 403 {
+            policyChangesError = "Your credential can't read the audit log. Give the OAuth client the logs:configuration:read scope to see who changed the policy."
+        } catch {
+            policyChangesError = "Couldn't load the audit log: \(error.localizedDescription)"
         }
     }
 

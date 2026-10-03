@@ -30,6 +30,17 @@ protocol PolicyServer: AnyObject {
     /// Remove the device from the tailnet.
     func deleteNode(nodeID: String) async throws
     func renameNode(nodeID: String, name: String) async throws
+    /// Who changed the policy on the server in the last `days` days, newest
+    /// first; nil when the server keeps no audit log (Headscale).
+    func policyChanges(days: Int) async throws -> [PolicyChange]?
+}
+
+struct PolicyChange: Identifiable {
+    var date: Date
+    var who: String
+    /// How it was changed, e.g. "admin console" or "API".
+    var origin: String
+    var id: String { "\(date.timeIntervalSince1970)-\(who)" }
 }
 
 /// The server for a workspace's settings and credential, or nil if not configured.
@@ -221,6 +232,35 @@ final class TailscaleClient: PolicyServer {
 
     func expireNode(nodeID: String) async throws {
         _ = try await request("POST", "device/\(nodeID)/expire")
+    }
+
+    /// From the configuration audit log (needs the logs:configuration:read scope).
+    func policyChanges(days: Int) async throws -> [PolicyChange]? {
+        let iso = ISO8601DateFormatter()
+        let end = Date()
+        var query = URLComponents()
+        query.queryItems = [
+            URLQueryItem(name: "start", value: iso.string(from: end.addingTimeInterval(-Double(days) * 86_400))),
+            URLQueryItem(name: "end", value: iso.string(from: end)),
+            URLQueryItem(name: "event", value: "TAILNET.UPDATE.ACL"),
+        ]
+        let (data, _) = try await request("GET", "\(tailnetPath)/logging/configuration?\(query.percentEncodedQuery ?? "")")
+        let fractional = ISO8601DateFormatter()
+        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let logs = (try JSONSerialization.jsonObject(with: data) as? [String: Any])?["logs"] as? [[String: Any]] ?? []
+        return logs.compactMap { log -> PolicyChange? in
+            guard (log["target"] as? [String: Any])?["property"] as? String == "ACL",
+                  let time = log["eventTime"] as? String,
+                  let date = fractional.date(from: time) ?? iso.date(from: time) else { return nil }
+            let actor = log["actor"] as? [String: Any] ?? [:]
+            let who = [actor["displayName"], actor["loginName"], actor["type"]]
+                .compactMap { $0 as? String }.first { !$0.isEmpty } ?? "unknown"
+            let origin = (log["origin"] as? String).map {
+                ["ADMIN_CONSOLE": "admin console", "CONFIG_API": "API"][$0] ?? $0.lowercased().replacingOccurrences(of: "_", with: " ")
+            } ?? ""
+            return PolicyChange(date: date, who: who, origin: origin)
+        }
+        .sorted { $0.date > $1.date }
     }
 
     func deleteNode(nodeID: String) async throws {

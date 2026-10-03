@@ -9,10 +9,14 @@ indirect enum JSON {
         var comments: [String]
         var key: String
         var value: JSON
+        /// 1-based line of the key in the parsed text (0 when built in code).
+        var line = 0
     }
     struct Element {
         var comments: [String]
         var value: JSON
+        /// 1-based line where the value starts in the parsed text (0 when built in code).
+        var line = 0
     }
 
     case string(String)
@@ -66,6 +70,40 @@ extension JSON {
         }
     }
 
+    /// Line of the node at a lint path like "grants[3].src", "groups[group:eng]",
+    /// or "autoApprovers.routes[10.0.0.0/8]": the deepest part that exists.
+    func line(at path: String) -> Int? {
+        // "a.b[c].d" → a, b, c, d; dots inside brackets belong to the key.
+        var keys: [String] = [], key = "", inBrackets = false
+        for ch in path {
+            switch ch {
+            case "[" where !inBrackets, "." where !inBrackets:
+                if !key.isEmpty { keys.append(key) }
+                key = ""
+                inBrackets = ch == "["
+            case "]" where inBrackets:
+                keys.append(key)
+                key = ""
+                inBrackets = false
+            default:
+                key.append(ch)
+            }
+        }
+        if !key.isEmpty { keys.append(key) }
+        var node = self
+        var found: Int?
+        for key in keys {
+            if let i = Int(key), let e = node.elements, e.indices.contains(i) {
+                (node, found) = (e[i].value, e[i].line)
+            } else if let m = node.members?.first(where: { $0.key == key }) {
+                (node, found) = (m.value, m.line)
+            } else {
+                break
+            }
+        }
+        return found
+    }
+
     /// A string, number, or bool as text ("macos", "80", "true").
     var scalarText: String? {
         switch self {
@@ -94,7 +132,8 @@ struct HuJSONParser {
     private var pendingComments: [String] = []
 
     init(_ text: String) {
-        chars = Array(text)
+        // Per scalar, so a Windows "\r\n" is two characters, not one grapheme.
+        chars = text.unicodeScalars.map(Character.init)
     }
 
     static func parse(_ text: String) throws -> JSON {
@@ -129,7 +168,7 @@ struct HuJSONParser {
                     text.append(ch)
                     advance()
                 }
-                pendingComments.append(text.trimmingCharacters(in: .whitespaces))
+                pendingComments.append(text.trimmingCharacters(in: .whitespacesAndNewlines))  // drops a CRLF's \r
             } else if c == "/" && pos + 1 < chars.count && chars[pos + 1] == "*" {
                 advance(); advance()
                 var text = ""
@@ -181,6 +220,7 @@ struct HuJSONParser {
                 throw HuJSONError(message: "Expected \" to begin object key", line: line)
             }
             let comments = takeComments()
+            let keyLine = line
             let key = try parseString()
             skipTrivia()
             guard current == ":" else {
@@ -188,7 +228,7 @@ struct HuJSONParser {
             }
             advance()
             let value = try parseValue()
-            members.append(JSON.Member(comments: comments, key: key, value: value))
+            members.append(JSON.Member(comments: comments, key: key, value: value, line: keyLine))
             skipTrivia()
             if current == "," {
                 advance()
@@ -208,8 +248,9 @@ struct HuJSONParser {
                 return .array(elements)
             }
             let comments = takeComments()
+            let valueLine = line
             let value = try parseValue()
-            elements.append(JSON.Element(comments: comments, value: value))
+            elements.append(JSON.Element(comments: comments, value: value, line: valueLine))
             skipTrivia()
             if current == "," {
                 advance()

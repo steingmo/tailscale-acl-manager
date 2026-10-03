@@ -1,5 +1,67 @@
 import Foundation
 
+/// Rewrite "acls" as equivalent "grants", Tailscale's recommended syntax.
+/// An ACL becomes one grant per distinct port list among its destinations
+/// ("tag:a:22", "tag:b:443" → two grants); "proto" moves into "ip"
+/// ("tcp:22"), and comments, expiry, and srcPosture carry over. Entries
+/// that aren't plain accept rules stay ACLs. Returns how many converted.
+@discardableResult
+func convertACLsToGrants(_ tree: inout JSON) -> Int {
+    guard let acls = tree["acls"]?.elements else { return 0 }
+    var grants = tree["grants"]?.elements ?? []
+    var kept: [JSON.Element] = []
+    var converted = 0
+    for e in acls {
+        guard case .object = e.value, (e.value["action"]?.stringValue ?? "accept") == "accept",
+              let src = e.value["src"], let dst = e.value["dst"]?.stringArray, !dst.isEmpty else {
+            kept.append(e)
+            continue
+        }
+        let proto = e.value["proto"]?.scalarText
+        var byPorts: [(ports: String, targets: [String])] = []
+        for d in dst.map(DestSpec.init) {
+            let target = d.target.hasPrefix("host:") ? String(d.target.dropFirst(5)) : d.target
+            if let i = byPorts.firstIndex(where: { $0.ports == d.ports }) {
+                byPorts[i].targets.append(target)
+            } else {
+                byPorts.append((d.ports, [target]))
+            }
+        }
+        for (n, group) in byPorts.enumerated() {
+            let ip = group.ports.split(separator: ",").map { p in
+                let port = p.trimmingCharacters(in: .whitespaces)
+                return proto.map { "\($0):\(port)" } ?? port
+            }
+            var members: [JSON.Member] = [
+                .init(comments: [], key: "src", value: src),
+                .init(comments: [], key: "dst", value: stringArrayJSON(group.targets.uniqued())),
+                .init(comments: [], key: "ip", value: stringArrayJSON(ip)),
+            ]
+            if let posture = e.value["srcPosture"] {
+                members.append(.init(comments: [], key: "srcPosture", value: posture))
+            }
+            // Split grants keep the expiry; the name stays on the first.
+            let comments = n == 0 ? e.comments : e.comments.filter { RuleExpiry.date(in: $0) != nil }
+            grants.append(JSON.Element(comments: comments, value: .object(members)))
+        }
+        converted += 1
+    }
+    guard converted > 0, var members = tree.members, let ai = members.firstIndex(where: { $0.key == "acls" }) else { return 0 }
+    if let gi = members.firstIndex(where: { $0.key == "grants" }) {
+        members[gi].value = .array(grants)
+        if kept.isEmpty { members.remove(at: ai) } else { members[ai].value = .array(kept) }
+    } else if kept.isEmpty {
+        // Grants take the ACLs' place, comments above "acls" included.
+        members[ai].key = "grants"
+        members[ai].value = .array(grants)
+    } else {
+        members[ai].value = .array(kept)
+        members.insert(.init(comments: [], key: "grants", value: .array(grants)), at: ai + 1)
+    }
+    tree.members = members
+    return converted
+}
+
 /// A ready-made policy pattern added to the current policy in one undoable
 /// step. Existing groups and tags are kept; new ones are created as needed.
 struct PolicyTemplate: Identifiable {

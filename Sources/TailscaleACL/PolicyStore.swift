@@ -19,12 +19,20 @@ final class PolicyStore: ObservableObject {
         didSet { if isValid { lintIssues = lintPolicy(model) + lintNodes(model, nodes: headscaleNodes) } }
     }
 
+    /// Set (e.g. from Problems) to show the Policy Editor at a 1-based line;
+    /// the editor clears it once revealed.
+    @Published var editorLineRequest: Int?
+    /// Names and definitions for editor completion and hover, per parse.
+    private(set) var vocabulary = EditorVocabulary()
     /// Set (e.g. by quick search) to make the Access Map focus an entity;
     /// "node:<id>" focuses a device. The map clears it once applied.
     @Published var mapFocusRequest: String?
     /// The server's policy when it changed since this workspace's last
     /// pull or push (someone edited it elsewhere); nil when in sync or unknown.
     @Published var serverDrift: String?
+    /// The latest policy change in the server's audit log while drifted
+    /// (Tailscale only), e.g. "Amy Lee via the admin console, 2 hr. ago".
+    @Published var driftAuthor: String?
     @Published private(set) var workspaces: [Workspace]
     @Published private(set) var currentWorkspaceID: UUID
     /// The window's undo manager; visual edits register here so Cmd-Z works everywhere.
@@ -186,6 +194,12 @@ final class PolicyStore: ObservableObject {
         let workspace = currentWorkspaceID
         guard let current = try? await client.getPolicy(), workspace == currentWorkspaceID else { return }
         serverDrift = current == last ? nil : current
+        driftAuthor = nil
+        if serverDrift != nil, let latest = try? await client.policyChanges(days: 30)?.first,
+           workspace == currentWorkspaceID {
+            let ago = RelativeDateTimeFormatter().localizedString(for: latest.date, relativeTo: Date())
+            driftAuthor = "\(latest.who)\(latest.origin.isEmpty ? "" : " via the \(latest.origin)"), \(ago)"
+        }
     }
 
     /// Save the current policy as a snapshot (skipped if unchanged since the last one).
@@ -212,6 +226,11 @@ final class PolicyStore: ObservableObject {
         }
         saveWorkspaces()
         return results
+    }
+
+    /// Rewrite ACL rules as grants in one undoable step.
+    func convertToGrants() {
+        mutate { convertACLsToGrants(&$0) }
     }
 
     /// Add a template's rules and definitions in one undoable step.
@@ -305,6 +324,7 @@ final class PolicyStore: ObservableObject {
             let parsed = try HuJSONParser.parse(source)
             tree = parsed
             model = PolicyModel(tree: parsed)
+            vocabulary = EditorVocabulary(model)
             parseError = nil
             testResults = evaluator.runTests()
             lintIssues = lintPolicy(model) + lintNodes(model, nodes: headscaleNodes)
@@ -313,7 +333,7 @@ final class PolicyStore: ObservableObject {
             parseError = error
             testResults = []
             lintIssues = [LintIssue(severity: .error, title: "Policy does not parse",
-                                    detail: "Line \(error.line): \(error.message)")]
+                                    detail: "Line \(error.line): \(error.message)", line: error.line)]
         } catch {
             parseError = HuJSONError(message: "\(error)", line: 0)
             testResults = []
@@ -328,6 +348,11 @@ final class PolicyStore: ObservableObject {
         guard var t = tree else { return }
         edit(&t)
         replaceText(HuJSONSerializer.serialize(t))
+    }
+
+    /// The editor line a problem points at, if it can be found.
+    func line(of issue: LintIssue) -> Int? {
+        issue.line ?? issue.path.flatMap { tree?.line(at: $0) }
     }
 
     func reset() {

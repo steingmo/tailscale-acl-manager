@@ -172,6 +172,9 @@ final class HeadscaleClient: PolicyServer {
         _ = try await send("DELETE", "node/\(nodeID)")
     }
 
+    /// Headscale keeps no audit log.
+    func policyChanges(days: Int) async throws -> [PolicyChange]? { nil }
+
     /// `name` must be a hostname-style name (no "/"); the server validates it.
     func renameNode(nodeID: String, name: String) async throws {
         _ = try await send("POST", "node/\(nodeID)/rename/\(name)")

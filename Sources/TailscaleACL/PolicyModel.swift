@@ -134,7 +134,7 @@ struct PolicyModel {
                     action: e.value["action"]?.stringValue ?? "accept",
                     src: e.value["src"]?.stringArray ?? [],
                     dst: e.value["dst"]?.stringArray ?? [],
-                    proto: e.value["proto"]?.stringValue,
+                    proto: e.value["proto"]?.scalarText,  // a name or an IANA number
                     srcPosture: e.value["srcPosture"]?.stringArray ?? [],
                     expires: c.expires
                 ))
@@ -248,6 +248,17 @@ struct DestSpec {
     var ports: String
 
     init(_ spec: String) {
+        // IPv6 with ports is bracketed: "[fd7a:115c:a1e0::1]:22".
+        if spec.hasPrefix("["), let close = spec.range(of: "]:") {
+            target = String(spec[spec.index(after: spec.startIndex)..<close.lowerBound])
+            ports = String(spec[close.upperBound...])
+            return
+        }
+        if spec.contains("::") || spec.filter({ $0 == ":" }).count > 2, isAddressLike(spec) {
+            target = spec  // a bare IPv6 address or prefix
+            ports = "*"
+            return
+        }
         if let lastColon = spec.lastIndex(of: ":") {
             let suffix = String(spec[spec.index(after: lastColon)...])
             let portChars = CharacterSet(charactersIn: "0123456789,-*")
@@ -266,7 +277,9 @@ struct DestSpec {
         self.ports = ports
     }
 
-    var spec: String { "\(target):\(ports)" }
+    var spec: String {
+        target.contains(":") && isAddressLike(target) ? "[\(target)]:\(ports)" : "\(target):\(ports)"
+    }
 }
 
 extension Array where Element: Hashable {

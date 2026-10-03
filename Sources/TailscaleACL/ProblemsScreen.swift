@@ -4,6 +4,7 @@ import SwiftUI
 /// won't tell you about until save time — or ever.
 struct ProblemsScreen: View {
     @EnvironmentObject var store: PolicyStore
+    @State private var converting = false
 
     var body: some View {
         let issues = store.lintIssues
@@ -23,6 +24,19 @@ struct ProblemsScreen: View {
                          : "Device checks are using \(store.headscaleNodes.count) devices from \(store.serverDisplayName).")
                         .font(.system(size: 10.5))
                         .foregroundStyle(Theme.textSecondary.opacity(0.8))
+                }
+
+                if store.isValid, !store.model.rules.isEmpty {
+                    HStack(spacing: 10) {
+                        Image(systemName: "arrow.triangle.2.circlepath")
+                            .foregroundStyle(Theme.blue)
+                        Text(verbatim: "\(store.model.rules.count) rule\(store.model.rules.count == 1 ? " uses" : "s use") the legacy ACL syntax. Tailscale recommends grants.")
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(Theme.textSecondary)
+                        Button("Convert to grants…") { converting = true }
+                            .font(.system(size: 11))
+                        Spacer()
+                    }
                 }
 
                 if issues.isEmpty {
@@ -51,6 +65,7 @@ struct ProblemsScreen: View {
             .frame(maxWidth: .infinity, alignment: .topLeading)
         }
         .background(Theme.background)
+        .sheet(isPresented: $converting) { ConvertToGrantsSheet() }
     }
 
     private func issueCard(_ issue: LintIssue) -> some View {
@@ -62,9 +77,17 @@ struct ProblemsScreen: View {
                 .foregroundStyle(color)
                 .padding(.top, 1)
             VStack(alignment: .leading, spacing: 3) {
-                Text(issue.title)
-                    .font(.system(size: 12.5, weight: .semibold))
-                    .foregroundStyle(Theme.textPrimary)
+                HStack(spacing: 8) {
+                    Text(issue.title)
+                        .font(.system(size: 12.5, weight: .semibold))
+                        .foregroundStyle(Theme.textPrimary)
+                    if let line = store.line(of: issue) {
+                        Button("Line " + String(line)) { store.editorLineRequest = line }
+                            .buttonStyle(.link)
+                            .font(.system(size: 11))
+                            .help("Show in the Policy Editor")
+                    }
+                }
                 Text(issue.detail)
                     .font(.system(size: 11.5))
                     .foregroundStyle(Theme.textSecondary)

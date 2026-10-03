@@ -69,6 +69,32 @@ func accessChanges(from old: PolicyModel, to new: PolicyModel,
     return changes
 }
 
+/// Where two policies disagree, by policy entity rather than device: every
+/// source (users, groups, tags, hosts, autogroups) × destination × port
+/// interval, plus posture conditions. Empty means the same access.
+func entityAccessDifferences(_ old: PolicyModel, _ new: PolicyModel, limit: Int = 20) -> [String] {
+    let ports = portIntervals([old, new])
+    // Every name any rule uses as a source, users named directly included.
+    let named = [old, new].flatMap { $0.rules.flatMap(\.src) + $0.grants.flatMap(\.src) }
+    let srcs = ([old, new].flatMap { $0.sourceSpecs + $0.allUsers + $0.tagOrder + $0.hostOrder } + named).uniqued()
+    let dsts = ([old, new].flatMap { $0.destTargets + $0.allUsers } + named.filter { $0.contains("@") }).uniqued()
+    let before = Evaluator(model: old), after = Evaluator(model: new)
+    var out: [String] = []
+    for s in srcs {
+        for d in dsts {
+            for iv in ports {
+                let a = before.evaluate(sourceID: s, destID: d, port: iv.range.lowerBound)
+                let b = after.evaluate(sourceID: s, destID: d, port: iv.range.lowerBound)
+                guard a.allowed != b.allowed || Set(a.postures) != Set(b.postures) else { continue }
+                let port = portLabels([iv]).first ?? ""
+                out.append("\(s) → \(d):\(port): \(a.allowed ? "allowed" : "denied") before, \(b.allowed ? "allowed" : "denied") after")
+                if out.count >= limit { return out }
+            }
+        }
+    }
+    return out
+}
+
 // MARK: - Port intervals
 
 /// A run of ports over which every rule in the compared policies agrees.
@@ -261,7 +287,7 @@ func lineDiff(old: String, new: String, context: Int = 3) -> [DiffLine] {
 extension Evaluator {
     /// Would `autoApprovers` approve `route` advertised by `node`? Exit-node
     /// routes use "exitNode"; others need an approver entry whose prefix
-    /// contains the route (IPv6 routes are matched exactly).
+    /// contains the route.
     func autoApproves(route: String, node: HeadscaleNode) -> Bool {
         let approvers: [String]
         if route == "0.0.0.0/0" || route == "::/0" {
@@ -274,9 +300,8 @@ extension Evaluator {
 
     private func routeContains(_ outer: String, _ inner: String) -> Bool {
         guard isAddressLike(outer), isAddressLike(inner) else { return outer == inner }
-        func bits(_ cidr: String) -> Int { cidr.split(separator: "/").last.flatMap { Int($0) } ?? 32 }
-        let base = String(inner.split(separator: "/")[0])
-        return bits(outer) <= bits(inner) && cidrContains(cidr: outer, ip: base)
+        guard let o = parseCIDR(outer), let i = parseCIDR(inner) else { return false }
+        return o.bits <= i.bits && cidrContains(cidr: outer, ip: inner)
     }
 }
 

@@ -95,6 +95,7 @@ struct RootView: View {
             await store.checkServerDrift()
         }
         .onChange(of: undoManager) { store.undoManager = undoManager }
+        .onChange(of: store.editorLineRequest) { if store.editorLineRequest != nil { screen = .policyEditor } }
         .sheet(item: $workspaceSheet) { WorkspaceSheet(mode: $0) }
         .sheet(item: $overlay) { item in
             switch item {
@@ -129,7 +130,7 @@ struct RootView: View {
         HStack(spacing: 10) {
             Image(systemName: "exclamationmark.triangle.fill")
                 .foregroundStyle(Theme.orange)
-            Text("The policy on \(store.serverDisplayName) changed since your last pull or push.")
+            Text("The policy on \(store.serverDisplayName) changed since your last pull or push\(store.driftAuthor.map { " — last changed by \($0)" } ?? "").")
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(Theme.textPrimary)
             Spacer()

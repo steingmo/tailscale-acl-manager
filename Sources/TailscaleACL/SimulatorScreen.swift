@@ -14,8 +14,10 @@ struct SimulatorScreen: View {
     @State private var tailscaleCheck: (agrees: Bool?, text: String)?
     @State private var checkingTailscale = false
 
+    /// Autogroups stand in for "a user with this role", "any tagged device", ….
     private var sourceSections: [(name: String, items: [String])] {
-        entitySections(special: ["*", "autogroup:members"])
+        let used = store.model.sourceSpecs.filter { $0.hasPrefix("autogroup:") && $0 != "autogroup:members" }
+        return entitySections(special: (["*", "autogroup:member", "autogroup:tagged"] + used).uniqued())
     }
 
     private var destSections: [(name: String, items: [String])] {

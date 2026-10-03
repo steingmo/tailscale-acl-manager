@@ -6,6 +6,22 @@ struct PolicyEditorScreen: View {
     @State private var showingHistory = false
     @State private var copied = false
 
+    /// One marker per line; errors win over warnings.
+    private var markers: [Int: GutterMarker] {
+        var out: [Int: GutterMarker] = [:]
+        for issue in store.lintIssues {
+            guard let line = store.line(of: issue) else { continue }
+            let text = "\(issue.title): \(issue.detail)"
+            if let existing = out[line] {
+                out[line] = GutterMarker(isError: existing.isError || issue.severity == .error,
+                                         text: existing.text + "\n" + text)
+            } else {
+                out[line] = GutterMarker(isError: issue.severity == .error, text: text)
+            }
+        }
+        return out
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 8) {
@@ -60,7 +76,8 @@ struct PolicyEditorScreen: View {
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
 
-            CodeEditor(text: $store.text)
+            CodeEditor(text: $store.text, markers: markers, lineRequest: $store.editorLineRequest,
+                       vocabulary: store.vocabulary)
                 .clipShape(RoundedRectangle(cornerRadius: 8))
                 .overlay(
                     RoundedRectangle(cornerRadius: 8)
