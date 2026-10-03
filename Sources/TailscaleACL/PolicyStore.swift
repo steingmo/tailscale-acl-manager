@@ -31,6 +31,12 @@ final class PolicyStore: ObservableObject {
     weak var undoManager: UndoManager?
 
     private var parseTask: Task<Void, Never>?
+    /// The linked file's contents as last read or written; nil until read
+    /// this session, so a stale editor never overwrites the file.
+    private var linkedFileContents: String?
+    private var fileWatchTask: Task<Void, Never>?
+    /// Why the linked file couldn't be read or written, if it couldn't.
+    @Published private(set) var linkedFileError: String?
 
     var evaluator: Evaluator { Evaluator(model: model) }
     var isValid: Bool { parseError == nil && tree != nil }
@@ -48,6 +54,7 @@ final class PolicyStore: ObservableObject {
         text = currentWorkspace.policy
         reparseNow()
         SnapshotStore.record(currentWorkspaceID, text: text, reason: "opened")
+        startLinkedFile()
     }
 
     // MARK: - Workspaces
@@ -58,10 +65,76 @@ final class PolicyStore: ObservableObject {
         UserDefaults.standard.set(id.uuidString, forKey: "currentWorkspaceID")
         headscaleNodes = []
         serverDrift = nil
+        linkedFileContents = nil
         text = currentWorkspace.policy
         reparseNow()
         SnapshotStore.record(id, text: text, reason: "opened")
         undoManager?.removeAllActions() // undo must not cross into another workspace
+        startLinkedFile()
+    }
+
+    // MARK: - Linked file (GitOps)
+
+    var linkedFileURL: URL? { currentWorkspace.linkedFile.map { URL(fileURLWithPath: $0) } }
+
+    /// Keep the workspace in sync with a policy file, e.g. in the Git repo a
+    /// GitOps workflow pushes from. The file's contents replace the editor's.
+    func linkFile() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.json, .text, .plainText, .data]
+        panel.allowsOtherFileTypes = true
+        panel.message = "Choose the policy file to keep in sync (its contents replace the editor's)"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        setLinkedFile(url.path)
+    }
+
+    func setLinkedFile(_ path: String?) {
+        guard let i = workspaces.firstIndex(where: { $0.id == currentWorkspaceID }) else { return }
+        workspaces[i].linkedFile = path
+        saveWorkspaces()
+        linkedFileContents = nil
+        startLinkedFile()
+    }
+
+    /// Read the linked file now, then poll it for outside changes (git pull,
+    /// another editor). Edits in the app are written back by `reparseNow`.
+    private func startLinkedFile() {
+        fileWatchTask?.cancel()
+        linkedFileError = nil
+        guard linkedFileURL != nil else { return }
+        readLinkedFile()
+        // ponytail: polls every 1.5 s; fine for one small file, use FSEvents if it ever watches many.
+        fileWatchTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 1_500_000_000)
+                guard !Task.isCancelled else { return }
+                self?.readLinkedFile()
+            }
+        }
+    }
+
+    private func readLinkedFile() {
+        guard let url = linkedFileURL else { return }
+        guard let contents = try? String(contentsOf: url, encoding: .utf8) else {
+            linkedFileError = "Can't read \(url.lastPathComponent)"
+            return
+        }
+        linkedFileError = nil
+        guard contents != linkedFileContents else { return }
+        linkedFileContents = contents
+        if contents != text { loadPolicy(contents, reason: "changed in \(url.lastPathComponent)") }
+    }
+
+    /// Write a valid policy back to the linked file (only once it has been read).
+    private func writeLinkedFile() {
+        guard let url = linkedFileURL, let known = linkedFileContents, known != text else { return }
+        do {
+            try text.write(to: url, atomically: true, encoding: .utf8)
+            linkedFileContents = text
+            linkedFileError = nil
+        } catch {
+            linkedFileError = "Can't write \(url.lastPathComponent): \(error.localizedDescription)"
+        }
     }
 
     /// New workspace, empty or a copy of the current one (policy, server, API key).
@@ -132,6 +205,8 @@ final class PolicyStore: ObservableObject {
                 SnapshotStore.record(id, text: workspaces[i].policy, reason: "before \(reason)")
                 workspaces[i].policy = text
                 SnapshotStore.record(id, text: text, reason: reason)
+                // Its linked file wins when that workspace opens, so it gets the change too.
+                if let path = workspaces[i].linkedFile { try? text.write(toFile: path, atomically: true, encoding: .utf8) }
             }
             results.append((workspaces[i].name, outcome))
         }
@@ -233,6 +308,7 @@ final class PolicyStore: ObservableObject {
             parseError = nil
             testResults = evaluator.runTests()
             lintIssues = lintPolicy(model) + lintNodes(model, nodes: headscaleNodes)
+            writeLinkedFile()
         } catch let error as HuJSONError {
             parseError = error
             testResults = []
@@ -499,13 +575,18 @@ final class PolicyStore: ObservableObject {
     /// Create (index nil) or update one rule in "acls", "grants", or "ssh".
     /// Only the given keys change (nil removes a key), so fields the editor
     /// doesn't show — proto, app, via, srcPosture — are kept. `name` is the
-    /// rule's first comment line.
-    func saveRule(section: String, index: Int?, name: String, fields: [(key: String, value: JSON?)]) {
+    /// rule's first comment line. `expires` sets ("YYYY-MM-DD") or removes
+    /// (.some(nil)) the "expires:" comment; leave it nil to keep it as is.
+    func saveRule(section: String, index: Int?, name: String, expires: String?? = nil,
+                  fields: [(key: String, value: JSON?)]) {
         mutate { tree in
             var list = tree[section]?.elements ?? []
             let existing = index.flatMap { list.indices.contains($0) ? $0 : nil }
             var element = existing.map { list[$0] } ?? JSON.Element(comments: [], value: .object([]))
             for field in fields { element.value[field.key] = field.value }
+            var expiry = element.comments.filter { RuleExpiry.date(in: $0) != nil }
+            if let expires { expiry = expires.map { [RuleExpiry.comment(for: $0)] } ?? [] }
+            element.comments.removeAll { RuleExpiry.date(in: $0) != nil }
             let trimmed = name.trimmingCharacters(in: .whitespaces)
             if element.comments.isEmpty {
                 if !trimmed.isEmpty { element.comments = [trimmed] }
@@ -514,6 +595,7 @@ final class PolicyStore: ObservableObject {
             } else {
                 element.comments[0] = trimmed
             }
+            element.comments += expiry
             if let existing { list[existing] = element } else { list.append(element) }
             tree[section] = .array(list)
         }

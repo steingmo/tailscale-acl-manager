@@ -138,6 +138,8 @@ struct RuleSummary: Identifiable {
     var badge: String         // ports / ip entries / SSH users
     var sources: [String]
     var destinations: [String] // targets, "host:" prefix removed
+    /// Posture requirement, routing, and expiry, e.g. ["if posture:mac", "via tag:exit"].
+    var notes: [String] = []
 
     var id: String { "\(kind)\(index)" }
     var section: String {
@@ -170,25 +172,34 @@ func ruleSummaries(_ m: PolicyModel, sourceIDs: [String]?, destIDs: [String]? = 
         return e == ["*"] ? "All" : e.map { $0 == "*" ? "all" : $0.uppercased() }.joined(separator: ", ")
     }
     func strip(_ t: String) -> String { t.hasPrefix("host:") ? String(t.dropFirst(5)) : t }
+    func notes(posture: [String], via: [String] = [], expires: String?) -> [String] {
+        let p = posture.isEmpty ? m.defaultSrcPosture : posture
+        return (p.isEmpty ? [] : ["if " + p.joined(separator: " or ")])
+            + (via.isEmpty ? [] : ["via " + via.joined(separator: ", ")])
+            + (expires.map { ["expires \($0)"] } ?? [])
+    }
 
     var out: [RuleSummary] = []
     for r in m.rules where r.action == "accept" && applies(r.src) && reaches(r.dst.map { DestSpec($0).target }) {
         out.append(RuleSummary(kind: .acl, index: r.index,
                                name: r.comments.first ?? "Rule #\(r.index + 1)",
                                badge: badge(r.dst.map { DestSpec($0).ports }), sources: r.src,
-                               destinations: r.dst.map { strip(DestSpec($0).target) }.uniqued()))
+                               destinations: r.dst.map { strip(DestSpec($0).target) }.uniqued(),
+                               notes: notes(posture: r.srcPosture, expires: r.expires)))
     }
     for g in m.grants where applies(g.src) && reaches(g.dst) {
         out.append(RuleSummary(kind: .grant, index: g.index,
                                name: g.comments.first ?? "Grant #\(g.index + 1)",
                                badge: g.ip.isEmpty ? "APP" : badge(g.ip), sources: g.src,
-                               destinations: g.dst.map(strip).uniqued()))
+                               destinations: g.dst.map(strip).uniqued(),
+                               notes: notes(posture: g.srcPosture, via: g.via, expires: g.expires)))
     }
     for s in m.sshRules where applies(s.src) && reaches(s.dst, ssh: true) {
         out.append(RuleSummary(kind: .ssh, index: s.index,
                                name: s.comments.first ?? "SSH rule #\(s.index + 1)",
                                badge: "SSH · \(s.users.joined(separator: ", "))", sources: s.src,
-                               destinations: s.dst.map(strip).uniqued()))
+                               destinations: s.dst.map(strip).uniqued(),
+                               notes: s.expires.map { ["expires \($0)"] } ?? []))
     }
     return out
 }
@@ -275,7 +286,8 @@ extension Evaluator {
 /// port (one per named interval) it reaches on each tag and host, and a deny
 /// for every such port some other source reaches there but it doesn't.
 func generateTests(_ m: PolicyModel, sources: [String]) -> [ACLTest] {
-    let ev = Evaluator(model: m)
+    // Same view as the test runner: a test device has no posture attributes.
+    let ev = Evaluator(model: m, sourceAttributes: [:], attributesComplete: true)
     let ports = portIntervals([m]).filter(\.named).map(\.range.lowerBound)
     let dests = m.tagOrder + m.hostOrder
     let srcs = sources.uniqued()
@@ -320,6 +332,10 @@ func explainFailure(_ m: PolicyModel, src: String, entry: String,
             matches.contains { ($0.kind == .grant ? RuleSummary.Kind.grant : .acl) == r.kind && $0.ruleIndex == r.index }
         }
         return ("Allowed by \(names(rules)).", rules)
+    }
+    let gated = ev.evaluate(sourceID: src, destID: d.target, port: port)
+    if gated.conditional {
+        return ("Allowed only on devices meeting \(gated.postures.joined(separator: " or ")) — give the test matching srcPostureAttrs.", [])
     }
     let reaching = ruleSummaries(m, sourceIDs: nil, destIDs: [d.target]).filter { $0.kind != .ssh }
     let fromSource = reaching.filter { r in r.sources.contains { ev.sourceMatches(spec: $0, sourceID: src) } }

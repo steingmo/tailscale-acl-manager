@@ -308,14 +308,23 @@ struct SimulatorScreen: View {
         .frame(maxWidth: 760, alignment: .leading)
     }
 
+    /// The source device's posture attributes (nil for non-device sources).
+    private var sourceAttributes: [String: String]? { node(for: source)?.postureAttributes }
+
     /// Ask Tailscale to evaluate this source → destination:port against the
-    /// editor's policy, by validating it with a single synthetic test.
-    private func checkWithTailscale(expectAllowed: Bool) {
+    /// editor's policy, by validating it with a single synthetic test. The
+    /// test carries the device's known posture attributes, and the app's
+    /// expectation is computed the same way (only those attributes are set).
+    private func checkWithTailscale() {
         guard let client = store.serverClient() else { return }
         let src = node(for: source)?.policyName ?? source
         let dstHost = node(for: dest).flatMap { n in n.ipAddresses?.first { !$0.contains(":") } } ?? dest
         let entry = "\(dstHost):\(port)"
-        let test = ACLTest(index: 0, src: src, accept: expectAllowed ? [entry] : [], deny: expectAllowed ? [] : [entry])
+        let attrs = sourceAttributes ?? [:]
+        let expectAllowed = Evaluator(model: store.model, sourceAttributes: attrs, attributesComplete: true)
+            .evaluate(sourceIDs: identities(for: source), destIDs: identities(for: dest), port: port).allowed
+        let test = ACLTest(index: 0, src: src, accept: expectAllowed ? [entry] : [], deny: expectAllowed ? [] : [entry],
+                           srcPostureAttrs: attrs.isEmpty ? nil : attrs)
         checkingTailscale = true
         tailscaleCheck = nil
         Task {
@@ -337,8 +346,9 @@ struct SimulatorScreen: View {
     }
 
     private var resultSection: some View {
-        let result = store.evaluator.evaluate(sourceIDs: identities(for: source),
-                                              destIDs: identities(for: dest), port: port)
+        let result = Evaluator(model: store.model, sourceAttributes: sourceAttributes)
+            .evaluate(sourceIDs: identities(for: source), destIDs: identities(for: dest), port: port)
+        let color = !result.allowed ? Theme.red : result.conditional ? Theme.orange : Theme.green
         return VStack(alignment: .leading, spacing: 16) {
             HStack(spacing: 8) {
                 endpointChip(source)
@@ -357,26 +367,28 @@ struct SimulatorScreen: View {
             HStack(spacing: 8) {
                 Image(systemName: result.allowed ? "checkmark.shield" : "xmark.shield")
                     .font(.system(size: 13, weight: .semibold))
-                Text(result.allowed
-                     ? "Allowed by \(result.matches.count) rule\(result.matches.count == 1 ? "" : "s")."
-                     : "Denied. No rule allows this connection.")
+                Text(verbatim: !result.allowed ? "Denied. No rule allows this connection."
+                     : result.conditional
+                        ? "Allowed only if the source device meets \(result.postures.joined(separator: " or "))\(node(for: source) == nil ? "." : " — the app can't tell from the device list.")"
+                        : "Allowed by \(result.matches.count) rule\(result.matches.count == 1 ? "" : "s").")
                     .font(.system(size: 13, weight: .semibold))
+                    .fixedSize(horizontal: false, vertical: true)
             }
-            .foregroundStyle(result.allowed ? Theme.green : Theme.red)
+            .foregroundStyle(color)
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(12)
-            .background(
-                RoundedRectangle(cornerRadius: 8)
-                    .fill((result.allowed ? Theme.green : Theme.red).opacity(0.10))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 8)
-                    .stroke((result.allowed ? Theme.green : Theme.red).opacity(0.35), lineWidth: 1)
-            )
+            .background(RoundedRectangle(cornerRadius: 8).fill(color.opacity(0.10)))
+            .overlay(RoundedRectangle(cornerRadius: 8).stroke(color.opacity(0.35), lineWidth: 1))
+            if let attrs = sourceAttributes, !attrs.isEmpty {
+                Text(verbatim: "Posture attributes from the device list: " + attrs.sorted { $0.key < $1.key }.map { "\($0.key) = \($0.value)" }.joined(separator: ", "))
+                    .font(.system(size: 10.5, design: .monospaced))
+                    .foregroundStyle(Theme.textSecondary)
+                    .textSelection(.enabled)
+            }
 
             if store.currentWorkspace.kind == .tailscale, store.serverClient() != nil {
                 HStack(spacing: 8) {
-                    Button("Check with Tailscale") { checkWithTailscale(expectAllowed: result.allowed) }
+                    Button("Check with Tailscale") { checkWithTailscale() }
                         .disabled(checkingTailscale)
                         .help("Ask Tailscale's own policy engine the same question about the editor's policy")
                     if checkingTailscale { ProgressView().controlSize(.small) }
@@ -423,6 +435,7 @@ struct SimulatorScreen: View {
                 Text(detail)
                     .font(.system(size: 11.5, weight: .semibold, design: .monospaced))
                     .foregroundStyle(Theme.textPrimary)
+                ForEach(match.posture, id: \.self) { Chip(text: "if \($0)", color: Theme.orange, icon: "checkmark.shield") }
             }
             if isGrant, let grant = store.model.grants.first(where: { $0.index == match.ruleIndex }) {
                 HStack(spacing: 6) {

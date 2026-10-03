@@ -21,6 +21,9 @@ struct HeadscaleNode: Decodable, Identifiable {
     var tags: [String]?        // newer versions
     var forcedTags: [String]?  // older versions
     var validTags: [String]?   // older versions
+    var expiry: String?        // key expiry; nil or year 1 = never
+    var os: String?            // Tailscale only
+    var clientVersion: String? // Tailscale only, e.g. "1.76.1-t1234abcd"
 
     var displayName: String {
         if let g = givenName, !g.isEmpty { return g }
@@ -33,12 +36,42 @@ struct HeadscaleNode: Decodable, Identifiable {
         identities.first { $0.hasPrefix("tag:") || $0.contains("@") }
     }
 
+    var lastSeenDate: Date? { Self.date(lastSeen) }
+
+    /// When the device's key expires; nil if it never does.
+    var expiryDate: Date? {
+        Self.date(expiry).flatMap { $0.timeIntervalSince1970 > 0 ? $0 : nil }
+    }
+
     /// Headscale sends nanosecond timestamps, which ISO8601DateFormatter can't
     /// parse, so the fraction is dropped.
-    var lastSeenDate: Date? {
-        guard let s = lastSeen else { return nil }
+    private static func date(_ s: String?) -> Date? {
+        guard let s else { return nil }
         let trimmed = s.replacingOccurrences(of: #"\.\d+"#, with: "", options: .regularExpression)
         return ISO8601DateFormatter().date(from: trimmed)
+    }
+
+    /// Posture attributes known from the device list ("node:os",
+    /// "node:tsVersion"); others (custom:…, node:osVersion…) stay unknown.
+    var postureAttributes: [String: String] {
+        var attrs: [String: String] = [:]
+        if let os, !os.isEmpty { attrs["node:os"] = os.lowercased() }
+        if let v = clientVersion?.split(separator: "-").first, !v.isEmpty {
+            attrs["node:tsVersion"] = v.hasPrefix("v") ? String(v.dropFirst()) : String(v)
+        }
+        return attrs
+    }
+
+    /// Offline and not seen for `days` days (or never).
+    func isStale(days: Int = 30, now: Date = Date()) -> Bool {
+        guard online != true else { return false }
+        guard let seen = lastSeenDate else { return true }
+        return now.timeIntervalSince(seen) > Double(days) * 86_400
+    }
+
+    /// Days until the key expires (negative once expired); nil if it never does.
+    func keyDaysLeft(now: Date = Date()) -> Int? {
+        expiryDate.map { Int(($0.timeIntervalSince(now) / 86_400).rounded(.down)) }
     }
 
     /// "online", "last seen 3 hr. ago", or "offline".
@@ -128,6 +161,20 @@ final class HeadscaleClient: PolicyServer {
     /// tags becomes a tagged device.
     func setTags(nodeID: String, tags: [String]) async throws {
         _ = try await send("POST", "node/\(nodeID)/tags", body: ["tags": tags])
+    }
+
+    /// An empty body expires the key now; the device must log in again.
+    func expireNode(nodeID: String) async throws {
+        _ = try await send("POST", "node/\(nodeID)/expire")
+    }
+
+    func deleteNode(nodeID: String) async throws {
+        _ = try await send("DELETE", "node/\(nodeID)")
+    }
+
+    /// `name` must be a hostname-style name (no "/"); the server validates it.
+    func renameNode(nodeID: String, name: String) async throws {
+        _ = try await send("POST", "node/\(nodeID)/rename/\(name)")
     }
 
     func listNodes() async throws -> [HeadscaleNode] {

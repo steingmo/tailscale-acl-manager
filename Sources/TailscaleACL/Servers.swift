@@ -25,6 +25,11 @@ protocol PolicyServer: AnyObject {
     func setTags(nodeID: String, tags: [String]) async throws
     /// Replaces the device's whole list of approved routes.
     func setApprovedRoutes(nodeID: String, routes: [String]) async throws
+    /// Expire the device's key now: it must log in again to reconnect.
+    func expireNode(nodeID: String) async throws
+    /// Remove the device from the tailnet.
+    func deleteNode(nodeID: String) async throws
+    func renameNode(nodeID: String, name: String) async throws
 }
 
 /// The server for a workspace's settings and credential, or nil if not configured.
@@ -196,6 +201,10 @@ final class TailscaleClient: PolicyServer {
             var connectedToControl: Bool?
             var advertisedRoutes: [String]?
             var enabledRoutes: [String]?
+            var expires: String?
+            var keyExpiryDisabled: Bool?
+            var os: String?
+            var clientVersion: String?
         }
         struct Response: Decodable { var devices: [Device]? }
         let (data, _) = try await request("GET", "\(tailnetPath)/devices?fields=all")
@@ -205,8 +214,23 @@ final class TailscaleClient: PolicyServer {
                           user: d.user.map { HeadscaleNode.User(name: $0, email: $0) },
                           online: d.connectedToControl, lastSeen: d.lastSeen,
                           availableRoutes: d.advertisedRoutes, approvedRoutes: d.enabledRoutes,
-                          tags: d.tags)
+                          tags: d.tags, expiry: d.keyExpiryDisabled == true ? nil : d.expires,
+                          os: d.os, clientVersion: d.clientVersion)
         }
+    }
+
+    func expireNode(nodeID: String) async throws {
+        _ = try await request("POST", "device/\(nodeID)/expire")
+    }
+
+    func deleteNode(nodeID: String) async throws {
+        _ = try await request("DELETE", "device/\(nodeID)")
+    }
+
+    func renameNode(nodeID: String, name: String) async throws {
+        _ = try await request("POST", "device/\(nodeID)/name",
+                              body: try JSONSerialization.data(withJSONObject: ["name": name]),
+                              headers: ["Content-Type": "application/json"])
     }
 
     func setTags(nodeID: String, tags: [String]) async throws {

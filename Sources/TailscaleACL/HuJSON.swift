@@ -66,6 +66,16 @@ extension JSON {
         }
     }
 
+    /// A string, number, or bool as text ("macos", "80", "true").
+    var scalarText: String? {
+        switch self {
+        case .string(let s): return s
+        case .number(let n): return n == n.rounded() ? String(Int(n)) : String(n)
+        case .bool(let b): return String(b)
+        default: return nil
+        }
+    }
+
     /// Array of strings, for src/dst lists and group member lists.
     var stringArray: [String] {
         elements?.compactMap { $0.value.stringValue } ?? []

@@ -132,6 +132,7 @@ cask "tailscale-acl" do
   depends_on arch: :arm64
 
   app "Tailscale ACL.app"
+  binary "#{appdir}/Tailscale ACL.app/Contents/MacOS/TailscaleACL", target: "tailscale-acl"
 end
 EOF
 git -C "$TAP_DIR" add Casks/tailscale-acl.rb

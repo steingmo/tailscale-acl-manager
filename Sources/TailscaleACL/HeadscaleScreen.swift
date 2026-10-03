@@ -15,6 +15,32 @@ struct HeadscaleScreen: View {
     @State private var openingRecord: PushRecord?
     @State private var comparing: DiffPresentation?
     @State private var editingTags: HeadscaleNode?
+    @State private var deviceFilter = DeviceFilter.all
+    @State private var nodeAction: NodeAction?
+    @State private var renaming: HeadscaleNode?
+    @State private var newName = ""
+
+    enum DeviceFilter: String, CaseIterable {
+        case all = "All"
+        case stale = "Not seen in 30 days"
+        case expiring = "Key expiring"
+
+        func includes(_ n: HeadscaleNode) -> Bool {
+            switch self {
+            case .all: return true
+            case .stale: return n.isStale()
+            case .expiring: return (n.keyDaysLeft() ?? .max) <= 14
+            }
+        }
+    }
+
+    /// A confirmed change to live devices.
+    struct NodeAction: Identifiable {
+        enum Kind { case expire, delete }
+        let id = UUID()
+        var kind: Kind
+        var nodes: [HeadscaleNode]
+    }
     // Auth key form
     @State private var keyTags: [String] = []
     @State private var keyUser = ""
@@ -109,6 +135,26 @@ struct HeadscaleScreen: View {
         }
         .sheet(item: $comparing) { DiffSheet(diff: $0) }
         .sheet(item: $editingTags) { DeviceTagsSheet(node: $0) }
+        .confirmationDialog(nodeActionTitle, isPresented: Binding(get: { nodeAction != nil },
+                                                                  set: { if !$0 { nodeAction = nil } })) {
+            if let action = nodeAction {
+                Button(action.kind == .delete ? "Delete from \(serverName)" : "Expire key", role: .destructive) {
+                    perform(action)
+                }
+            }
+        } message: {
+            Text(nodeAction?.kind == .delete
+                 ? "The devices are removed from the tailnet right away and must be set up again to rejoin."
+                 : "The device is disconnected right away and must log in again to reconnect.")
+        }
+        .alert("Rename \(renaming?.displayName ?? "device")", isPresented: Binding(get: { renaming != nil },
+                                                                                 set: { if !$0 { renaming = nil } })) {
+            TextField("New name", text: $newName)
+            Button("Rename") { if let node = renaming { rename(node, to: newName) } }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Its MagicDNS name changes too.")
+        }
         .confirmationDialog("Replace the editor contents with this policy?",
                             isPresented: Binding(get: { openingRecord != nil },
                                                  set: { if !$0 { openingRecord = nil } })) {
@@ -345,12 +391,25 @@ struct HeadscaleScreen: View {
     }
 
     private var nodesPanel: some View {
-        panel {
+        let shown = store.headscaleNodes.filter(deviceFilter.includes)
+        return panel {
             HStack {
-                Text("Nodes (\(store.headscaleNodes.count))")
+                Text("Devices (\(store.headscaleNodes.count))")
                     .font(.system(size: 13, weight: .bold))
                     .foregroundStyle(Theme.textPrimary)
+                Picker("", selection: $deviceFilter) {
+                    ForEach(DeviceFilter.allCases, id: \.self) { f in
+                        Text(f == .all ? f.rawValue : "\(f.rawValue) (\(store.headscaleNodes.filter(f.includes).count))").tag(f)
+                    }
+                }
+                .labelsHidden()
+                .frame(width: 190)
                 Spacer()
+                if deviceFilter == .stale, !shown.isEmpty {
+                    Button("Delete \(shown.count) stale…") { nodeAction = NodeAction(kind: .delete, nodes: shown) }
+                        .font(.system(size: 11))
+                        .disabled(client == nil || busy)
+                }
                 Button {
                     refreshNodes(announce: false)
                 } label: {
@@ -362,7 +421,10 @@ struct HeadscaleScreen: View {
                 .disabled(busy)
                 .help("Refresh")
             }
-            ForEach(store.headscaleNodes) { node in
+            if shown.isEmpty {
+                Text("No devices match.").font(.system(size: 11.5)).foregroundStyle(Theme.textSecondary)
+            }
+            ForEach(shown) { node in
                 HStack(spacing: 8) {
                     Circle()
                         .fill(node.online == true ? Theme.green : Theme.textSecondary.opacity(0.4))
@@ -375,17 +437,36 @@ struct HeadscaleScreen: View {
                         Chip(text: user, color: Theme.green, icon: "person")
                     }
                     ForEach(node.allTags, id: \.self) { EntityChip(name: $0) }
+                    if let os = node.os, !os.isEmpty {
+                        Text(verbatim: ([os] + [node.postureAttributes["node:tsVersion"]].compactMap { $0 }).joined(separator: " "))
+                            .font(.system(size: 10.5))
+                            .foregroundStyle(Theme.textSecondary)
+                    }
                     Spacer()
+                    if let days = node.keyDaysLeft(), days <= 14 {
+                        Text(days < 0 ? "key expired" : days == 0 ? "key expires today" : "key expires in \(days)d")
+                            .font(.system(size: 10.5, weight: .semibold))
+                            .foregroundStyle(days < 0 ? Theme.red : Theme.orange)
+                    }
                     Text(node.statusText)
                         .font(.system(size: 10.5))
-                        .foregroundStyle(node.online == true ? Theme.green : Theme.textSecondary)
+                        .foregroundStyle(node.online == true ? Theme.green : node.isStale() ? Theme.orange : Theme.textSecondary)
                     Text(verbatim: (node.ipAddresses ?? []).joined(separator: "  "))
                         .font(.system(size: 10.5, design: .monospaced))
                         .foregroundStyle(Theme.textSecondary)
                         .textSelection(.enabled)
-                    Button("Tags…") { editingTags = node }
-                        .font(.system(size: 11))
-                        .disabled(client == nil)
+                    Menu {
+                        Button("Tags…") { editingTags = node }
+                        Button("Rename…") { newName = node.displayName; renaming = node }
+                        Divider()
+                        Button("Expire Key…") { nodeAction = NodeAction(kind: .expire, nodes: [node]) }
+                        Button("Delete…") { nodeAction = NodeAction(kind: .delete, nodes: [node]) }
+                    } label: {
+                        Image(systemName: "ellipsis.circle")
+                    }
+                    .menuStyle(.borderlessButton)
+                    .fixedSize()
+                    .disabled(client == nil || busy)
                 }
                 .padding(.vertical, 2)
             }
@@ -433,6 +514,44 @@ struct HeadscaleScreen: View {
             let nodes = try await client.listNodes()
             store.headscaleNodes = nodes
             return announce ? "Connected — \(nodes.count) node\(nodes.count == 1 ? "" : "s")" : "Nodes refreshed"
+        }
+    }
+
+    private var nodeActionTitle: String {
+        guard let a = nodeAction else { return "" }
+        let what = a.nodes.count == 1 ? a.nodes[0].displayName : "\(a.nodes.count) devices"
+        return a.kind == .delete ? "Delete \(what)?" : "Expire the key of \(what)?"
+    }
+
+    private func perform(_ action: NodeAction) {
+        run { client in
+            var done = 0
+            defer { Task { try? await store.refreshNodes() } }
+            for node in action.nodes {
+                do {
+                    if action.kind == .delete {
+                        try await client.deleteNode(nodeID: node.id)
+                    } else {
+                        try await client.expireNode(nodeID: node.id)
+                    }
+                    done += 1
+                } catch {
+                    throw ServerError(status: 0, message: "\(node.displayName): \(error.localizedDescription)"
+                                      + (done > 0 ? " (\(done) done before this)" : ""))
+                }
+            }
+            let what = done == 1 ? action.nodes[0].displayName : "\(done) devices"
+            return action.kind == .delete ? "Deleted \(what)." : "Expired the key of \(what)."
+        }
+    }
+
+    private func rename(_ node: HeadscaleNode, to name: String) {
+        let name = name.trimmingCharacters(in: .whitespaces)
+        guard !name.isEmpty, !name.contains("/"), name != node.displayName else { return }
+        run { client in
+            try await client.renameNode(nodeID: node.id, name: name)
+            try? await store.refreshNodes()
+            return "Renamed \(node.displayName) to \(name)."
         }
     }
 

@@ -14,6 +14,8 @@ struct Workspace: Codable, Identifiable, Equatable {
     var serverKind: ServerKind?
     /// Tailscale tailnet name; "-" (the default) means the key's own tailnet.
     var tailnet: String?
+    /// Path of a policy file (e.g. in a Git repo) kept in sync with the editor.
+    var linkedFile: String?
 
     var kind: ServerKind { serverKind ?? .headscale }
 }

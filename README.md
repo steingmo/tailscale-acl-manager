@@ -2,7 +2,7 @@
 
 A fully native SwiftUI app for editing, visualizing, simulating, and testing
 Tailscale ACL policies. Local-first: policies only touch disk when you
-explicitly import or export, and the network is used only for update checks
+explicitly import, export, or link a workspace to a policy file, and the network is used only for update checks
 and — if you configure one per workspace — your own
 [Headscale](https://headscale.net) server or a tailnet on the official
 Tailscale API, where you can pull and push the policy (reviewed first), and
@@ -41,6 +41,18 @@ swift build           # or: swift run
 
 Requires Xcode command line tools (Swift 5.9+, macOS 14+).
 
+## Command line
+
+The Homebrew cask also installs `tailscale-acl`, which runs the app's checks
+without opening it, e.g. in CI or a pre-commit hook:
+
+```sh
+tailscale-acl lint policy.hujson   # problems; exit 1 on errors
+tailscale-acl test policy.hujson   # problems + the policy's tests; exit 1 on any failure
+```
+
+Use `-` to read the policy from standard input.
+
 ## Features
 
 - **Policy Editor** — HuJSON (JSON + comments + trailing commas) editor with
@@ -59,6 +71,16 @@ Requires Xcode command line tools (Swift 5.9+, macOS 14+).
 - **Tests** — runs the policy's `tests` section locally with pass/fail per
   assertion. Add tests through a dialog (source + allow/deny assertions) or
   delete them — no manual HuJSON editing needed.
+- **Device posture** — `postures`, `srcPosture`, and `defaultSrcPosture` are
+  evaluated: the simulator says "allowed only if posture X", checks real
+  devices against their OS and client version, and tests honor
+  `srcPostureAttrs`.
+- **Linked files** — keep a workspace in sync with a policy file in a Git
+  repo (GitOps): valid edits are saved to it, and outside changes load in.
+- **Temporary access** — give a rule an expiry date; Problems warns before it
+  expires and offers to delete it after.
+- **Device clean-up** — find devices not seen in 30 days or with expiring
+  keys, and expire, rename, or delete them on the server.
 
 All structural edits (visual builder, tests) write back into the underlying
 HuJSON while preserving your comments.

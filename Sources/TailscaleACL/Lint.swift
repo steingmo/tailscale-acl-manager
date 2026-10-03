@@ -26,8 +26,9 @@ struct LintFix: Identifiable {
 }
 
 /// Offline structure checks: undefined references, ownerless tags, unused
-/// entities, empty groups, invalid addresses/port specs, shadowed rules.
-func lintPolicy(_ m: PolicyModel) -> [LintIssue] {
+/// entities, empty groups, invalid addresses/port specs, shadowed rules,
+/// postures, expiring rules, wide-open rules.
+func lintPolicy(_ m: PolicyModel, now: Date = Date()) -> [LintIssue] {
     var issues: [LintIssue] = []
 
     func isSelfEvident(_ name: String) -> Bool {
@@ -165,6 +166,65 @@ func lintPolicy(_ m: PolicyModel) -> [LintIssue] {
                             detail: "ssh[\(r.index)] uses action \"check\" with a tagged source; Tailscale doesn't allow check mode from tagged devices."))
     }
 
+    // --- Postures -------------------------------------------------------------
+    var postureRefs: [(name: String, where_: String)] = m.defaultSrcPosture.map { ($0, "defaultSrcPosture") }
+    for r in m.rules { postureRefs += r.srcPosture.map { ($0, "acls[\(r.index)].srcPosture") } }
+    for g in m.grants { postureRefs += g.srcPosture.map { ($0, "grants[\(g.index)].srcPosture") } }
+    for (name, where_) in postureRefs where m.postures[name] == nil {
+        issues.append(.init(severity: .error, title: "Undefined posture",
+                            detail: "\(name) is required in \(where_) but not defined in \"postures\", so no device can meet it."))
+    }
+    for name in m.postureOrder {
+        if !name.hasPrefix("posture:") {
+            issues.append(.init(severity: .error, title: "Invalid posture name",
+                                detail: "\"\(name)\" in \"postures\" must start with \"posture:\"."))
+        }
+        for c in m.postures[name] ?? [] where PostureCondition(c) == nil {
+            issues.append(.init(severity: .error, title: "Invalid posture condition",
+                                detail: "\(name) has \"\(c)\" — expected e.g. node:os == 'macos', node:tsVersion >= '1.60', or node:os IN ['macos', 'ios']."))
+        }
+        if !postureRefs.contains(where: { $0.name == name }) {
+            issues.append(.init(severity: .warning, title: "Unused posture",
+                                detail: "\(name) is defined but no rule or defaultSrcPosture requires it."))
+        }
+    }
+    for g in m.grants {
+        for v in g.via where !v.hasPrefix("tag:") {
+            issues.append(.init(severity: .error, title: "Invalid via",
+                                detail: "grants[\(g.index)] routes via \"\(v)\"; via only takes tags (of subnet routers, exit nodes, or app connectors)."))
+        }
+    }
+
+    // --- Expiring rules ----------------------------------------------------------
+    let dated = m.rules.map { ("acls", $0.index, $0.expires) } + m.grants.map { ("grants", $0.index, $0.expires) }
+        + m.sshRules.map { ("ssh", $0.index, $0.expires) }
+    for (section, index, expires) in dated {
+        guard let expires else { continue }
+        guard let days = RuleExpiry.daysLeft(expires, now: now) else {
+            issues.append(.init(severity: .warning, title: "Invalid expiry date",
+                                detail: "\(section)[\(index)] has \"expires: \(expires)\", which is not a real date."))
+            continue
+        }
+        if days < 0 {
+            issues.append(.init(severity: .warning, title: "Expired rule",
+                                detail: "\(section)[\(index)] expired on \(expires) but still grants access.",
+                                fixes: [.init(label: "Delete \(section)[\(index)]", action: .deleteRule(section: section, index: index))]))
+        } else if days <= 7 {
+            issues.append(.init(severity: .warning, title: "Rule expires soon",
+                                detail: "\(section)[\(index)] expires on \(expires) (\(days == 0 ? "today" : "in \(days) day\(days == 1 ? "" : "s")"))."))
+        }
+    }
+
+    // --- Wide-open rules ---------------------------------------------------------
+    for r in m.rules where r.action == "accept" && r.src.contains("*") && r.dst.contains("*:*") {
+        issues.append(.init(severity: .warning, title: "Allows everything",
+                            detail: "acls[\(r.index)] lets every device reach every device on every port. Narrow it to the groups, tags, and ports that need access."))
+    }
+    for g in m.grants where g.src.contains("*") && g.dst.contains("*") && g.ip.contains("*") {
+        issues.append(.init(severity: .warning, title: "Allows everything",
+                            detail: "grants[\(g.index)] lets every device reach every device on every port. Narrow it to the groups, tags, and ports that need access."))
+    }
+
     // --- Duplicate / shadowed rules ------------------------------------------
     // ponytail: same-kind pairwise cover check only; no cross acl/grant analysis.
     func srcCovered(_ a: [String], by b: [String]) -> Bool {
@@ -177,7 +237,9 @@ func lintPolicy(_ m: PolicyModel) -> [LintIssue] {
         }
     }
     for a in m.grants {
-        for b in m.grants where b.index != a.index {
+        // A posture-gated, routed, or expiring rule doesn't make another one redundant.
+        for b in m.grants where b.index != a.index && b.srcPosture == a.srcPosture
+            && b.via == a.via && (b.expires == nil || b.expires == a.expires) {
             guard srcCovered(a.src, by: b.src) else { continue }
             let dstCovered = a.dst.allSatisfy { x in
                 b.dst.contains { $0 == "*" || $0 == x }
@@ -192,7 +254,8 @@ func lintPolicy(_ m: PolicyModel) -> [LintIssue] {
         }
     }
     for a in m.rules {
-        for b in m.rules where b.index != a.index {
+        for b in m.rules where b.index != a.index && b.srcPosture == a.srcPosture
+            && (b.expires == nil || b.expires == a.expires) {
             guard srcCovered(a.src, by: b.src) else { continue }
             let covered = a.dst.allSatisfy { x in
                 let xd = DestSpec(x)

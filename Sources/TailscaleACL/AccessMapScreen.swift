@@ -367,7 +367,7 @@ struct AccessMapScreen: View {
     private func pillView(_ pill: RuleSummary) -> some View {
         Button { editing = pill } label: { pillLabel(pill) }
             .buttonStyle(.plain)
-            .help("\(pill.name) — click to edit")
+            .help(([pill.name] + pill.notes).joined(separator: " · ") + " — click to edit")
     }
 
     private func pillLabel(_ pill: RuleSummary) -> some View {
@@ -378,6 +378,11 @@ struct AccessMapScreen: View {
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(Theme.textPrimary)
                     .lineLimit(1)
+                if !pill.notes.isEmpty {
+                    Image(systemName: "info.circle")
+                        .font(.system(size: 10))
+                        .foregroundStyle(Theme.textSecondary)
+                }
             }
             .padding(.horizontal, 10)
             Spacer(minLength: 0)

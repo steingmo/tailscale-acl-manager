@@ -334,6 +334,8 @@ struct RuleSheet: View {
     @State private var users: [String] = []
     @State private var action = "accept"
     @State private var hasApp = false
+    @State private var expires = false
+    @State private var expiryDate = Date().addingTimeInterval(7 * 86_400)
     @State private var confirmingDelete = false
     @State private var copying = false
 
@@ -389,6 +391,16 @@ struct RuleSheet: View {
                 StringListEditor(title: "SSH users", addPrompt: "e.g. root or autogroup:nonroot",
                                  suggestions: ["root", "autogroup:nonroot"], items: $users)
             }
+
+            HStack(spacing: 8) {
+                Toggle("Temporary access, expires", isOn: $expires)
+                    .font(.system(size: 11.5))
+                if expires {
+                    DatePicker("", selection: $expiryDate, displayedComponents: .date)
+                        .labelsHidden()
+                }
+            }
+            .help("Saved as an \u{201C}expires:\u{201D} comment. Tailscale doesn't remove the rule by itself: Problems warns a week before and offers to delete it once it has expired.")
 
             HStack {
                 if existing != nil {
@@ -451,16 +463,20 @@ struct RuleSheet: View {
         }
         kind = existing.kind
         let m = store.model
+        var date: String?
         switch existing.kind {
         case .acl:
             guard let r = m.rules.first(where: { $0.index == existing.index }) else { return }
-            (name, src, dst) = (r.comments.first ?? "", r.src, r.dst)
+            (name, src, dst, date) = (r.comments.first ?? "", r.src, r.dst, r.expires)
         case .grant:
             guard let g = m.grants.first(where: { $0.index == existing.index }) else { return }
-            (name, src, dst, ip, hasApp) = (g.comments.first ?? "", g.src, g.dst, g.ip, g.hasApp)
+            (name, src, dst, ip, hasApp, date) = (g.comments.first ?? "", g.src, g.dst, g.ip, g.hasApp, g.expires)
         case .ssh:
             guard let s = m.sshRules.first(where: { $0.index == existing.index }) else { return }
-            (name, src, dst, users, action) = (s.comments.first ?? "", s.src, s.dst, s.users, s.action)
+            (name, src, dst, users, action, date) = (s.comments.first ?? "", s.src, s.dst, s.users, s.action, s.expires)
+        }
+        if let parsed = date.flatMap(RuleExpiry.formatter.date(from:)) {
+            (expires, expiryDate) = (true, parsed)
         }
     }
 
@@ -479,7 +495,8 @@ struct RuleSheet: View {
         }
         let section = existing?.section ?? RuleSummary(kind: kind, index: 0, name: "", badge: "",
                                                        sources: [], destinations: []).section
-        store.saveRule(section: section, index: existing?.index, name: name, fields: fields)
+        store.saveRule(section: section, index: existing?.index, name: name,
+                       expires: .some(expires ? RuleExpiry.formatter.string(from: expiryDate) : nil), fields: fields)
         dismiss()
     }
 }

@@ -8,6 +8,12 @@ func testElements(_ tests: [ACLTest]) -> [JSON.Element] {
         var members: [JSON.Member] = [.init(comments: [], key: "src", value: .string(t.src))]
         if !t.accept.isEmpty { members.append(.init(comments: [], key: "accept", value: stringArrayJSON(t.accept))) }
         if !t.deny.isEmpty { members.append(.init(comments: [], key: "deny", value: stringArrayJSON(t.deny))) }
+        if let attrs = t.srcPostureAttrs, !attrs.isEmpty {
+            // ponytail: values go out as strings (true/false as bools); numeric custom attributes would need their type kept.
+            members.insert(.init(comments: [], key: "srcPostureAttrs", value: .object(attrs.sorted { $0.key < $1.key }.map { k, v in
+                .init(comments: [], key: k, value: v == "true" || v == "false" ? .bool(v == "true") : .string(v))
+            })), at: 1)
+        }
         return JSON.Element(comments: [], value: .object(members))
     }
 }

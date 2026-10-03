@@ -40,6 +40,7 @@ struct RoutesScreen: View {
                 }
                 if store.isValid {
                     approversPanel
+                    if store.model.grants.contains(where: { !$0.via.isEmpty }) { viaPanel }
                     attrsPanel
                     devicesPanel
                 } else {
@@ -94,6 +95,31 @@ struct RoutesScreen: View {
             }
             ToolbarButton(label: "Add route", icon: "plus") {
                 editingApprovers = ApproverEdit(route: "", isNew: true)
+            }
+        }
+    }
+
+    /// Grants that send traffic through specific routers or exit nodes.
+    private var viaPanel: some View {
+        panel("Routed through (via)", detail: "Grants whose traffic must go through the subnet routers, exit nodes, or app connectors carrying these tags.") {
+            ForEach(store.model.grants.filter { !$0.via.isEmpty }) { g in
+                VStack(alignment: .leading, spacing: 5) {
+                    row {
+                        ForEach(g.src, id: \.self) { EntityChip(name: $0) }
+                        Image(systemName: "arrow.right").font(.system(size: 9.5)).foregroundStyle(Theme.textSecondary)
+                        ForEach(g.dst, id: \.self) { Chip(text: $0, color: Theme.purple) }
+                        Text("via").font(.system(size: 11)).foregroundStyle(Theme.textSecondary)
+                        ForEach(g.via, id: \.self) { EntityChip(name: $0) }
+                    } actions: { EmptyView() }
+                    if !store.headscaleNodes.isEmpty {
+                        let routers = store.headscaleNodes.filter { !Set($0.allTags).isDisjoint(with: g.via) }
+                        Text(verbatim: routers.isEmpty
+                             ? "No device carries \(g.via.joined(separator: " or ")), so this traffic has no route."
+                             : "Devices: " + routers.map(\.displayName).joined(separator: ", "))
+                            .font(.system(size: 10.5))
+                            .foregroundStyle(routers.isEmpty ? Theme.orange : Theme.textSecondary)
+                    }
+                }
             }
         }
     }

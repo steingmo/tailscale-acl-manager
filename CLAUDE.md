@@ -75,7 +75,20 @@ Swift Package (no Xcode project). All source in `Sources/TailscaleACL/`:
   via the shared `ConnectionSheet` in `SharedSheets.swift`).
 - `Lint.swift` — pure `lintPolicy(model)`: undefined references, ownerless
   tags, unused entities, empty groups, invalid addresses/port specs,
-  same-kind shadowed rules. Cached on `PolicyStore` per parse.
+  same-kind shadowed rules, postures, `via`, expiring and wide-open rules.
+  Cached on `PolicyStore` per parse.
+- `RuleConditions.swift`: posture condition grammar/evaluation and the
+  `// expires: YYYY-MM-DD` rule comment (parsed out of `comments` into
+  `expires`). `Evaluator(sourceAttributes:attributesComplete:)`: nil
+  attributes → posture-gated matches are kept but listed in
+  `RuleMatch.posture` (`AccessResult.conditional`); tests run with only their
+  `srcPostureAttrs`, like Tailscale. Device attributes come from the device
+  list (`HeadscaleNode.postureAttributes`: node:os, node:tsVersion).
+- `CLI.swift` holds `@main`: `TailscaleACL lint|test <file>` runs headless
+  (the cask links it as `tailscale-acl`); anything else starts the app.
+- Linked file (`Workspace.linkedFile`): `PolicyStore` reads it on open and
+  polls it; valid parses are written back, but only after it was read this
+  session, so a stale editor never overwrites it.
 - `App.swift` — app entry, sidebar navigation + workspace menu, Sparkle
   updater (`UpdaterViewModel`) + "Check for Updates…" menu item.
 - `Workspaces.swift` — named workspaces (policy + Headscale URL) persisted

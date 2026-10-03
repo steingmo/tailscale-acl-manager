@@ -8,6 +8,11 @@ struct RuleMatch: Identifiable {
     var srcSpec: String
     var dstSpec: String
     var ipSpec: String?
+    /// Postures the source must meet (any one) for this match to apply,
+    /// when the evaluator can't tell whether it does. Empty: unconditional.
+    var posture: [String] = []
+    /// Grant `via`: tags of the routers or exit nodes the traffic goes through.
+    var via: [String] = []
 
     var id: String { "\(kind)-\(ruleIndex)-\(srcSpec)-\(dstSpec)-\(ipSpec ?? "")" }
 }
@@ -15,35 +20,66 @@ struct RuleMatch: Identifiable {
 struct AccessResult {
     var allowed: Bool
     var matches: [RuleMatch]
+
+    /// Allowed only if the source device meets a posture.
+    var conditional: Bool { allowed && matches.allSatisfy { !$0.posture.isEmpty } }
+    var postures: [String] { matches.flatMap(\.posture).uniqued() }
 }
 
 /// Evaluates Tailscale ACL semantics: default deny, "accept" rules only.
 struct Evaluator {
     var model: PolicyModel
+    /// The source device's posture attributes ("node:os" → "macos"), if known.
+    /// nil: rules with posture conditions match, marked as conditional.
+    var sourceAttributes: [String: String]? = nil
+    /// The attributes are the device's full set (a test's srcPostureAttrs),
+    /// so a missing attribute is unset rather than unknown.
+    var attributesComplete = false
+
+    /// Postures still in question for a rule: [] when none is required or one
+    /// is met, nil when the source can't meet any (the rule doesn't apply).
+    func pendingPostures(_ own: [String]) -> [String]? {
+        let required = own.isEmpty ? model.defaultSrcPosture : own
+        guard !required.isEmpty else { return [] }
+        guard let attrs = sourceAttributes else { return required }
+        var unknown: [String] = []
+        for name in required {
+            guard let conditions = model.postures[name] else { continue }
+            switch postureHolds(conditions, attrs: attrs, complete: attributesComplete) {
+            case true?: return []
+            case nil: unknown.append(name)
+            case false?: break
+            }
+        }
+        return unknown.isEmpty ? nil : unknown
+    }
 
     /// sourceID: user email, tag name ("tag:web"), or host name.
     /// destID: tag name or host name. port: numeric destination port.
     func evaluate(sourceID: String, destID: String, port: Int) -> AccessResult {
         var matches: [RuleMatch] = []
         for rule in model.rules where rule.action == "accept" {
+            guard let posture = pendingPostures(rule.srcPosture) else { continue }
             for src in rule.src where sourceMatches(spec: src, sourceID: sourceID) {
                 for dst in rule.dst {
                     let d = DestSpec(dst)
                     if targetMatches(target: d.target, destID: destID)
                         && portMatches(spec: d.ports, port: port) {
                         matches.append(RuleMatch(kind: .acl, ruleIndex: rule.index,
-                                                 srcSpec: src, dstSpec: dst))
+                                                 srcSpec: src, dstSpec: dst, posture: posture))
                     }
                 }
             }
         }
         // Grants: app-only grants (empty ip) confer no network-layer access.
         for grant in model.grants {
+            guard let posture = pendingPostures(grant.srcPosture) else { continue }
             for src in grant.src where sourceMatches(spec: src, sourceID: sourceID) {
                 for dst in grant.dst where targetMatches(target: dst, destID: destID) {
                     for spec in grant.ip where ipSpecMatches(spec: spec, port: port) {
                         matches.append(RuleMatch(kind: .grant, ruleIndex: grant.index,
-                                                 srcSpec: src, dstSpec: dst, ipSpec: spec))
+                                                 srcSpec: src, dstSpec: dst, ipSpec: spec,
+                                                 posture: posture, via: grant.via))
                     }
                 }
             }
@@ -200,19 +236,22 @@ struct TestResult: Identifiable {
 }
 
 extension Evaluator {
+    /// Like Tailscale, a test device has only the posture attributes the test
+    /// gives it (srcPostureAttrs), so posture-gated rules need them to pass.
     func runTests() -> [TestResult] {
         model.tests.map { test in
+            let ev = Evaluator(model: model, sourceAttributes: test.srcPostureAttrs ?? [:], attributesComplete: true)
             var assertions: [TestAssertion] = []
             for entry in test.accept {
                 let d = DestSpec(entry)
-                let allowed = evaluate(sourceID: test.src, destID: d.target,
-                                       port: Int(d.ports) ?? 0).allowed
+                let allowed = ev.evaluate(sourceID: test.src, destID: d.target,
+                                          port: Int(d.ports) ?? 0).allowed
                 assertions.append(TestAssertion(kind: .accept, dst: entry, passed: allowed))
             }
             for entry in test.deny {
                 let d = DestSpec(entry)
-                let allowed = evaluate(sourceID: test.src, destID: d.target,
-                                       port: Int(d.ports) ?? 0).allowed
+                let allowed = ev.evaluate(sourceID: test.src, destID: d.target,
+                                          port: Int(d.ports) ?? 0).allowed
                 assertions.append(TestAssertion(kind: .deny, dst: entry, passed: !allowed))
             }
             return TestResult(testIndex: test.index, src: test.src, assertions: assertions)

@@ -7,6 +7,9 @@ struct ACLRule: Identifiable {
     var src: [String]
     var dst: [String]
     var proto: String?
+    var srcPosture: [String] = []
+    /// From a "// expires: YYYY-MM-DD" comment (kept out of `comments`).
+    var expires: String?
 
     var id: Int { index }
 }
@@ -22,6 +25,7 @@ struct GrantRule: Identifiable {
     var hasApp: Bool
     var via: [String]
     var srcPosture: [String]
+    var expires: String?
 
     var id: Int { index }
 }
@@ -44,6 +48,7 @@ struct SSHRule: Identifiable {
     var src: [String]
     var dst: [String]
     var users: [String]
+    var expires: String?
 
     var id: Int { index }
 }
@@ -53,6 +58,8 @@ struct ACLTest: Identifiable {
     var src: String
     var accept: [String]
     var deny: [String]
+    /// Posture attributes the test device has (Tailscale's srcPostureAttrs).
+    var srcPostureAttrs: [String: String]?
 
     var id: Int { index }
 }
@@ -66,6 +73,11 @@ struct PolicyModel {
     var hostOrder: [String] = []
     var ipsets: [String: [String]] = [:]
     var ipsetOrder: [String] = []
+    /// "posture:name" → conditions, all of which must hold.
+    var postures: [String: [String]] = [:]
+    var postureOrder: [String] = []
+    /// Postures required by rules that don't set their own srcPosture.
+    var defaultSrcPosture: [String] = []
     var rules: [ACLRule] = []
     var grants: [GrantRule] = []
     var sshRules: [SSHRule] = []
@@ -101,31 +113,47 @@ struct PolicyModel {
                 ipsetOrder.append(m.key)
             }
         }
+        if let members = tree["postures"]?.members {
+            for m in members {
+                postures[m.key] = m.value.stringArray
+                postureOrder.append(m.key)
+            }
+        }
+        defaultSrcPosture = tree["defaultSrcPosture"]?.stringArray ?? []
+        // A rule's comments split into its name lines and its expiry date.
+        func split(_ comments: [String]) -> (comments: [String], expires: String?) {
+            (comments.filter { RuleExpiry.date(in: $0) == nil }, comments.lazy.compactMap(RuleExpiry.date(in:)).first)
+        }
         if let elements = tree["acls"]?.elements {
             for (i, e) in elements.enumerated() {
                 guard case .object = e.value else { continue }
+                let c = split(e.comments)
                 rules.append(ACLRule(
                     index: i,
-                    comments: e.comments,
+                    comments: c.comments,
                     action: e.value["action"]?.stringValue ?? "accept",
                     src: e.value["src"]?.stringArray ?? [],
                     dst: e.value["dst"]?.stringArray ?? [],
-                    proto: e.value["proto"]?.stringValue
+                    proto: e.value["proto"]?.stringValue,
+                    srcPosture: e.value["srcPosture"]?.stringArray ?? [],
+                    expires: c.expires
                 ))
             }
         }
         if let elements = tree["grants"]?.elements {
             for (i, e) in elements.enumerated() {
                 guard case .object = e.value else { continue }
+                let c = split(e.comments)
                 grants.append(GrantRule(
                     index: i,
-                    comments: e.comments,
+                    comments: c.comments,
                     src: e.value["src"]?.stringArray ?? [],
                     dst: e.value["dst"]?.stringArray ?? [],
                     ip: e.value["ip"]?.stringArray ?? [],
                     hasApp: e.value["app"] != nil,
                     via: e.value["via"]?.stringArray ?? [],
-                    srcPosture: e.value["srcPosture"]?.stringArray ?? []
+                    srcPosture: e.value["srcPosture"]?.stringArray ?? [],
+                    expires: c.expires
                 ))
             }
         }
@@ -145,13 +173,15 @@ struct PolicyModel {
         if let elements = tree["ssh"]?.elements {
             for (i, e) in elements.enumerated() {
                 guard case .object = e.value else { continue }
+                let c = split(e.comments)
                 sshRules.append(SSHRule(
                     index: i,
-                    comments: e.comments,
+                    comments: c.comments,
                     action: e.value["action"]?.stringValue ?? "accept",
                     src: e.value["src"]?.stringArray ?? [],
                     dst: e.value["dst"]?.stringArray ?? [],
-                    users: e.value["users"]?.stringArray ?? []
+                    users: e.value["users"]?.stringArray ?? [],
+                    expires: c.expires
                 ))
             }
         }
@@ -162,7 +192,11 @@ struct PolicyModel {
                     index: i,
                     src: e.value["src"]?.stringValue ?? "",
                     accept: e.value["accept"]?.stringArray ?? [],
-                    deny: e.value["deny"]?.stringArray ?? []
+                    deny: e.value["deny"]?.stringArray ?? [],
+                    srcPostureAttrs: e.value["srcPostureAttrs"]?.members.map { members in
+                        Dictionary(members.compactMap { m in m.value.scalarText.map { (m.key, $0) } },
+                                   uniquingKeysWith: { a, _ in a })
+                    }
                 ))
             }
         }

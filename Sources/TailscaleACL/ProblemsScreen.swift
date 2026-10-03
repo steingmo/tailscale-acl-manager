@@ -15,7 +15,7 @@ struct ProblemsScreen: View {
                     Text("Problems")
                         .font(.system(size: 16, weight: .bold))
                         .foregroundStyle(Theme.textPrimary)
-                    Text("Structure checks: undefined references, ownerless tags, unused entities, shadowed rules, invalid values")
+                    Text("Structure checks: undefined references, ownerless tags, unused entities, shadowed, expiring, and wide-open rules, postures, invalid values")
                         .font(.system(size: 11.5))
                         .foregroundStyle(Theme.textSecondary)
                     Text(store.headscaleNodes.isEmpty

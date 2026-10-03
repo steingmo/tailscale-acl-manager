@@ -13,6 +13,22 @@ struct PolicyEditorScreen: View {
                     .font(.system(size: 16, weight: .bold))
                     .foregroundStyle(Theme.textPrimary)
                 Spacer()
+                if let url = store.linkedFileURL {
+                    Menu {
+                        Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([url]) }
+                        Button("Unlink File") { store.setLinkedFile(nil) }
+                    } label: {
+                        Label(url.lastPathComponent, systemImage: store.linkedFileError == nil ? "link" : "exclamationmark.triangle.fill")
+                            .font(.system(size: 11.5))
+                    }
+                    .menuStyle(.borderlessButton)
+                    .fixedSize()
+                    .foregroundStyle(store.linkedFileError == nil ? Theme.textSecondary : Theme.orange)
+                    .help(store.linkedFileError ?? "Kept in sync with \(url.path): valid edits are saved to it, and changes made to it (e.g. git pull) load here")
+                } else {
+                    ToolbarButton(label: "Link File", icon: "link") { store.linkFile() }
+                        .help("Keep this workspace in sync with a policy file, e.g. in the Git repo your GitOps workflow uses")
+                }
                 validityPill
                 ToolbarButton(label: "Import", icon: "square.and.arrow.up") {
                     store.importFromFile()
