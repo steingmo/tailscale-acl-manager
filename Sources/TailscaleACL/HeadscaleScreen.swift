@@ -1,6 +1,7 @@
 import SwiftUI
 
-/// Talk to a self-hosted Headscale server: pull/push the policy, list nodes.
+/// Talk to the workspace's control server (self-hosted Headscale or the
+/// official Tailscale API): pull/push the policy, list devices.
 /// Opt-in — nothing touches the network until a server is configured here.
 struct HeadscaleScreen: View {
     @EnvironmentObject var store: PolicyStore
@@ -18,14 +19,26 @@ struct HeadscaleScreen: View {
         Binding(get: { store.currentWorkspace.serverURL }, set: { store.setServerURL($0) })
     }
 
-    private var client: HeadscaleClient? {
-        HeadscaleClient.make(serverURL: store.currentWorkspace.serverURL, apiKey: apiKey)
+    private var kind: ServerKind { store.currentWorkspace.kind }
+
+    private var kindBinding: Binding<ServerKind> {
+        Binding(get: { kind }, set: { if $0 != kind { store.setServerKind($0); status = nil } })
+    }
+
+    private var tailnet: Binding<String> {
+        Binding(get: { store.currentWorkspace.tailnet ?? "-" }, set: { store.setTailnet($0) })
+    }
+
+    private var serverName: String { kind == .tailscale ? "Tailscale" : "Headscale" }
+
+    private var client: PolicyServer? {
+        let ws = store.currentWorkspace
+        return makeServer(kind: kind, serverURL: ws.serverURL, tailnet: ws.tailnet ?? "-", credential: apiKey)
     }
 
     /// Push history for this workspace's server only.
     private var serverHistory: [PushRecord] {
-        let host = URL(string: store.currentWorkspace.serverURL.trimmingCharacters(in: .whitespaces))?.host
-        return history.filter { $0.server == host }
+        history.filter { $0.server == store.serverDisplayName }
     }
 
     private func loadKey() {
@@ -36,10 +49,10 @@ struct HeadscaleScreen: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("Headscale")
+                    Text("Server")
                         .font(.system(size: 16, weight: .bold))
                         .foregroundStyle(Theme.textPrimary)
-                    Text("Pull and push the policy for workspace \u{201C}\(store.currentWorkspace.name)\u{201D} on its Headscale server, and see its nodes")
+                    Text("Pull and push the policy for workspace \u{201C}\(store.currentWorkspace.name)\u{201D} on its Headscale server or Tailscale tailnet, and see its devices")
                         .font(.system(size: 11.5))
                         .foregroundStyle(Theme.textSecondary)
                 }
@@ -59,7 +72,7 @@ struct HeadscaleScreen: View {
             loadKey()
             status = nil
         }
-        .confirmationDialog("Replace the editor contents with the policy from Headscale?",
+        .confirmationDialog("Replace the editor contents with the policy from \(serverName)?",
                             isPresented: $confirmingPull) {
             Button("Pull and replace", role: .destructive) { pull() }
         } message: {
@@ -74,7 +87,7 @@ struct HeadscaleScreen: View {
                     store.snapshot(reason: candidate.isRestore ? "restored on server" : "pushed")
                     status = (true, candidate.isRestore
                               ? "Restored — the server and editor now have the earlier policy."
-                              : "Pushed — Headscale accepted and applied the policy.")
+                              : "Pushed — \(serverName) accepted and applied the policy.")
                 }
                 .environmentObject(store)
             }
@@ -100,15 +113,32 @@ struct HeadscaleScreen: View {
             Text("Connection")
                 .font(.system(size: 13, weight: .bold))
                 .foregroundStyle(Theme.textPrimary)
-            field("Server URL", hint: "e.g. https://headscale.example.com") {
-                TextField("https://headscale.example.com", text: serverURL)
-                    .textFieldStyle(.roundedBorder)
-                    .font(.system(size: 12, design: .monospaced))
-            }
-            field("API key", hint: "Create one on the server: headscale apikeys create — stored in your Keychain") {
-                SecureField("API key", text: $apiKey)
-                    .textFieldStyle(.roundedBorder)
-                    .font(.system(size: 12, design: .monospaced))
+            PillTabs(tabs: [(ServerKind.headscale, "Headscale", "server.rack"),
+                            (ServerKind.tailscale, "Tailscale", "cloud")],
+                     selection: kindBinding)
+            if kind == .headscale {
+                field("Server URL", hint: "e.g. https://headscale.example.com") {
+                    TextField("https://headscale.example.com", text: serverURL)
+                        .textFieldStyle(.roundedBorder)
+                        .font(.system(size: 12, design: .monospaced))
+                }
+                field("API key", hint: "Create one on the server: headscale apikeys create — stored in your Keychain") {
+                    SecureField("API key", text: $apiKey)
+                        .textFieldStyle(.roundedBorder)
+                        .font(.system(size: 12, design: .monospaced))
+                }
+            } else {
+                field("Tailnet", hint: "\"-\" means the tailnet the key belongs to. Otherwise the tailnet ID from the admin console's General settings.") {
+                    TextField("-", text: tailnet)
+                        .textFieldStyle(.roundedBorder)
+                        .font(.system(size: 12, design: .monospaced))
+                }
+                field("API access token or OAuth client secret",
+                      hint: "An OAuth client (tskey-client-…) never expires — give it the policy_file and devices scopes. Access tokens (tskey-api-…) expire after at most 90 days. Create either under Settings ▸ Keys or Trust credentials in the admin console. Stored in your Keychain.") {
+                    SecureField("tskey-client-… or tskey-api-…", text: $apiKey)
+                        .textFieldStyle(.roundedBorder)
+                        .font(.system(size: 12, design: .monospaced))
+                }
             }
             HStack(spacing: 10) {
                 Button("Save & test") {
@@ -132,12 +162,14 @@ struct HeadscaleScreen: View {
             Text("Policy")
                 .font(.system(size: 13, weight: .bold))
                 .foregroundStyle(Theme.textPrimary)
-            Text("Pushing requires the server to store its policy in the database (policy.mode: database in config.yaml). In file mode the server's policy file is the source of truth and push is refused.")
+            Text(kind == .headscale
+                 ? "Pushing requires the server to store its policy in the database (policy.mode: database in config.yaml). In file mode the server's policy file is the source of truth and push is refused."
+                 : "Before each push, Tailscale checks the policy and runs its tests without saving, and the push is refused if the policy changed on Tailscale after the review read it.")
                 .font(.system(size: 10.5))
                 .foregroundStyle(Theme.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
             HStack(spacing: 8) {
-                ToolbarButton(label: "Pull from Headscale", icon: "arrow.down.circle") {
+                ToolbarButton(label: "Pull from \(serverName)", icon: "arrow.down.circle") {
                     confirmingPull = true
                 }
                 .disabled(client == nil || busy)
@@ -261,7 +293,7 @@ struct HeadscaleScreen: View {
 
     // MARK: - Actions
 
-    private func run(_ work: @escaping (HeadscaleClient) async throws -> String) {
+    private func run(_ work: @escaping (PolicyServer) async throws -> String) {
         guard let client else { return }
         busy = true
         Task {
@@ -314,9 +346,17 @@ struct PushCandidate: Identifiable {
 /// Shows what a push changes for your real devices before it goes live, and
 /// saves the server's current policy to history before pushing.
 struct PushReviewSheet: View {
-    var client: HeadscaleClient
+    /// Kept in state so the same client (and its Tailscale ETag) is used from
+    /// review to push, even if SwiftUI rebuilds this view.
+    @State private var client: PolicyServer
     var candidate: PushCandidate
     var onPushed: () -> Void
+
+    init(client: PolicyServer, candidate: PushCandidate, onPushed: @escaping () -> Void) {
+        _client = State(initialValue: client)
+        self.candidate = candidate
+        self.onPushed = onPushed
+    }
 
     @EnvironmentObject var store: PolicyStore
     @Environment(\.dismiss) private var dismiss
@@ -325,6 +365,8 @@ struct PushReviewSheet: View {
     @State private var deviceCount = 0
     @State private var previewNote: String?
     @State private var candidateErrors: [LintIssue] = []
+    /// Tailscale's own verdict: nil not checked, "" passed, otherwise the failure.
+    @State private var serverVerdict: String?
     @State private var blocker: String?
     @State private var loading = true
     @State private var pushing = false
@@ -384,8 +426,16 @@ struct PushReviewSheet: View {
                     }
                     .font(.system(size: 11.5))
                 }
+                if let serverVerdict {
+                    Label(serverVerdict.isEmpty ? "Tailscale's own check passed (policy and its tests)."
+                          : "Tailscale's check failed — it will refuse this push: \(serverVerdict)",
+                          systemImage: serverVerdict.isEmpty ? "checkmark.seal" : "xmark.octagon.fill")
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(serverVerdict.isEmpty ? Theme.green : Theme.red)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
                 if !candidateErrors.isEmpty {
-                    Label("The Problems check reports \(candidateErrors.count) error\(candidateErrors.count == 1 ? "" : "s") in this policy — Headscale may reject it.",
+                    Label("The Problems check reports \(candidateErrors.count) error\(candidateErrors.count == 1 ? "" : "s") in this policy — the server may reject it.",
                           systemImage: "exclamationmark.triangle.fill")
                         .font(.system(size: 11.5))
                         .foregroundStyle(Theme.orange)
@@ -403,7 +453,7 @@ struct PushReviewSheet: View {
                 Button("Cancel") { dismiss() }
                     .keyboardShortcut(.cancelAction)
                 Button(conflictBase != nil ? "Overwrite and push"
-                       : candidate.isRestore ? "Restore on server" : "Push to Headscale") { push() }
+                       : candidate.isRestore ? "Restore on server" : "Push to server") { push() }
                     .keyboardShortcut(.defaultAction)
                     .disabled(loading || pushing || blocker != nil)
             }
@@ -415,7 +465,7 @@ struct PushReviewSheet: View {
         .sheet(item: $comparing) { DiffSheet(diff: $0) }
     }
 
-    private var host: String { client.baseURL.host ?? "server" }
+    private var host: String { client.displayHost }
 
     @ViewBuilder
     private var summary: some View {
@@ -489,6 +539,9 @@ struct PushReviewSheet: View {
         do {
             let current = try await client.getPolicy()
             serverText = current
+            if client.hasValidation {
+                serverVerdict = try? await client.validate(candidate.text) ?? ""
+            }
             if let last = store.currentWorkspace.lastSyncedPolicy {
                 if last != current { conflictBase = last }
             } else {
@@ -532,7 +585,7 @@ struct PushReviewSheet: View {
                 dismiss()
             } catch {
                 PushHistory.remove(id: record.id)
-                blocker = "Headscale refused the policy: \(error.localizedDescription)"
+                blocker = "The server refused the policy: \(error.localizedDescription)"
                 pushing = false
             }
         }

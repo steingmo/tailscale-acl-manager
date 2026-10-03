@@ -495,8 +495,8 @@ struct DeviceTagsSheet: View {
                 .font(.system(size: 16, weight: .bold))
                 .foregroundStyle(Theme.textPrimary)
             Text(node.allTags.isEmpty
-                 ? "This device belongs to \(node.user?.name ?? "a user"). Tagging it makes it a tagged device: it then matches the policy only as its tags and loses its user's access. Headscale can't turn it back into a user device."
-                 : "A tagged device must keep at least one tag. Headscale applies the change immediately.")
+                 ? "This device belongs to \(node.user?.name ?? "a user"). Tagging it makes it a tagged device: it then matches the policy only as its tags and loses its user's access, and it can't be turned back into a user device from here."
+                 : "A tagged device must keep at least one tag. The server applies the change immediately.")
                 .font(.system(size: 11))
                 .foregroundStyle(node.allTags.isEmpty ? Theme.orange : Theme.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -504,7 +504,7 @@ struct DeviceTagsSheet: View {
                              suggestions: store.model.tagOrder, items: $tags)
             let undeclared = tags.filter { store.model.tagOwners[$0] == nil }
             if !undeclared.isEmpty {
-                Label("Not in tagOwners: \(undeclared.joined(separator: ", ")) — Headscale may reject it.",
+                Label("Not in tagOwners: \(undeclared.joined(separator: ", ")) — the server may reject it.",
                       systemImage: "exclamationmark.triangle.fill")
                     .font(.system(size: 11))
                     .foregroundStyle(Theme.orange)
@@ -534,12 +534,12 @@ struct DeviceTagsSheet: View {
                             isPresented: $confirming) {
             Button("Apply to server", role: .destructive, action: apply)
         } message: {
-            Text("This changes the device on the Headscale server right away.")
+            Text("This changes the device on \(store.serverDisplayName) right away.")
         }
     }
 
     private func apply() {
-        guard let client = store.headscaleClient() else { return }
+        guard let client = store.serverClient() else { return }
         saving = true
         error = nil
         Task {
@@ -548,7 +548,7 @@ struct DeviceTagsSheet: View {
                 try? await store.refreshNodes()
                 dismiss()
             } catch {
-                self.error = "Headscale refused: \(error.localizedDescription)"
+                self.error = "The server refused: \(error.localizedDescription)"
             }
             saving = false
         }

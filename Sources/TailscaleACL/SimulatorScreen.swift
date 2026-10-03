@@ -23,7 +23,7 @@ struct SimulatorScreen: View {
         let m = store.model
         var sections: [(String, [String])] = []
         if !store.headscaleNodes.isEmpty {
-            sections.append(("Headscale nodes", store.headscaleNodes.map { "node:\($0.id)" }))
+            sections.append(("Devices", store.headscaleNodes.map { "node:\($0.id)" }))
         }
         if !m.allUsers.isEmpty { sections.append(("Users", m.allUsers)) }
         if !m.groupOrder.isEmpty { sections.append(("Groups", m.groupOrder)) }
@@ -70,7 +70,7 @@ struct SimulatorScreen: View {
                             HStack(spacing: 6) {
                                 if loadingNodes { ProgressView().controlSize(.small) }
                                 ToolbarButton(
-                                    label: store.headscaleNodes.isEmpty ? "Load Headscale nodes" : "Refresh nodes",
+                                    label: store.headscaleNodes.isEmpty ? "Load devices" : "Refresh devices",
                                     icon: "arrow.clockwise"
                                 ) { loadNodes() }
                                 .disabled(loadingNodes)
@@ -155,13 +155,13 @@ struct SimulatorScreen: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(Theme.background)
         .onChange(of: store.currentWorkspaceID) {
-            hasServer = store.headscaleClient() != nil
+            hasServer = store.serverClient() != nil
             nodeError = nil
             source = sources.first ?? ""
             dest = store.model.tagOrder.first ?? store.model.hostOrder.first ?? dests.first ?? ""
         }
         .onAppear {
-            hasServer = store.headscaleClient() != nil
+            hasServer = store.serverClient() != nil
             if source.isEmpty { source = sources.first ?? "" }
             if dest.isEmpty {
                 dest = store.model.tagOrder.first
@@ -183,7 +183,7 @@ struct SimulatorScreen: View {
     }
 
     private func loadNodes() {
-        guard let client = store.headscaleClient() else { return }
+        guard let client = store.serverClient() else { return }
         loadingNodes = true
         nodeError = nil
         Task {

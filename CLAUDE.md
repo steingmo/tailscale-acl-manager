@@ -1,15 +1,21 @@
 # Tailscale ACL Manager — project context
 
 Native macOS SwiftUI app for editing, visualizing, simulating, and testing
-Tailscale ACL policies. Offline except Sparkle update checks and an opt-in
-Headscale connection (`Headscale.swift`: REST client + Keychain-stored API
-key; `HeadscaleScreen.swift`: pull, reviewed push, push history/rollback,
-list nodes; `Impact.swift`: node-to-node access diff shown before a push;
-`History.swift`: push history in ~/Library/Application Support/TailscaleACL,
-written *before* each push so a rollback copy always exists; device checks
-in `lintNodes` in `Lint.swift`). Pushing needs
-the server in `policy.mode: database`. ATS allows plain HTTP only to local
-networks (`NSAllowsLocalNetworking`).
+Tailscale ACL policies. Offline except Sparkle update checks and an opt-in,
+per-workspace server connection: self-hosted Headscale or the official
+Tailscale API. `Servers.swift` defines the `PolicyServer` protocol both
+clients implement (`HeadscaleClient` in `Headscale.swift`, `TailscaleClient`
+in `Servers.swift`) — screens only use `PolicyStore.serverClient()`, never a
+concrete client. Tailscale specifics: HuJSON via `Accept: application/hujson`,
+ETag/If-Match on push (412 → refused), `acl/validate` shown in the review,
+OAuth client secrets (tskey-client-<id>-…) exchanged at `oauth/token`, device
+ids are `nodeId`. Headscale pushes need `policy.mode: database`.
+`HeadscaleScreen.swift` is the Server screen (pull, reviewed push, push
+history/rollback, devices); `Impact.swift` diffs node-to-node access before a
+push; `History.swift` writes push history *before* each push. Credentials
+live in the Keychain per workspace (`HeadscaleKeychain`). ATS allows plain
+HTTP only to local networks (`NSAllowsLocalNetworking`). Client tests stub
+the network with `StubProtocol` (URLProtocol), so they run in CI.
 Unofficial community tool, MIT licensed, distributed via GitHub Releases
 and a Homebrew tap (`steingmo/homebrew-tap`, cask `tailscale-acl`).
 

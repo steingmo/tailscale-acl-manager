@@ -30,7 +30,7 @@
 	<key>NSHighResolutionCapable</key>
 	<true/>
 	<key>NSHumanReadableCopyright</key>
-	<string>Local policy editing — network use is limited to update checks and a Headscale server you configure.</string>
+	<string>Local policy editing — network use is limited to update checks and the Headscale or Tailscale server you configure.</string>
 	<key>SUEnableAutomaticChecks</key>
 	<true/>
 	<key>SUFeedURL</key>

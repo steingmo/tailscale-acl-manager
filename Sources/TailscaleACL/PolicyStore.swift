@@ -106,7 +106,7 @@ final class PolicyStore: ObservableObject {
 
     /// Check whether the server's policy changed since the last pull/push.
     func checkServerDrift() async {
-        guard let client = headscaleClient(), let last = currentWorkspace.lastSyncedPolicy else {
+        guard let client = serverClient(), let last = currentWorkspace.lastSyncedPolicy else {
             serverDrift = nil
             return
         }
@@ -131,15 +131,38 @@ final class PolicyStore: ObservableObject {
         saveWorkspaces()
     }
 
-    /// Client for the current workspace's server, or nil if not configured.
-    func headscaleClient() -> HeadscaleClient? {
-        HeadscaleClient.make(serverURL: currentWorkspace.serverURL,
-                             apiKey: HeadscaleKeychain.load(account: currentWorkspaceID.uuidString) ?? "")
+    /// Client for the current workspace's server (Headscale or Tailscale),
+    /// or nil if not configured.
+    func serverClient() -> PolicyServer? {
+        let ws = currentWorkspace
+        return makeServer(kind: ws.kind, serverURL: ws.serverURL, tailnet: ws.tailnet ?? "-",
+                          credential: HeadscaleKeychain.load(account: currentWorkspaceID.uuidString) ?? "")
+    }
+
+    var serverDisplayName: String {
+        let ws = currentWorkspace
+        return serverName(kind: ws.kind, serverURL: ws.serverURL, tailnet: ws.tailnet ?? "-")
+    }
+
+    func setServerKind(_ kind: ServerKind) {
+        guard let i = workspaces.firstIndex(where: { $0.id == currentWorkspaceID }) else { return }
+        workspaces[i].serverKind = kind
+        // Sync state belongs to the previous server.
+        workspaces[i].lastSyncedPolicy = nil
+        serverDrift = nil
+        headscaleNodes = []
+        saveWorkspaces()
+    }
+
+    func setTailnet(_ tailnet: String) {
+        guard let i = workspaces.firstIndex(where: { $0.id == currentWorkspaceID }) else { return }
+        workspaces[i].tailnet = tailnet
+        saveWorkspaces()
     }
 
     /// Reload devices from the current workspace's server, if one is configured.
     func refreshNodes() async throws {
-        guard let client = headscaleClient() else { return }
+        guard let client = serverClient() else { return }
         let workspace = currentWorkspaceID
         let nodes = try await client.listNodes()
         if workspace == currentWorkspaceID { headscaleNodes = nodes }

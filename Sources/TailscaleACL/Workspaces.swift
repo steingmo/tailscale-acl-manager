@@ -10,6 +10,12 @@ struct Workspace: Codable, Identifiable, Equatable {
     /// Server policy text as of the last pull or push, to detect changes made
     /// on the server by someone else before the next push.
     var lastSyncedPolicy: String?
+    /// nil in files from before Tailscale support: Headscale.
+    var serverKind: ServerKind?
+    /// Tailscale tailnet name; "-" (the default) means the key's own tailnet.
+    var tailnet: String?
+
+    var kind: ServerKind { serverKind ?? .headscale }
 }
 
 /// Workspaces persisted in ~/Library/Application Support/TailscaleACL.

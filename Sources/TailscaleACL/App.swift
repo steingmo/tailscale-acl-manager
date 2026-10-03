@@ -31,7 +31,7 @@ enum Screen: String, CaseIterable, Identifiable {
     case tests = "Tests"
     case routes = "Routes"
     case problems = "Problems"
-    case headscale = "Headscale"
+    case headscale = "Server"
 
     var id: String { rawValue }
 
@@ -119,7 +119,7 @@ struct RootView: View {
                             isPresented: $confirmingDelete) {
             Button("Delete", role: .destructive) { store.deleteWorkspace(store.currentWorkspaceID) }
         } message: {
-            Text("Its policy and saved API key are removed from this Mac. The Headscale server itself is not changed.")
+            Text("Its policy and saved API key are removed from this Mac. The server itself is not changed.")
         }
     }
 
@@ -129,7 +129,7 @@ struct RootView: View {
         HStack(spacing: 10) {
             Image(systemName: "exclamationmark.triangle.fill")
                 .foregroundStyle(Theme.orange)
-            Text("The policy on \(URL(string: store.currentWorkspace.serverURL)?.host ?? "the server") changed since your last pull or push.")
+            Text("The policy on \(store.serverDisplayName) changed since your last pull or push.")
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(Theme.textPrimary)
             Spacer()
@@ -184,7 +184,7 @@ struct RootView: View {
         }
         .menuStyle(.borderlessButton)
         .foregroundStyle(Theme.textPrimary)
-        .help("Switch between workspaces — each has its own policy and Headscale server")
+        .help("Switch between workspaces — each has its own policy and Headscale or Tailscale server")
         .padding(.horizontal, 10)
         .padding(.bottom, 8)
     }
@@ -388,7 +388,7 @@ struct WorkspaceSheet: View {
 
     private var detail: String {
         switch mode {
-        case .new: return "Starts with an empty policy and no server. Pull from a Headscale server or import a policy file to fill it."
+        case .new: return "Starts with an empty policy and no server. Pull from a Headscale or Tailscale server, import a policy file, or use Templates to fill it."
         case .duplicate: return "Copies the current policy, server URL, and API key."
         case .rename: return "Only the name changes."
         }

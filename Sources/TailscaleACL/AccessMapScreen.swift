@@ -70,7 +70,7 @@ struct AccessMapScreen: View {
                 if store.isValid && !items.isEmpty {
                     ToolbarButton(label: "Export image", icon: "photo") { exportImage() }
                 }
-                if let node, store.headscaleClient() != nil {
+                if let node, store.serverClient() != nil {
                     ToolbarButton(label: "Edit tags…", icon: "tag") { editingTags = node }
                 }
                 if store.isValid && !items.isEmpty {
@@ -93,7 +93,7 @@ struct AccessMapScreen: View {
                 notice("Fix the policy in the editor to see the access map.")
             } else if items.isEmpty {
                 notice(kind == .device
-                       ? "Load devices from Headscale (Headscale screen or Access Simulator) to map them."
+                       ? "Connect a Headscale or Tailscale server on the Server screen to map your devices."
                        : "The policy has no \(kindName)s. Use Templates to add common setups.")
             } else {
                 ScrollView([.horizontal, .vertical]) { map }

@@ -66,22 +66,20 @@ struct HeadscaleNode: Decodable, Identifiable {
     }
 }
 
-/// Minimal client for the Headscale REST API (`/api/v1`, Bearer API key).
-struct HeadscaleClient {
-    var baseURL: URL
-    var apiKey: String
+/// Client for the Headscale REST API (`/api/v1`, Bearer API key).
+final class HeadscaleClient: PolicyServer {
+    let baseURL: URL
+    private let apiKey: String
+    private let session: URLSession
 
-    struct APIError: LocalizedError {
-        var message: String
-        var errorDescription: String? { message }
+    init(baseURL: URL, apiKey: String, session: URLSession = .shared) {
+        self.baseURL = baseURL
+        self.apiKey = apiKey
+        self.session = session
     }
 
-    /// Client for a server URL + API key, or nil if either is missing/invalid.
-    static func make(serverURL: String, apiKey: String) -> HeadscaleClient? {
-        guard let url = URL(string: serverURL.trimmingCharacters(in: .whitespaces)),
-              url.scheme != nil, url.host != nil, !apiKey.isEmpty else { return nil }
-        return HeadscaleClient(baseURL: url, apiKey: apiKey)
-    }
+    var displayHost: String { serverName(kind: .headscale, serverURL: baseURL.absoluteString, tailnet: "") }
+    var hasValidation: Bool { false }
 
     func getPolicy() async throws -> String {
         struct Response: Decodable { var policy: String? }
@@ -95,13 +93,15 @@ struct HeadscaleClient {
         _ = try await send("PUT", "policy", body: ["policy": policy])
     }
 
-    /// Replace a device's full list of approved routes.
+    /// Headscale has no validate-only endpoint; it validates on push.
+    func validate(_ policy: String) async throws -> String? { nil }
+
     func setApprovedRoutes(nodeID: String, routes: [String]) async throws {
         _ = try await send("POST", "node/\(nodeID)/approve_routes", body: ["routes": routes])
     }
 
-    /// Replace a device's tags. Headscale requires at least one tag, and a
-    /// user-owned device that gets tags becomes a tagged device.
+    /// Headscale requires at least one tag, and a user-owned device that gets
+    /// tags becomes a tagged device.
     func setTags(nodeID: String, tags: [String]) async throws {
         _ = try await send("POST", "node/\(nodeID)/tags", body: ["tags": tags])
     }
@@ -122,22 +122,14 @@ struct HeadscaleClient {
             req.httpBody = try JSONSerialization.data(withJSONObject: body)
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         }
-        let (data, response) = try await URLSession.shared.data(for: req)
-        guard let http = response as? HTTPURLResponse else {
-            throw APIError(message: "No HTTP response from server.")
-        }
-        guard (200..<300).contains(http.statusCode) else {
-            // grpc-gateway errors are {"code": n, "message": "..."}; auth failures are plain text.
-            let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-            let detail = (json?["message"] as? String)
-                ?? String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
-            throw APIError(message: "HTTP \(http.statusCode): \(detail.isEmpty ? "request failed" : detail)")
-        }
+        let (data, response) = try await session.data(for: req)
+        _ = try checkResponse(data, response)
         return data
     }
 }
 
-/// Headscale API keys live in the login keychain (one per workspace id),
+/// Server credentials (Headscale API keys, Tailscale tokens or OAuth client
+/// secrets) live in the login keychain (one per workspace id),
 /// never in UserDefaults or the workspace file.
 enum HeadscaleKeychain {
     /// Account used before workspaces existed; migrated on first launch.

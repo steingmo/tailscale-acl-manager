@@ -61,7 +61,7 @@ struct RoutesScreen: View {
                        role: pending.approve ? nil : .destructive) { apply(pending) }
             }
         } message: {
-            Text("This changes the device on the Headscale server right away.")
+            Text("This changes the device on \(store.serverDisplayName) right away.")
         }
     }
 
@@ -126,7 +126,7 @@ struct RoutesScreen: View {
         let ev = store.evaluator
         return panel("Devices advertising routes",
                      detail: store.headscaleNodes.isEmpty
-                        ? "Load devices from Headscale to see which routes they advertise."
+                        ? "Connect a server on the Server screen to see which routes your devices advertise."
                         : "Green: approved on the server. Orange: not yet approved, but auto-approvers cover it. Gray: needs manual approval.") {
             if let routeError {
                 Label(routeError, systemImage: "xmark.octagon.fill")
@@ -150,13 +150,13 @@ struct RoutesScreen: View {
                                   : auto ? "Not approved yet — auto-approvers cover it"
                                   : "Needs manual approval (no auto-approver covers it)")
                             .contextMenu {
-                                if approved, store.headscaleClient() != nil {
+                                if approved, store.serverClient() != nil {
                                     Button("Remove approval…") {
                                         pending = RouteChange(node: node, routes: group(route, node), approve: false)
                                     }
                                 }
                             }
-                        if !approved, store.headscaleClient() != nil {
+                        if !approved, store.serverClient() != nil {
                             Button("Approve") {
                                 pending = RouteChange(node: node, routes: group(route, node), approve: true)
                             }
@@ -188,7 +188,7 @@ struct RoutesScreen: View {
     }
 
     private func apply(_ change: RouteChange) {
-        guard let client = store.headscaleClient() else { return }
+        guard let client = store.serverClient() else { return }
         let current = change.node.approvedRoutes ?? []
         let next = change.approve ? (current + change.routes).uniqued() : current.filter { !change.routes.contains($0) }
         approving = true
@@ -198,7 +198,7 @@ struct RoutesScreen: View {
                 try await client.setApprovedRoutes(nodeID: change.node.id, routes: next)
                 try? await store.refreshNodes()
             } catch {
-                routeError = "Headscale refused: \(error.localizedDescription)"
+                routeError = "The server refused: \(error.localizedDescription)"
             }
             approving = false
         }

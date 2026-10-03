@@ -3,9 +3,13 @@
 A fully native SwiftUI app for editing, visualizing, simulating, and testing
 Tailscale ACL policies. Local-first: policies only touch disk when you
 explicitly import or export, and the network is used only for update checks
-and — if you configure one — your own [Headscale](https://headscale.net)
-server, where you can pull and push the policy and list nodes (API key kept
-in your Keychain; pushing requires `policy.mode: database`).
+and — if you configure one per workspace — your own
+[Headscale](https://headscale.net) server or a tailnet on the official
+Tailscale API, where you can pull and push the policy (reviewed first), and
+manage device tags and route approvals. Credentials stay in your Keychain.
+Headscale pushes require `policy.mode: database`; for Tailscale, an OAuth
+client with the `policy_file` and `devices` scopes is the recommended
+credential.
 
 Unofficial community tool, not affiliated with or endorsed by Tailscale Inc.
 Licensed under the [MIT License](LICENSE).
