@@ -199,10 +199,12 @@ func ruleSummaries(_ m: PolicyModel, sourceIDs: [String]?, destIDs: [String]? = 
     }
     func strip(_ t: String) -> String { t.hasPrefix("host:") ? String(t.dropFirst(5)) : t }
     func notes(posture: [String], via: [String] = [], expires: String?) -> [String] {
-        let p = posture.isEmpty ? m.defaultSrcPosture : posture
-        return (p.isEmpty ? [] : ["if " + p.joined(separator: " or ")])
-            + (via.isEmpty ? [] : ["via " + via.joined(separator: ", ")])
-            + (expires.map { ["expires \($0)"] } ?? [])
+        var out: [String] = []
+        let required = posture.isEmpty ? m.defaultSrcPosture : posture
+        if !required.isEmpty { out.append("if " + required.joined(separator: " or ")) }
+        if !via.isEmpty { out.append("via " + via.joined(separator: ", ")) }
+        if let expires { out.append("expires " + expires) }
+        return out
     }
 
     var out: [RuleSummary] = []
@@ -213,7 +215,11 @@ func ruleSummaries(_ m: PolicyModel, sourceIDs: [String]?, destIDs: [String]? = 
                                destinations: r.dst.map { strip(DestSpec($0).target) }.uniqued(),
                                notes: notes(posture: r.srcPosture, expires: r.expires)))
     }
-    for g in m.grants where applies(g.src) && reaches(g.dst) {
+    // Indexed rather than `for g in … where …`: the latter crashes the Swift 6.4
+    // optimizer (CopyPropagation ownership error) in release builds.
+    for i in m.grants.indices {
+        let g = m.grants[i]
+        guard applies(g.src), reaches(g.dst) else { continue }
         out.append(RuleSummary(kind: .grant, index: g.index,
                                name: g.comments.first ?? "Grant #\(g.index + 1)",
                                badge: g.ip.isEmpty ? "APP" : badge(g.ip), sources: g.src,
