@@ -22,6 +22,9 @@ final class PolicyStore: ObservableObject {
     /// Set (e.g. by quick search) to make the Access Map focus an entity;
     /// "node:<id>" focuses a device. The map clears it once applied.
     @Published var mapFocusRequest: String?
+    /// The server's policy when it changed since this workspace's last
+    /// pull or push (someone edited it elsewhere); nil when in sync or unknown.
+    @Published var serverDrift: String?
     @Published private(set) var workspaces: [Workspace]
     @Published private(set) var currentWorkspaceID: UUID
     /// The window's undo manager; visual edits register here so Cmd-Z works everywhere.
@@ -44,6 +47,7 @@ final class PolicyStore: ObservableObject {
         currentWorkspaceID = list.first { $0.id == saved }?.id ?? list[0].id
         text = currentWorkspace.policy
         reparseNow()
+        SnapshotStore.record(currentWorkspaceID, text: text, reason: "opened")
     }
 
     // MARK: - Workspaces
@@ -53,8 +57,10 @@ final class PolicyStore: ObservableObject {
         currentWorkspaceID = id
         UserDefaults.standard.set(id.uuidString, forKey: "currentWorkspaceID")
         headscaleNodes = []
+        serverDrift = nil
         text = currentWorkspace.policy
         reparseNow()
+        SnapshotStore.record(id, text: text, reason: "opened")
         undoManager?.removeAllActions() // undo must not cross into another workspace
     }
 
@@ -86,6 +92,7 @@ final class PolicyStore: ObservableObject {
         }
         workspaces.removeAll { $0.id == id }
         HeadscaleKeychain.save("", account: id.uuidString)
+        SnapshotStore.delete(id)
         saveWorkspaces()
     }
 
@@ -94,6 +101,28 @@ final class PolicyStore: ObservableObject {
         guard let i = workspaces.firstIndex(where: { $0.id == currentWorkspaceID }) else { return }
         workspaces[i].lastSyncedPolicy = serverPolicy
         saveWorkspaces()
+        serverDrift = nil
+    }
+
+    /// Check whether the server's policy changed since the last pull/push.
+    func checkServerDrift() async {
+        guard let client = headscaleClient(), let last = currentWorkspace.lastSyncedPolicy else {
+            serverDrift = nil
+            return
+        }
+        let workspace = currentWorkspaceID
+        guard let current = try? await client.getPolicy(), workspace == currentWorkspaceID else { return }
+        serverDrift = current == last ? nil : current
+    }
+
+    /// Save the current policy as a snapshot (skipped if unchanged since the last one).
+    func snapshot(reason: String) {
+        SnapshotStore.record(currentWorkspaceID, text: text, reason: reason)
+    }
+
+    /// Add a template's rules and definitions in one undoable step.
+    func applyTemplate(_ template: PolicyTemplate, values: [String: String]) {
+        mutate { template.apply(&$0, values) }
     }
 
     func setServerURL(_ url: String) {
@@ -184,7 +213,7 @@ final class PolicyStore: ObservableObject {
     }
 
     func reset() {
-        replaceText(SamplePolicy.text)
+        loadPolicy(SamplePolicy.text, reason: "reset")
     }
 
     // MARK: - Clipboard / files
@@ -201,12 +230,15 @@ final class PolicyStore: ObservableObject {
         panel.message = "Choose a Tailscale ACL policy file (HuJSON)"
         if panel.runModal() == .OK, let url = panel.url,
            let contents = try? String(contentsOf: url, encoding: .utf8) {
-            loadPolicy(contents)
+            loadPolicy(contents, reason: "imported")
         }
     }
 
     /// Replace the whole policy (import, Headscale pull) and parse immediately.
-    func loadPolicy(_ contents: String) {
+    /// Snapshots what's being replaced and the result, so both can be restored.
+    func loadPolicy(_ contents: String, reason: String = "replaced") {
+        snapshot(reason: "before \(reason)")
+        defer { snapshot(reason: reason) }
         replaceText(contents)
     }
 
@@ -217,8 +249,22 @@ final class PolicyStore: ObservableObject {
         panel.nameFieldStringValue = "\(currentWorkspace.name) access report.md"
         panel.message = "Export an access report (groups, tags, devices, rules, who can reach what)"
         if panel.runModal() == .OK, let url = panel.url {
+            // One access-map image per group and tag, in a folder next to the report.
+            let folderName = url.deletingPathExtension().lastPathComponent + " images"
+            let folder = url.deletingLastPathComponent().appendingPathComponent(folderName, isDirectory: true)
+            try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            var images: [(title: String, path: String)] = []
+            let entities = model.groupOrder.map { (AccessMapScreen.Kind.group, $0) }
+                + model.tagOrder.map { (AccessMapScreen.Kind.tag, $0) }
+            for (kind, name) in entities {
+                let file = name.replacingOccurrences(of: ":", with: "-") + ".png"
+                if let png = renderPNG(AccessMapScreen(focus: kind, name).environmentObject(self)),
+                   (try? png.write(to: folder.appendingPathComponent(file))) != nil {
+                    images.append((name, "\(folderName)/\(file)"))
+                }
+            }
             let report = policyReport(workspace: currentWorkspace.name, model: model,
-                                      nodes: headscaleNodes, problems: lintIssues)
+                                      nodes: headscaleNodes, problems: lintIssues, mapImages: images)
             try? report.write(to: url, atomically: true, encoding: .utf8)
         }
     }
@@ -436,6 +482,20 @@ final class PolicyStore: ObservableObject {
             guard var list = tree[section]?.elements, list.indices.contains(index) else { return }
             list.remove(at: index)
             tree[section] = .array(list)
+        }
+    }
+
+    /// Apply a one-click fix from the Problems screen (undoable).
+    func apply(_ action: LintFix.Action) {
+        switch action {
+        case .addTagOwner(let tag):
+            addEntity(kind: .tag, name: tag, address: "")
+        case .defineGroup(let group):
+            addEntity(kind: .group, name: group, address: "")
+        case .deleteEntity(let name):
+            deleteEntity(name)
+        case .deleteRule(let section, let index):
+            deleteRule(section: section, index: index)
         }
     }
 

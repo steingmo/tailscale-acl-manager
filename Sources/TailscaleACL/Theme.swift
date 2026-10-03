@@ -173,3 +173,13 @@ struct PillTabs<T: Hashable>: View {
         .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.panelBorder, lineWidth: 1))
     }
 }
+
+/// Render a view to PNG data at 2x, in the app's dark appearance.
+@MainActor
+func renderPNG<V: View>(_ view: V) -> Data? {
+    let renderer = ImageRenderer(content: view.environment(\.colorScheme, .dark))
+    renderer.scale = 2
+    guard let image = renderer.nsImage, let tiff = image.tiffRepresentation,
+          let rep = NSBitmapImageRep(data: tiff) else { return nil }
+    return rep.representation(using: .png, properties: [:])
+}

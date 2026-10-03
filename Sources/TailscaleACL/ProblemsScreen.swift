@@ -69,6 +69,16 @@ struct ProblemsScreen: View {
                     .font(.system(size: 11.5))
                     .foregroundStyle(Theme.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
+                if !issue.fixes.isEmpty {
+                    HStack(spacing: 6) {
+                        ForEach(issue.fixes) { fix in
+                            Button(fix.label) { store.apply(fix.action) }
+                                .font(.system(size: 11))
+                                .help("Applies the fix to the policy — undo with ⌘Z")
+                        }
+                    }
+                    .padding(.top, 3)
+                }
             }
             Spacer()
         }

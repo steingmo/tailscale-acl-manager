@@ -298,3 +298,37 @@ func generateTests(_ m: PolicyModel, sources: [String]) -> [ACLTest] {
         return accept.isEmpty && deny.isEmpty ? nil : ACLTest(index: 0, src: s, accept: accept, deny: deny)
     }
 }
+
+// MARK: - Failing test explanation
+
+/// Why a test assertion fails. For an unexpected allow: the rules that allow
+/// it. For a missing allow: the rules that reach the destination, split into
+/// "from this source but not this port" and "not from this source".
+func explainFailure(_ m: PolicyModel, src: String, entry: String,
+                    expectAllowed: Bool) -> (summary: String, rules: [RuleSummary]) {
+    let ev = Evaluator(model: m)
+    let d = DestSpec(entry)
+    let port = Int(d.ports) ?? 0
+    let all = ruleSummaries(m, sourceIDs: nil)
+    // Rule names come from comments, which often end with a period.
+    func names(_ rules: [RuleSummary]) -> String {
+        rules.map { $0.name.hasSuffix(".") ? String($0.name.dropLast()) : $0.name }.joined(separator: "; ")
+    }
+    if !expectAllowed {
+        let matches = ev.evaluate(sourceID: src, destID: d.target, port: port).matches
+        let rules = all.filter { r in
+            matches.contains { ($0.kind == .grant ? RuleSummary.Kind.grant : .acl) == r.kind && $0.ruleIndex == r.index }
+        }
+        return ("Allowed by \(names(rules)).", rules)
+    }
+    let reaching = ruleSummaries(m, sourceIDs: nil, destIDs: [d.target]).filter { $0.kind != .ssh }
+    let fromSource = reaching.filter { r in r.sources.contains { ev.sourceMatches(spec: $0, sourceID: src) } }
+    if !fromSource.isEmpty {
+        return ("\(src) reaches \(d.target) through \(names(fromSource)), but not on port \(d.ports).",
+                fromSource)
+    }
+    if !reaching.isEmpty {
+        return ("Rules reach \(d.target), but none from \(src).", Array(reaching.prefix(4)))
+    }
+    return ("No rule reaches \(d.target) at all.", [])
+}

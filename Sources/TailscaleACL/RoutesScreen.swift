@@ -6,6 +6,15 @@ struct RoutesScreen: View {
     @EnvironmentObject var store: PolicyStore
     @State private var editingApprovers: ApproverEdit?
     @State private var editingAttr: AttrEdit?
+    @State private var pending: RouteChange?
+    @State private var routeError: String?
+    @State private var approving = false
+
+    struct RouteChange {
+        var node: HeadscaleNode
+        var routes: [String]   // routes to add or remove (exit node = both 0.0.0.0/0 and ::/0)
+        var approve: Bool
+    }
 
     struct ApproverEdit: Identifiable {
         let id = UUID()
@@ -45,6 +54,15 @@ struct RoutesScreen: View {
         .background(Theme.background)
         .sheet(item: $editingApprovers) { ApproverSheet(edit: $0) }
         .sheet(item: $editingAttr) { NodeAttrSheet(index: $0.index) }
+        .confirmationDialog(pendingTitle, isPresented: Binding(get: { pending != nil },
+                                                               set: { if !$0 { pending = nil } })) {
+            if let pending {
+                Button(pending.approve ? "Approve on server" : "Remove approval on server",
+                       role: pending.approve ? nil : .destructive) { apply(pending) }
+            }
+        } message: {
+            Text("This changes the device on the Headscale server right away.")
+        }
     }
 
     // MARK: - Panels
@@ -110,6 +128,12 @@ struct RoutesScreen: View {
                      detail: store.headscaleNodes.isEmpty
                         ? "Load devices from Headscale to see which routes they advertise."
                         : "Green: approved on the server. Orange: not yet approved, but auto-approvers cover it. Gray: needs manual approval.") {
+            if let routeError {
+                Label(routeError, systemImage: "xmark.octagon.fill")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Theme.red)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             if !store.headscaleNodes.isEmpty && routers.isEmpty {
                 Text("No device advertises routes.").font(.system(size: 11.5)).foregroundStyle(Theme.textSecondary)
             }
@@ -122,11 +146,61 @@ struct RoutesScreen: View {
                         let approved = (node.approvedRoutes ?? []).contains(route)
                         let auto = ev.autoApproves(route: route, node: node)
                         Chip(text: route, color: approved ? Theme.green : auto ? Theme.orange : Theme.textSecondary)
-                            .help(approved ? "Approved" : auto ? "Not approved yet — auto-approvers cover it"
+                            .help(approved ? "Approved — right-click to remove approval"
+                                  : auto ? "Not approved yet — auto-approvers cover it"
                                   : "Needs manual approval (no auto-approver covers it)")
+                            .contextMenu {
+                                if approved, store.headscaleClient() != nil {
+                                    Button("Remove approval…") {
+                                        pending = RouteChange(node: node, routes: group(route, node), approve: false)
+                                    }
+                                }
+                            }
+                        if !approved, store.headscaleClient() != nil {
+                            Button("Approve") {
+                                pending = RouteChange(node: node, routes: group(route, node), approve: true)
+                            }
+                            .font(.system(size: 10.5))
+                            .buttonStyle(.borderless)
+                            .disabled(approving)
+                        }
                     }
                 } actions: { EmptyView() }
             }
+        }
+    }
+
+    // MARK: - Route approval
+
+    private static let exitRoutes: Set<String> = ["0.0.0.0/0", "::/0"]
+
+    /// An exit-node route is approved together with its IPv4/IPv6 twin.
+    private func group(_ route: String, _ node: HeadscaleNode) -> [String] {
+        guard Self.exitRoutes.contains(route) else { return [route] }
+        return (node.availableRoutes ?? []).filter { Self.exitRoutes.contains($0) }
+    }
+
+    private var pendingTitle: String {
+        guard let pending else { return "" }
+        let what = pending.routes.contains("0.0.0.0/0") ? "exit node" : pending.routes.joined(separator: ", ")
+        return pending.approve ? "Approve \(what) for \(pending.node.displayName)?"
+            : "Remove approval of \(what) for \(pending.node.displayName)?"
+    }
+
+    private func apply(_ change: RouteChange) {
+        guard let client = store.headscaleClient() else { return }
+        let current = change.node.approvedRoutes ?? []
+        let next = change.approve ? (current + change.routes).uniqued() : current.filter { !change.routes.contains($0) }
+        approving = true
+        routeError = nil
+        Task {
+            do {
+                try await client.setApprovedRoutes(nodeID: change.node.id, routes: next)
+                try? await store.refreshNodes()
+            } catch {
+                routeError = "Headscale refused: \(error.localizedDescription)"
+            }
+            approving = false
         }
     }
 

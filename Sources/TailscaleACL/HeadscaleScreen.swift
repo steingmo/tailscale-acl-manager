@@ -70,7 +70,8 @@ struct HeadscaleScreen: View {
                 PushReviewSheet(client: client, candidate: candidate) {
                     history = PushHistory.load()
                     store.markSynced(candidate.text)
-                    if candidate.isRestore { store.loadPolicy(candidate.text) }
+                    if candidate.isRestore { store.loadPolicy(candidate.text, reason: "restored") }
+                    store.snapshot(reason: candidate.isRestore ? "restored on server" : "pushed")
                     status = (true, candidate.isRestore
                               ? "Restored — the server and editor now have the earlier policy."
                               : "Pushed — Headscale accepted and applied the policy.")
@@ -84,8 +85,8 @@ struct HeadscaleScreen: View {
                             isPresented: Binding(get: { openingRecord != nil },
                                                  set: { if !$0 { openingRecord = nil } })) {
             if let record = openingRecord {
-                Button("Open the version before this push") { store.loadPolicy(record.before) }
-                Button("Open the version that was pushed") { store.loadPolicy(record.pushed) }
+                Button("Open the version before this push") { store.loadPolicy(record.before, reason: "opened from push history") }
+                Button("Open the version that was pushed") { store.loadPolicy(record.pushed, reason: "opened from push history") }
             }
         } message: {
             Text("Unsaved edits in the editor will be lost.")
@@ -294,7 +295,7 @@ struct HeadscaleScreen: View {
         run { client in
             let policy = try await client.getPolicy()
             guard !policy.isEmpty else { return "Server returned an empty policy — editor left unchanged." }
-            store.loadPolicy(policy)
+            store.loadPolicy(policy, reason: "pulled")
             store.markSynced(policy)
             store.headscaleNodes = try await client.listNodes()
             return "Pulled policy and \(store.headscaleNodes.count) devices."

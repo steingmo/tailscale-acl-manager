@@ -6,8 +6,23 @@ struct LintIssue: Identifiable {
     var severity: Severity
     var title: String
     var detail: String
+    /// One-click fixes, when the right fix is unambiguous.
+    var fixes: [LintFix] = []
 
     var id: String { "\(severity)-\(title)-\(detail)" }
+}
+
+struct LintFix: Identifiable {
+    enum Action {
+        case addTagOwner(String)          // tagOwners[tag] = []
+        case defineGroup(String)          // groups[group] = []
+        case deleteEntity(String)         // definition + every reference
+        case deleteRule(section: String, index: Int)
+    }
+
+    var label: String
+    var action: Action
+    var id: String { label }
 }
 
 /// Offline structure checks: undefined references, ownerless tags, unused
@@ -60,17 +75,21 @@ func lintPolicy(_ m: PolicyModel) -> [LintIssue] {
         if name.hasPrefix("group:") {
             if m.groups[name] == nil {
                 issues.append(.init(severity: .error, title: "Undefined group",
-                                    detail: "\(name) is referenced in \(where_) but not defined in \"groups\"."))
+                                    detail: "\(name) is referenced in \(where_) but not defined in \"groups\".",
+                                    fixes: [.init(label: "Define empty group", action: .defineGroup(name)),
+                                            .init(label: "Remove from rules", action: .deleteEntity(name))]))
             }
         } else if name.hasPrefix("tag:") {
             if m.tagOwners[name] == nil {
                 issues.append(.init(severity: .error, title: "Tag without owner",
-                                    detail: "\(name) is referenced in \(where_) but has no entry in \"tagOwners\"."))
+                                    detail: "\(name) is referenced in \(where_) but has no entry in \"tagOwners\".",
+                                    fixes: [.init(label: "Add to tagOwners", action: .addTagOwner(name))]))
             }
         } else if name.hasPrefix("ipset:") {
             if m.ipsets[name] == nil {
                 issues.append(.init(severity: .error, title: "Undefined IP set",
-                                    detail: "\(name) is referenced in \(where_) but not defined in \"ipsets\"."))
+                                    detail: "\(name) is referenced in \(where_) but not defined in \"ipsets\".",
+                                    fixes: [.init(label: "Remove from rules", action: .deleteEntity(name))]))
             }
         } else if m.hosts[name] == nil {
             issues.append(.init(severity: .error, title: "Unknown host",
@@ -84,19 +103,23 @@ func lintPolicy(_ m: PolicyModel) -> [LintIssue] {
     })
     for g in m.groupOrder where !referenced.contains(g) {
         issues.append(.init(severity: .warning, title: "Unused group",
-                            detail: "\(g) is defined but never used in any rule, grant, SSH rule, tag owner, or test."))
+                            detail: "\(g) is defined but never used in any rule, grant, SSH rule, tag owner, or test.",
+                            fixes: [.init(label: "Delete \(g)", action: .deleteEntity(g))]))
     }
     for t in m.tagOrder where !referenced.contains(t) {
         issues.append(.init(severity: .warning, title: "Unused tag",
-                            detail: "\(t) has owners but is never used in any rule, grant, SSH rule, or test."))
+                            detail: "\(t) has owners but is never used in any rule, grant, SSH rule, or test.",
+                            fixes: [.init(label: "Delete \(t)", action: .deleteEntity(t))]))
     }
     for h in m.hostOrder where !referenced.contains(h) {
         issues.append(.init(severity: .warning, title: "Unused host",
-                            detail: "Host \"\(h)\" is defined but never referenced."))
+                            detail: "Host \"\(h)\" is defined but never referenced.",
+                            fixes: [.init(label: "Delete \(h)", action: .deleteEntity(h))]))
     }
     for s in m.ipsetOrder where !referenced.contains(s) {
         issues.append(.init(severity: .warning, title: "Unused IP set",
-                            detail: "\(s) is defined but never referenced."))
+                            detail: "\(s) is defined but never referenced.",
+                            fixes: [.init(label: "Delete \(s)", action: .deleteEntity(s))]))
     }
 
     // --- Empty groups ------------------------------------------------------
@@ -163,7 +186,8 @@ func lintPolicy(_ m: PolicyModel) -> [LintIssue] {
                 || a.ip.allSatisfy { b.ip.contains($0) }
             if dstCovered && ipCovered && (b.index < a.index || !srcCovered(b.src, by: a.src)) {
                 issues.append(.init(severity: .warning, title: "Shadowed grant",
-                                    detail: "grants[\(a.index)] (\(a.src.joined(separator: ", ")) → \(a.dst.joined(separator: ", "))) is already fully covered by grants[\(b.index)]."))
+                                    detail: "grants[\(a.index)] (\(a.src.joined(separator: ", ")) → \(a.dst.joined(separator: ", "))) is already fully covered by grants[\(b.index)].",
+                                    fixes: [.init(label: "Delete grants[\(a.index)]", action: .deleteRule(section: "grants", index: a.index))]))
             }
         }
     }
@@ -180,7 +204,8 @@ func lintPolicy(_ m: PolicyModel) -> [LintIssue] {
             }
             if covered && (b.index < a.index || !srcCovered(b.src, by: a.src)) {
                 issues.append(.init(severity: .warning, title: "Shadowed rule",
-                                    detail: "acls[\(a.index)] is already fully covered by acls[\(b.index)]."))
+                                    detail: "acls[\(a.index)] is already fully covered by acls[\(b.index)].",
+                                    fixes: [.init(label: "Delete acls[\(a.index)]", action: .deleteRule(section: "acls", index: a.index))]))
             }
         }
     }
@@ -239,12 +264,14 @@ func lintNodes(_ m: PolicyModel, nodes: [HeadscaleNode]) -> [LintIssue] {
 
     for tag in m.tagOrder where !deviceTags.contains(tag) {
         issues.append(.init(severity: .warning, title: "Tag not on any device",
-                            detail: "\(tag) is defined in \"tagOwners\" but no current device carries it — possibly left over from a retired device."))
+                            detail: "\(tag) is defined in \"tagOwners\" but no current device carries it — possibly left over from a retired device.",
+                            fixes: [.init(label: "Delete \(tag)", action: .deleteEntity(tag))]))
     }
     for node in nodes {
         for tag in node.allTags where m.tagOwners[tag] == nil {
             issues.append(.init(severity: .warning, title: "Undeclared device tag",
-                                detail: "Device \(node.displayName) carries \(tag), which has no entry in \"tagOwners\"."))
+                                detail: "Device \(node.displayName) carries \(tag), which has no entry in \"tagOwners\".",
+                                fixes: [.init(label: "Add to tagOwners", action: .addTagOwner(tag))]))
         }
     }
 

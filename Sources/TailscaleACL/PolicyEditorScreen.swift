@@ -3,6 +3,7 @@ import SwiftUI
 struct PolicyEditorScreen: View {
     @EnvironmentObject var store: PolicyStore
     @State private var confirmingReset = false
+    @State private var showingHistory = false
     @State private var copied = false
 
     var body: some View {
@@ -27,6 +28,10 @@ struct PolicyEditorScreen: View {
                 ToolbarButton(label: "Export", icon: "square.and.arrow.down") {
                     store.exportToFile()
                 }
+                ToolbarButton(label: "History", icon: "clock.arrow.circlepath") {
+                    showingHistory = true
+                }
+                .help("Saved versions of this workspace's policy")
                 ToolbarButton(label: "Report", icon: "doc.richtext") {
                     store.exportReport()
                 }
@@ -61,10 +66,11 @@ struct PolicyEditorScreen: View {
             }
         }
         .background(Theme.background)
+        .sheet(isPresented: $showingHistory) { HistorySheet() }
         .confirmationDialog("Reset to the sample policy?", isPresented: $confirmingReset) {
             Button("Reset", role: .destructive) { store.reset() }
         } message: {
-            Text("This replaces the current policy with the built-in example. This cannot be undone.")
+            Text("This replaces the current policy with the built-in example. Undo with ⌘Z, or restore it later from History.")
         }
     }
 

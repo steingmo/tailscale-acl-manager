@@ -4,6 +4,7 @@ struct TestsScreen: View {
     @EnvironmentObject var store: PolicyStore
     @State private var showingAddTest = false
     @State private var generated: [ACLTest]?
+    @State private var editingRule: RuleSummary?
 
     var body: some View {
         let results = store.testResults
@@ -66,6 +67,7 @@ struct TestsScreen: View {
         } message: {
             Text(generationSourceNote + " Each test lists the tag and host ports a source reaches today, and the ports others reach there that it can't. You can undo this with ⌘Z.")
         }
+        .sheet(item: $editingRule) { RuleSheet(existing: $0) }
         .sheet(isPresented: $showingAddTest) {
             AddTestSheet()
         }
@@ -149,6 +151,7 @@ struct TestsScreen: View {
 
             VStack(alignment: .leading, spacing: 6) {
                 ForEach(result.assertions) { assertion in
+                    VStack(alignment: .leading, spacing: 4) {
                     HStack(spacing: 8) {
                         Image(systemName: assertion.passed ? "checkmark" : "xmark")
                             .font(.system(size: 10.5, weight: .bold))
@@ -164,6 +167,24 @@ struct TestsScreen: View {
                                 .font(.system(size: 10.5))
                                 .foregroundStyle(Theme.red)
                         }
+                    }
+                    if !assertion.passed {
+                        let why = explainFailure(store.model, src: result.src, entry: assertion.dst,
+                                                 expectAllowed: assertion.kind == .accept)
+                        HStack(alignment: .firstTextBaseline, spacing: 6) {
+                            Text(verbatim: why.summary)
+                                .font(.system(size: 10.5))
+                                .foregroundStyle(Theme.textSecondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                            ForEach(why.rules) { rule in
+                                Button("Edit \u{201C}\(rule.name.count > 24 ? String(rule.name.prefix(23)) + "…" : rule.name)\u{201D}") {
+                                    editingRule = rule
+                                }
+                                .font(.system(size: 10.5))
+                            }
+                        }
+                        .padding(.leading, 20)
+                    }
                     }
                 }
             }

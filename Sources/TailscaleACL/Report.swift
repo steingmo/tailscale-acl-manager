@@ -3,7 +3,8 @@ import Foundation
 /// Markdown documentation of a policy: groups, tags, devices, rules, who can
 /// reach what, and open problems. For audits and customer documentation.
 func policyReport(workspace: String, model m: PolicyModel, nodes: [HeadscaleNode],
-                  problems: [LintIssue], date: Date = Date()) -> String {
+                  problems: [LintIssue], mapImages: [(title: String, path: String)] = [],
+                  date: Date = Date()) -> String {
     func cell(_ s: String) -> String { s.isEmpty ? "—" : s.replacingOccurrences(of: "|", with: "\\|") }
     func list(_ a: [String]) -> String { cell(a.joined(separator: ", ")) }
     let rules = ruleSummaries(m, sourceIDs: nil)
@@ -63,6 +64,14 @@ func policyReport(workspace: String, model m: PolicyModel, nodes: [HeadscaleNode
             for r in applying {
                 out.append("- \(r.destinations.joined(separator: ", ")) · \(r.badge) (\(r.name))")
             }
+        }
+    }
+
+    if !mapImages.isEmpty {
+        out += ["", "## Access maps"]
+        for image in mapImages {
+            // Angle brackets keep paths with spaces valid in Markdown.
+            out += ["", "### \(image.title)", "", "![\(image.title)](<\(image.path)>)"]
         }
     }
 

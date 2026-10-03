@@ -51,7 +51,20 @@ Swift Package (no Xcode project). All source in `Sources/TailscaleACL/`:
   `POST /api/v1/node/{id}/tags` (Headscale requires ≥1 tag).
 - Port comparisons (push review, device matrix) use `portIntervals`: every
   named port range cut into atomic intervals, one probe each, so changes
-  inside ranges are exact. `generateTests` pins current access as tests. Visual builder draws ACL connections
+  inside ranges are exact. `generateTests` pins current access as tests;
+  `explainFailure` says why a test assertion fails.
+- `LintIssue.fixes` are one-click fixes applied by `PolicyStore.apply`.
+- `Snapshots.swift`: per-workspace version history (<data>/snapshots/),
+  recorded on open and around every whole-policy replacement
+  (`loadPolicy(_:reason:)`), pushes, and by hand.
+- `Templates.swift`: `policyTemplates`, pure tree edits applied in one
+  undoable `mutate`. Every template must lint error-free (tested).
+- `PolicyStore.checkServerDrift` runs when a workspace opens; the root view
+  shows a banner when the server changed since the last pull/push.
+- Routes: `HeadscaleClient.setApprovedRoutes` replaces a device's whole
+  approved list; exit-node routes are approved as a 0.0.0.0/0 + ::/0 pair.
+- `AccessMapScreen(focus:_:direction:)` renders just the map; `renderPNG`
+  turns it into an image (map export, per-group/tag images in reports). Visual builder draws ACL connections
   blue, grants green. Matrix cells are clickable (add/edit/remove access
   via the shared `ConnectionSheet` in `SharedSheets.swift`).
 - `Lint.swift` — pure `lintPolicy(model)`: undefined references, ownerless

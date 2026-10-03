@@ -95,6 +95,11 @@ struct HeadscaleClient {
         _ = try await send("PUT", "policy", body: ["policy": policy])
     }
 
+    /// Replace a device's full list of approved routes.
+    func setApprovedRoutes(nodeID: String, routes: [String]) async throws {
+        _ = try await send("POST", "node/\(nodeID)/approve_routes", body: ["routes": routes])
+    }
+
     /// Replace a device's tags. Headscale requires at least one tag, and a
     /// user-owned device that gets tags becomes a tagged device.
     func setTags(nodeID: String, tags: [String]) async throws {

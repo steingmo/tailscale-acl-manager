@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 /// Focused map in the style of NetBird's control center: pick one device,
 /// user, group, or tag and see every rule that applies to it fanning out to
@@ -12,9 +13,23 @@ struct AccessMapScreen: View {
     @State private var adding = false
     @State private var direction: Direction = .reaches
     @State private var editingTags: HeadscaleNode?
+    @State private var showingTemplates = false
 
     enum Kind: Hashable { case device, user, group, tag, host, ipset }
     enum Direction: Hashable { case reaches, reachedBy }
+
+    /// Renders just the map (no header or scrolling), for image export.
+    private var imageOnly = false
+
+    init() {}
+
+    /// A map pinned to one entity, for image export.
+    init(focus kind: Kind, _ selection: String, direction: Direction = .reaches) {
+        _kind = State(initialValue: kind)
+        _selection = State(initialValue: selection)
+        _direction = State(initialValue: direction)
+        imageOnly = true
+    }
 
     // MARK: - Layout constants
 
@@ -28,6 +43,14 @@ struct AccessMapScreen: View {
     private var canvasWidth: CGFloat { destX + destSize.width + 24 }
 
     var body: some View {
+        if imageOnly {
+            map.background(Theme.background)
+        } else {
+            screen
+        }
+    }
+
+    private var screen: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
                 VStack(alignment: .leading, spacing: 3) {
@@ -41,6 +64,12 @@ struct AccessMapScreen: View {
                         .foregroundStyle(Theme.textSecondary)
                 }
                 Spacer()
+                if store.isValid {
+                    ToolbarButton(label: "Templates", icon: "square.grid.2x2") { showingTemplates = true }
+                }
+                if store.isValid && !items.isEmpty {
+                    ToolbarButton(label: "Export image", icon: "photo") { exportImage() }
+                }
                 if let node, store.headscaleClient() != nil {
                     ToolbarButton(label: "Edit tags…", icon: "tag") { editingTags = node }
                 }
@@ -65,7 +94,7 @@ struct AccessMapScreen: View {
             } else if items.isEmpty {
                 notice(kind == .device
                        ? "Load devices from Headscale (Headscale screen or Access Simulator) to map them."
-                       : "The policy has no \(kindName)s.")
+                       : "The policy has no \(kindName)s. Use Templates to add common setups.")
             } else {
                 ScrollView([.horizontal, .vertical]) { map }
             }
@@ -85,6 +114,7 @@ struct AccessMapScreen: View {
                 : RuleSheet(existing: nil, prefillDestination: policyName)
         }
         .sheet(item: $editingTags) { DeviceTagsSheet(node: $0) }
+        .sheet(isPresented: $showingTemplates) { TemplatesSheet() }
     }
 
     private var tabs: [(value: Kind, label: String, icon: String)] {
@@ -123,6 +153,15 @@ struct AccessMapScreen: View {
     private func validateSelection() {
         if !tabs.contains(where: { $0.value == kind }) { kind = .group }
         if !items.contains(selection) { selection = items.first ?? "" }
+    }
+
+    private func exportImage() {
+        let image = AccessMapScreen(focus: kind, selection, direction: direction).environmentObject(store)
+        guard let png = renderPNG(image) else { return }
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.png]
+        panel.nameFieldStringValue = "\(title(selection).replacingOccurrences(of: ":", with: "-")) access map.png"
+        if panel.runModal() == .OK, let url = panel.url { try? png.write(to: url) }
     }
 
     /// Focus the map on an entity name ("node:<id>" for a device).

@@ -63,10 +63,12 @@ struct RootView: View {
     enum Overlay: Identifiable {
         case search
         case rule(RuleSummary)
+        case compare(DiffPresentation)
         var id: String {
             switch self {
             case .search: return "search"
             case .rule(let r): return "rule-\(r.id)"
+            case .compare(let d): return "compare-\(d.id)"
             }
         }
     }
@@ -77,15 +79,21 @@ struct RootView: View {
             sidebar
             Divider()
                 .overlay(Theme.panelBorder)
-            content
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            VStack(spacing: 0) {
+                if let server = store.serverDrift { driftBanner(server) }
+                content
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .background(Theme.background)
         .preferredColorScheme(.dark)
         .frame(minWidth: 980, minHeight: 620)
         .onAppear { store.undoManager = undoManager }
         // Load devices for the open workspace so device views work without a manual refresh.
-        .task(id: store.currentWorkspaceID) { try? await store.refreshNodes() }
+        .task(id: store.currentWorkspaceID) {
+            try? await store.refreshNodes()
+            await store.checkServerDrift()
+        }
         .onChange(of: undoManager) { store.undoManager = undoManager }
         .sheet(item: $workspaceSheet) { WorkspaceSheet(mode: $0) }
         .sheet(item: $overlay) { item in
@@ -103,6 +111,8 @@ struct RootView: View {
                 }
             case .rule(let rule):
                 RuleSheet(existing: rule)
+            case .compare(let diff):
+                DiffSheet(diff: diff)
             }
         }
         .confirmationDialog("Delete workspace \u{201C}\(store.currentWorkspace.name)\u{201D}?",
@@ -111,6 +121,41 @@ struct RootView: View {
         } message: {
             Text("Its policy and saved API key are removed from this Mac. The Headscale server itself is not changed.")
         }
+    }
+
+    /// Shown when the server's policy changed since this workspace's last
+    /// pull or push — someone edited it elsewhere.
+    private func driftBanner(_ server: String) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(Theme.orange)
+            Text("The policy on \(URL(string: store.currentWorkspace.serverURL)?.host ?? "the server") changed since your last pull or push.")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(Theme.textPrimary)
+            Spacer()
+            Button("Compare") {
+                overlay = .compare(DiffPresentation(title: "Changes made on the server",
+                                                    oldLabel: "at your last pull/push", newLabel: "on the server now",
+                                                    old: store.currentWorkspace.lastSyncedPolicy ?? "", new: server))
+            }
+            Button("Pull") {
+                store.loadPolicy(server, reason: "pulled")
+                store.markSynced(server)
+            }
+            .help("Replace the editor with the server's policy (undo with ⌘Z)")
+            Button {
+                store.serverDrift = nil
+            } label: {
+                Image(systemName: "xmark")
+            }
+            .buttonStyle(.borderless)
+            .help("Hide until the workspace is opened again")
+        }
+        .font(.system(size: 11.5))
+        .padding(.horizontal, 16)
+        .padding(.vertical, 9)
+        .background(Theme.orange.opacity(0.12))
+        .overlay(Rectangle().fill(Theme.orange.opacity(0.35)).frame(height: 1), alignment: .bottom)
     }
 
     private var workspaceMenu: some View {
