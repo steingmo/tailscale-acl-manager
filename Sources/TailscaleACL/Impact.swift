@@ -18,21 +18,16 @@ let otherPortsLabel = "other ports"
 let otherLoginsLabel = "other users"
 
 /// Diff node-to-node access between `old` and `new`.
-/// ponytail: probes only ports named in either policy (singles and range
-/// endpoints) plus one unnamed port standing in for "everything else", on
-/// TCP/UDP; SSH is probed for root, every login named in either policy, and
-/// one unnamed non-root login. A change strictly inside a port range, ICMP-only
-/// rules, and accept↔check action changes are not detected.
+/// Ports are compared exactly: every port range named in either policy is cut
+/// into intervals where access can't vary, and one port per interval is
+/// probed. Ranges not named anywhere collapse into "other ports". SSH is
+/// probed for root, every login named in either policy, and one unnamed
+/// non-root login. ICMP-only rules and accept↔check changes aren't compared.
 func accessChanges(from old: PolicyModel, to new: PolicyModel,
                    nodes: [HeadscaleNode]) -> [AccessChange] {
-    var named = mentionedPorts(old).union(mentionedPorts(new))
-    let unnamed = (1...65535).first { !named.contains($0) } ?? 0
-    named.insert(unnamed)
-    let probes = named.sorted()
-
+    let intervals = portIntervals([old, new])
     let before = Evaluator(model: old)
     let after = Evaluator(model: new)
-    func label(_ p: Int) -> String { p == unnamed ? otherPortsLabel : String(p) }
 
     var logins = Set((old.sshRules + new.sshRules).flatMap(\.users).filter { !$0.hasPrefix("autogroup:") })
     logins.insert("root")
@@ -46,13 +41,14 @@ func accessChanges(from old: PolicyModel, to new: PolicyModel,
     var changes: [AccessChange] = []
     for s in nodes {
         for d in nodes where d.id != s.id {
-            var gained: [String] = []
-            var lost: [String] = []
-            for p in probes {
+            var gained: [PortInterval] = []
+            var lost: [PortInterval] = []
+            for iv in intervals {
+                let p = iv.range.lowerBound
                 let was = before.evaluate(sourceIDs: s.identities, destIDs: d.identities, port: p).allowed
                 let now = after.evaluate(sourceIDs: s.identities, destIDs: d.identities, port: p).allowed
-                if now && !was { gained.append(label(p)) }
-                if was && !now { lost.append(label(p)) }
+                if now && !was { gained.append(iv) }
+                if was && !now { lost.append(iv) }
             }
             var sshGained: [String] = []
             var sshLost: [String] = []
@@ -65,7 +61,7 @@ func accessChanges(from old: PolicyModel, to new: PolicyModel,
             }
             if !gained.isEmpty || !lost.isEmpty || !sshGained.isEmpty || !sshLost.isEmpty {
                 changes.append(AccessChange(src: s.displayName, dst: d.displayName,
-                                            gained: gained, lost: lost,
+                                            gained: portLabels(gained), lost: portLabels(lost),
                                             sshGained: sshGained, sshLost: sshLost))
             }
         }
@@ -73,21 +69,61 @@ func accessChanges(from old: PolicyModel, to new: PolicyModel,
     return changes
 }
 
-/// Every port number named in ACL dst specs or grant ip entries.
-private func mentionedPorts(_ m: PolicyModel) -> Set<Int> {
-    var specs = m.rules.flatMap { $0.dst.map { DestSpec($0).ports } }
-    specs += m.grants.flatMap { $0.ip.map { $0.split(separator: ":").last.map(String.init) ?? $0 } }
-    var ports = Set<Int>()
-    for spec in specs {
-        for part in spec.split(separator: ",") {
-            for bound in part.split(separator: "-") {
-                if let n = Int(bound.trimmingCharacters(in: .whitespaces)), (1...65535).contains(n) {
-                    ports.insert(n)
-                }
-            }
+// MARK: - Port intervals
+
+/// A run of ports over which every rule in the compared policies agrees.
+struct PortInterval {
+    var range: ClosedRange<Int>
+    /// False for gaps no policy names (they only matter via wildcards).
+    var named: Bool
+}
+
+/// Cut 1...65535 at every boundary of every port range named in `models`.
+func portIntervals(_ models: [PolicyModel]) -> [PortInterval] {
+    let ranges = models.flatMap(mentionedPortRanges)
+    var cuts: Set<Int> = [1, 65536]
+    for r in ranges {
+        cuts.insert(r.lowerBound)
+        cuts.insert(r.upperBound + 1)
+    }
+    let sorted = cuts.sorted()
+    return zip(sorted, sorted.dropFirst()).map { lo, next in
+        // Intervals are atomic, so one contained port decides membership.
+        PortInterval(range: lo...(next - 1), named: ranges.contains { $0.contains(lo) })
+    }
+}
+
+/// "22", "8101-8200", adjacent named intervals merged; unnamed ones become
+/// a single "other ports" label.
+func portLabels(_ intervals: [PortInterval]) -> [String] {
+    var merged: [ClosedRange<Int>] = []
+    var other = false
+    for iv in intervals {
+        guard iv.named else { other = true; continue }
+        if let last = merged.last, last.upperBound + 1 == iv.range.lowerBound {
+            merged[merged.count - 1] = last.lowerBound...iv.range.upperBound
+        } else {
+            merged.append(iv.range)
         }
     }
-    return ports
+    var labels = merged.map { $0.count == 1 ? String($0.lowerBound) : "\($0.lowerBound)-\($0.upperBound)" }
+    if other { labels.append(otherPortsLabel) }
+    return labels
+}
+
+/// Every port range named in ACL dst specs or grant ip entries.
+func mentionedPortRanges(_ m: PolicyModel) -> [ClosedRange<Int>] {
+    var specs = m.rules.flatMap { $0.dst.map { DestSpec($0).ports } }
+    specs += m.grants.flatMap { $0.ip.map { $0.split(separator: ":").last.map(String.init) ?? $0 } }
+    var ranges: [ClosedRange<Int>] = []
+    for spec in specs {
+        for part in spec.split(separator: ",") {
+            let bounds = part.split(separator: "-").compactMap { Int($0.trimmingCharacters(in: .whitespaces)) }
+            guard let lo = bounds.first, let hi = bounds.last, 1 <= lo, lo <= hi, hi <= 65535 else { continue }
+            ranges.append(lo...hi)
+        }
+    }
+    return ranges
 }
 
 // MARK: - Rule summaries
@@ -113,12 +149,21 @@ struct RuleSummary: Identifiable {
     }
 }
 
-/// Rules whose sources match any of `sourceIDs` (all rules when nil).
-func ruleSummaries(_ m: PolicyModel, sourceIDs: [String]?) -> [RuleSummary] {
+/// Rules whose sources match any of `sourceIDs` and whose destinations match
+/// any of `destIDs` (nil means no filter on that side).
+func ruleSummaries(_ m: PolicyModel, sourceIDs: [String]?, destIDs: [String]? = nil) -> [RuleSummary] {
     let ev = Evaluator(model: m)
     func applies(_ src: [String]) -> Bool {
         guard let sourceIDs else { return true }
         return src.contains { spec in sourceIDs.contains { ev.sourceMatches(spec: spec, sourceID: $0) } }
+    }
+    func reaches(_ targets: [String], ssh: Bool = false) -> Bool {
+        guard let destIDs else { return true }
+        return targets.contains { t in
+            // autogroup:self only ever means "the user's own devices".
+            ssh && t == "autogroup:self" ? destIDs.contains { $0.contains("@") }
+                : destIDs.contains { ev.targetMatches(target: t, destID: $0) }
+        }
     }
     func badge(_ entries: [String]) -> String {
         let e = entries.uniqued()
@@ -127,19 +172,19 @@ func ruleSummaries(_ m: PolicyModel, sourceIDs: [String]?) -> [RuleSummary] {
     func strip(_ t: String) -> String { t.hasPrefix("host:") ? String(t.dropFirst(5)) : t }
 
     var out: [RuleSummary] = []
-    for r in m.rules where r.action == "accept" && applies(r.src) {
+    for r in m.rules where r.action == "accept" && applies(r.src) && reaches(r.dst.map { DestSpec($0).target }) {
         out.append(RuleSummary(kind: .acl, index: r.index,
                                name: r.comments.first ?? "Rule #\(r.index + 1)",
                                badge: badge(r.dst.map { DestSpec($0).ports }), sources: r.src,
                                destinations: r.dst.map { strip(DestSpec($0).target) }.uniqued()))
     }
-    for g in m.grants where applies(g.src) {
+    for g in m.grants where applies(g.src) && reaches(g.dst) {
         out.append(RuleSummary(kind: .grant, index: g.index,
                                name: g.comments.first ?? "Grant #\(g.index + 1)",
                                badge: g.ip.isEmpty ? "APP" : badge(g.ip), sources: g.src,
                                destinations: g.dst.map(strip).uniqued()))
     }
-    for s in m.sshRules where applies(s.src) {
+    for s in m.sshRules where applies(s.src) && reaches(s.dst, ssh: true) {
         out.append(RuleSummary(kind: .ssh, index: s.index,
                                name: s.comments.first ?? "SSH rule #\(s.index + 1)",
                                badge: "SSH · \(s.users.joined(separator: ", "))", sources: s.src,
@@ -198,4 +243,58 @@ func lineDiff(old: String, new: String, context: Int = 3) -> [DiffLine] {
     }
     if hidden > 0 { out.append(DiffLine(id: out.count, kind: .skipped, text: String(hidden))) }
     return out
+}
+
+// MARK: - Route auto-approval
+
+extension Evaluator {
+    /// Would `autoApprovers` approve `route` advertised by `node`? Exit-node
+    /// routes use "exitNode"; others need an approver entry whose prefix
+    /// contains the route (IPv6 routes are matched exactly).
+    func autoApproves(route: String, node: HeadscaleNode) -> Bool {
+        let approvers: [String]
+        if route == "0.0.0.0/0" || route == "::/0" {
+            approvers = model.exitNodeApprovers
+        } else {
+            approvers = model.routeApprovers.filter { routeContains($0.route, route) }.flatMap(\.approvers)
+        }
+        return approvers.contains { a in node.identities.contains { sourceMatches(spec: a, sourceID: $0) } }
+    }
+
+    private func routeContains(_ outer: String, _ inner: String) -> Bool {
+        guard isAddressLike(outer), isAddressLike(inner) else { return outer == inner }
+        func bits(_ cidr: String) -> Int { cidr.split(separator: "/").last.flatMap { Int($0) } ?? 32 }
+        let base = String(inner.split(separator: "/")[0])
+        return bits(outer) <= bits(inner) && cidrContains(cidr: outer, ip: base)
+    }
+}
+
+// MARK: - Tests from current behavior
+
+/// Tests pinning today's access. For each source: an accept for every named
+/// port (one per named interval) it reaches on each tag and host, and a deny
+/// for every such port some other source reaches there but it doesn't.
+func generateTests(_ m: PolicyModel, sources: [String]) -> [ACLTest] {
+    let ev = Evaluator(model: m)
+    let ports = portIntervals([m]).filter(\.named).map(\.range.lowerBound)
+    let dests = m.tagOrder + m.hostOrder
+    let srcs = sources.uniqued()
+    // allowed[s][d] = set of ports
+    var allowed: [String: [String: Set<Int>]] = [:]
+    for s in srcs {
+        for d in dests {
+            allowed[s, default: [:]][d] = Set(ports.filter { ev.evaluate(sourceID: s, destID: d, port: $0).allowed })
+        }
+    }
+    return srcs.compactMap { s in
+        var accept: [String] = []
+        var deny: [String] = []
+        for d in dests {
+            let mine = allowed[s]?[d] ?? []
+            let anyone = srcs.reduce(into: Set<Int>()) { $0.formUnion(allowed[$1]?[d] ?? []) }
+            accept += mine.sorted().map { "\(d):\($0)" }
+            deny += anyone.subtracting(mine).sorted().map { "\(d):\($0)" }
+        }
+        return accept.isEmpty && deny.isEmpty ? nil : ACLTest(index: 0, src: s, accept: accept, deny: deny)
+    }
 }

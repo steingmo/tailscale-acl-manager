@@ -43,7 +43,15 @@ Swift Package (no Xcode project). All source in `Sources/TailscaleACL/`:
   builder, simulator, ssh, tests, problems, headscale). `AccessMapScreen`
   is a NetBird-style focused view: one device/user/group/tag → the rules
   that apply to it → destinations. Maps use `DotGrid` and dashed
-  `ConnectionCurve`s; `PillTabs` is the shared segmented tab bar. Visual builder draws ACL connections
+  `ConnectionCurve`s; `PillTabs` is the shared segmented tab bar. The map
+  has a "Reached by" direction (`ruleSummaries(destIDs:)`) and honors
+  `PolicyStore.mapFocusRequest` (set by ⌘K `QuickSearchSheet`).
+  `RoutesScreen` edits `autoApprovers`/`nodeAttrs` and shows device routes
+  (`Evaluator.autoApproves`). `DeviceTagsSheet` sets device tags via
+  `POST /api/v1/node/{id}/tags` (Headscale requires ≥1 tag).
+- Port comparisons (push review, device matrix) use `portIntervals`: every
+  named port range cut into atomic intervals, one probe each, so changes
+  inside ranges are exact. `generateTests` pins current access as tests. Visual builder draws ACL connections
   blue, grants green. Matrix cells are clickable (add/edit/remove access
   via the shared `ConnectionSheet` in `SharedSheets.swift`).
 - `Lint.swift` — pure `lintPolicy(model)`: undefined references, ownerless
@@ -100,11 +108,12 @@ clone of the tap repo at `~/Documents/homebrew-tap`.
 diff, line diff, report, and store/workspace/undo behavior). Run it with:
 
 ```sh
-swift test --scratch-path "${TMPDIR}tailscale-acl-test-build"
+swift test --scratch-path "$HOME/Library/Caches/tailscale-acl-test-build"
 ```
 
 The scratch path must be outside the project: iCloud-synced folders stamp
-xattrs that make codesign reject the test bundle. `release.sh` runs the suite
+xattrs that make codesign reject the test bundle. Don't use `$TMPDIR` either:
+macOS purges old files there, which corrupts the cached Sparkle artifact. `release.sh` runs the suite
 first and stops on failure; GitHub Actions (`.github/workflows/test.yml`) runs
 it on every push to main. Store tests set `TAILSCALE_ACL_DATA_DIR` to a temp
 folder and pre-seed `workspaces.json`, so they never touch real app data or

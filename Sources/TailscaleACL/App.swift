@@ -29,6 +29,7 @@ enum Screen: String, CaseIterable, Identifiable {
     case accessSimulator = "Access Simulator"
     case ssh = "SSH"
     case tests = "Tests"
+    case routes = "Routes"
     case problems = "Problems"
     case headscale = "Headscale"
 
@@ -43,6 +44,7 @@ enum Screen: String, CaseIterable, Identifiable {
         case .accessSimulator: return "play"
         case .ssh: return "terminal"
         case .tests: return "checkmark.shield"
+        case .routes: return "arrow.triangle.branch"
         case .problems: return "exclamationmark.triangle"
         case .headscale: return "network"
         }
@@ -54,6 +56,20 @@ struct RootView: View {
     @Environment(\.undoManager) private var undoManager
     @State private var screen: Screen = .policyEditor
     @State private var workspaceSheet: WorkspaceSheet.Mode?
+    @State private var overlay: Overlay?
+
+    /// Search, then (when a rule is picked) its editor, in one sheet slot so
+    /// switching from one to the other dismisses and re-presents cleanly.
+    enum Overlay: Identifiable {
+        case search
+        case rule(RuleSummary)
+        var id: String {
+            switch self {
+            case .search: return "search"
+            case .rule(let r): return "rule-\(r.id)"
+            }
+        }
+    }
     @State private var confirmingDelete = false
 
     var body: some View {
@@ -72,6 +88,23 @@ struct RootView: View {
         .task(id: store.currentWorkspaceID) { try? await store.refreshNodes() }
         .onChange(of: undoManager) { store.undoManager = undoManager }
         .sheet(item: $workspaceSheet) { WorkspaceSheet(mode: $0) }
+        .sheet(item: $overlay) { item in
+            switch item {
+            case .search:
+                QuickSearchSheet { result in
+                    switch result {
+                    case .entity(let name):
+                        store.mapFocusRequest = name
+                        screen = .accessMap
+                        overlay = nil
+                    case .rule(let rule):
+                        overlay = .rule(rule)
+                    }
+                }
+            case .rule(let rule):
+                RuleSheet(existing: rule)
+            }
+        }
         .confirmationDialog("Delete workspace \u{201C}\(store.currentWorkspace.name)\u{201D}?",
                             isPresented: $confirmingDelete) {
             Button("Delete", role: .destructive) { store.deleteWorkspace(store.currentWorkspaceID) }
@@ -125,6 +158,30 @@ struct RootView: View {
             .padding(.top, 14)
             .padding(.bottom, 10)
             workspaceMenu
+
+            Button { overlay = .search } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "magnifyingglass")
+                        .font(.system(size: 11, weight: .medium))
+                    Text("Search")
+                        .font(.system(size: 12))
+                    Spacer()
+                    Text("⌘K")
+                        .font(.system(size: 10.5, design: .monospaced))
+                        .foregroundStyle(Theme.textSecondary)
+                }
+                .foregroundStyle(Theme.textSecondary)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(RoundedRectangle(cornerRadius: 8).fill(Color.white.opacity(0.05)))
+                .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.panelBorder, lineWidth: 1))
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .keyboardShortcut("k", modifiers: .command)
+            .disabled(!store.isValid)
+            .padding(.horizontal, 10)
+            .padding(.bottom, 8)
 
             VStack(spacing: 2) {
                 ForEach(Screen.allCases) { s in
@@ -189,6 +246,7 @@ struct RootView: View {
         case .accessSimulator: SimulatorScreen()
         case .ssh: SSHScreen()
         case .tests: TestsScreen()
+        case .routes: RoutesScreen()
         case .problems: ProblemsScreen()
         case .headscale: HeadscaleScreen()
         }

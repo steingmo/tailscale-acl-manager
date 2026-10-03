@@ -12,6 +12,7 @@ struct HeadscaleScreen: View {
     @State private var history = PushHistory.load()
     @State private var openingRecord: PushRecord?
     @State private var comparing: DiffPresentation?
+    @State private var editingTags: HeadscaleNode?
 
     private var serverURL: Binding<String> {
         Binding(get: { store.currentWorkspace.serverURL }, set: { store.setServerURL($0) })
@@ -78,6 +79,7 @@ struct HeadscaleScreen: View {
             }
         }
         .sheet(item: $comparing) { DiffSheet(diff: $0) }
+        .sheet(item: $editingTags) { DeviceTagsSheet(node: $0) }
         .confirmationDialog("Replace the editor contents with this policy?",
                             isPresented: Binding(get: { openingRecord != nil },
                                                  set: { if !$0 { openingRecord = nil } })) {
@@ -226,6 +228,9 @@ struct HeadscaleScreen: View {
                         .font(.system(size: 10.5, design: .monospaced))
                         .foregroundStyle(Theme.textSecondary)
                         .textSelection(.enabled)
+                    Button("Tags…") { editingTags = node }
+                        .font(.system(size: 11))
+                        .disabled(client == nil)
                 }
                 .padding(.vertical, 2)
             }

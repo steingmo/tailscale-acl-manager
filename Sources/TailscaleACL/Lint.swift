@@ -46,6 +46,13 @@ func lintPolicy(_ m: PolicyModel) -> [LintIssue] {
     for (tag, owners) in m.tagOwners {
         for o in owners { references.append((o, "tagOwners[\(tag)]")) }
     }
+    for (route, approvers) in m.routeApprovers {
+        for a in approvers { references.append((a, "autoApprovers.routes[\(route)]")) }
+    }
+    for a in m.exitNodeApprovers { references.append((a, "autoApprovers.exitNode")) }
+    for n in m.nodeAttrs {
+        for t in n.target { references.append((t, "nodeAttrs[\(n.index)].target")) }
+    }
 
     for (raw, where_) in references {
         let name = raw.hasPrefix("host:") ? String(raw.dropFirst(5)) : raw

@@ -26,6 +26,17 @@ struct GrantRule: Identifiable {
     var id: Int { index }
 }
 
+/// One entry of "nodeAttrs": node attributes for the matching devices.
+struct NodeAttrRule: Identifiable {
+    var index: Int
+    var comments: [String]
+    var target: [String]
+    var attr: [String]
+    var hasApp: Bool
+
+    var id: Int { index }
+}
+
 struct SSHRule: Identifiable {
     var index: Int
     var comments: [String]
@@ -58,6 +69,9 @@ struct PolicyModel {
     var rules: [ACLRule] = []
     var grants: [GrantRule] = []
     var sshRules: [SSHRule] = []
+    var routeApprovers: [(route: String, approvers: [String])] = []
+    var exitNodeApprovers: [String] = []
+    var nodeAttrs: [NodeAttrRule] = []
     var tests: [ACLTest] = []
 
     init() {}
@@ -113,6 +127,19 @@ struct PolicyModel {
                     via: e.value["via"]?.stringArray ?? [],
                     srcPosture: e.value["srcPosture"]?.stringArray ?? []
                 ))
+            }
+        }
+        if let aa = tree["autoApprovers"] {
+            routeApprovers = (aa["routes"]?.members ?? []).map { ($0.key, $0.value.stringArray) }
+            exitNodeApprovers = aa["exitNode"]?.stringArray ?? []
+        }
+        if let elements = tree["nodeAttrs"]?.elements {
+            for (i, e) in elements.enumerated() {
+                guard case .object = e.value else { continue }
+                nodeAttrs.append(NodeAttrRule(index: i, comments: e.comments,
+                                              target: e.value["target"]?.stringArray ?? [],
+                                              attr: e.value["attr"]?.stringArray ?? [],
+                                              hasApp: e.value["app"] != nil))
             }
         }
         if let elements = tree["ssh"]?.elements {

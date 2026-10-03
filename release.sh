@@ -44,7 +44,7 @@ fi
 
 # --- Tests -------------------------------------------------------------------
 # Built outside the project folder: iCloud-synced folders break test bundle signing.
-swift test --scratch-path "${TMPDIR:-/tmp/}tailscale-acl-test-build"
+swift test --scratch-path "$HOME/Library/Caches/tailscale-acl-test-build"
 
 # --- Bump version + build ----------------------------------------------------
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" Info.plist

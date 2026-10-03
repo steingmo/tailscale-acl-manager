@@ -16,6 +16,8 @@ struct HeadscaleNode: Decodable, Identifiable {
     var user: User?
     var online: Bool?
     var lastSeen: String?
+    var availableRoutes: [String]?  // advertised by the device
+    var approvedRoutes: [String]?
     var tags: [String]?        // newer versions
     var forcedTags: [String]?  // older versions
     var validTags: [String]?   // older versions
@@ -25,6 +27,11 @@ struct HeadscaleNode: Decodable, Identifiable {
         return name ?? id
     }
     var allTags: [String] { ((tags ?? []) + (forcedTags ?? []) + (validTags ?? [])).uniqued() }
+
+    /// How a policy refers to this device: its first tag, or its user.
+    var policyName: String? {
+        identities.first { $0.hasPrefix("tag:") || $0.contains("@") }
+    }
 
     /// Headscale sends nanosecond timestamps, which ISO8601DateFormatter can't
     /// parse, so the fraction is dropped.
@@ -88,6 +95,12 @@ struct HeadscaleClient {
         _ = try await send("PUT", "policy", body: ["policy": policy])
     }
 
+    /// Replace a device's tags. Headscale requires at least one tag, and a
+    /// user-owned device that gets tags becomes a tagged device.
+    func setTags(nodeID: String, tags: [String]) async throws {
+        _ = try await send("POST", "node/\(nodeID)/tags", body: ["tags": tags])
+    }
+
     func listNodes() async throws -> [HeadscaleNode] {
         struct Response: Decodable { var nodes: [HeadscaleNode]? }
         let data = try await send("GET", "node")
@@ -95,13 +108,13 @@ struct HeadscaleClient {
     }
 
     private func send(_ method: String, _ path: String,
-                      body: [String: String]? = nil) async throws -> Data {
+                      body: [String: any Encodable]? = nil) async throws -> Data {
         var req = URLRequest(url: baseURL.appendingPathComponent("api/v1/\(path)"))
         req.httpMethod = method
         req.timeoutInterval = 15
         req.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
         if let body {
-            req.httpBody = try JSONEncoder().encode(body)
+            req.httpBody = try JSONSerialization.data(withJSONObject: body)
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         }
         let (data, response) = try await URLSession.shared.data(for: req)

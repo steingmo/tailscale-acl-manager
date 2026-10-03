@@ -19,6 +19,9 @@ final class PolicyStore: ObservableObject {
         didSet { if isValid { lintIssues = lintPolicy(model) + lintNodes(model, nodes: headscaleNodes) } }
     }
 
+    /// Set (e.g. by quick search) to make the Access Map focus an entity;
+    /// "node:<id>" focuses a device. The map clears it once applied.
+    @Published var mapFocusRequest: String?
     @Published private(set) var workspaces: [Workspace]
     @Published private(set) var currentWorkspaceID: UUID
     /// The window's undo manager; visual edits register here so Cmd-Z works everywhere.
@@ -433,6 +436,48 @@ final class PolicyStore: ObservableObject {
             guard var list = tree[section]?.elements, list.indices.contains(index) else { return }
             list.remove(at: index)
             tree[section] = .array(list)
+        }
+    }
+
+    /// Set the approvers for one route (empty removes it); `oldRoute` renames.
+    func setRouteApprovers(route: String, approvers: [String], replacing oldRoute: String? = nil) {
+        mutate { tree in
+            var aa = tree["autoApprovers"] ?? .object([])
+            var routes = aa["routes"]?.members ?? []
+            if let i = routes.firstIndex(where: { $0.key == (oldRoute ?? route) }) {
+                if approvers.isEmpty {
+                    routes.remove(at: i)
+                } else {
+                    routes[i].key = route
+                    routes[i].value = stringArrayJSON(approvers)
+                }
+            } else if !approvers.isEmpty {
+                routes.append(JSON.Member(comments: [], key: route, value: stringArrayJSON(approvers)))
+            }
+            aa["routes"] = routes.isEmpty ? nil : .object(routes)
+            tree["autoApprovers"] = (aa.members?.isEmpty ?? true) ? nil : aa
+        }
+    }
+
+    func setExitNodeApprovers(_ approvers: [String]) {
+        mutate { tree in
+            var aa = tree["autoApprovers"] ?? .object([])
+            aa["exitNode"] = approvers.isEmpty ? nil : stringArrayJSON(approvers)
+            tree["autoApprovers"] = (aa.members?.isEmpty ?? true) ? nil : aa
+        }
+    }
+
+    /// Add generated tests, or replace all existing tests with them.
+    func setGeneratedTests(_ tests: [ACLTest], replacingExisting: Bool) {
+        mutate { tree in
+            var list = replacingExisting ? [] : (tree["tests"]?.elements ?? [])
+            for t in tests {
+                var members: [JSON.Member] = [.init(comments: [], key: "src", value: .string(t.src))]
+                if !t.accept.isEmpty { members.append(.init(comments: [], key: "accept", value: stringArrayJSON(t.accept))) }
+                if !t.deny.isEmpty { members.append(.init(comments: [], key: "deny", value: stringArrayJSON(t.deny))) }
+                list.append(JSON.Element(comments: [], value: .object(members)))
+            }
+            tree["tests"] = .array(list)
         }
     }
 

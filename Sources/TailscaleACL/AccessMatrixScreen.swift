@@ -24,6 +24,7 @@ private struct Cell: Identifiable {
 struct AccessMatrixScreen: View {
     @EnvironmentObject var store: PolicyStore
     @State private var selectedCell: Cell?
+    @State private var showDevices = false
 
     private var rows: [String] { store.model.sourceSpecs }
     private var columns: [String] { store.model.destTargets }
@@ -34,13 +35,26 @@ struct AccessMatrixScreen: View {
                 Text("Access Matrix")
                     .font(.system(size: 16, weight: .bold))
                     .foregroundStyle(Theme.textPrimary)
-                Text("Which ports each source can reach on each destination · click a cell to add, edit, or remove access")
+                Text(showDevices && !store.headscaleNodes.isEmpty ? "Which ports each of your devices can reach on each other device"
+                     : "Which ports each source can reach on each destination · click a cell to add, edit, or remove access")
                     .font(.system(size: 11.5))
                     .foregroundStyle(Theme.textSecondary)
             }
             .padding(16)
 
-            if store.isValid {
+            if !store.headscaleNodes.isEmpty {
+                PillTabs(tabs: [(false, "Policy", "tablecells"), (true, "Devices", "desktopcomputer")],
+                         selection: $showDevices)
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 12)
+            }
+
+            if store.isValid && showDevices && !store.headscaleNodes.isEmpty {
+                ScrollView([.horizontal, .vertical]) {
+                    deviceGrid
+                        .padding([.horizontal, .bottom], 16)
+                }
+            } else if store.isValid {
                 ScrollView([.horizontal, .vertical]) {
                     matrixGrid
                         .padding([.horizontal, .bottom], 16)
@@ -108,6 +122,47 @@ struct AccessMatrixScreen: View {
                     EntityChip(name: row)
                     ForEach(columns, id: \.self) { col in
                         cell(row: row, col: col)
+                    }
+                }
+            }
+        }
+    }
+
+    /// Real devices × real devices: the ports each can reach on each other.
+    private var deviceGrid: some View {
+        let nodes = store.headscaleNodes
+        let ev = store.evaluator
+        let intervals = portIntervals([store.model])
+        func label(_ s: HeadscaleNode, _ d: HeadscaleNode) -> String {
+            let allowed = intervals.filter {
+                ev.evaluate(sourceIDs: s.identities, destIDs: d.identities, port: $0.range.lowerBound).allowed
+            }
+            if allowed.isEmpty { return "" }
+            return allowed.count == intervals.count ? "all" : portLabels(allowed).joined(separator: ", ")
+        }
+        return Grid(alignment: .leading, horizontalSpacing: 6, verticalSpacing: 6) {
+            GridRow {
+                Text("from \\ to")
+                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(Theme.textSecondary)
+                ForEach(nodes) { Chip(text: $0.displayName, color: Theme.textPrimary, icon: "desktopcomputer") }
+            }
+            ForEach(nodes) { s in
+                GridRow {
+                    Chip(text: s.displayName, color: Theme.textPrimary, icon: "desktopcomputer")
+                    ForEach(nodes) { d in
+                        let text = s.id == d.id ? "" : label(s, d)
+                        Text(verbatim: s.id == d.id ? "self" : text.isEmpty ? "—" : text)
+                            .font(.system(size: 10.5, weight: text.isEmpty ? .regular : .medium, design: .monospaced))
+                            .foregroundStyle(text.isEmpty ? Theme.textSecondary.opacity(0.5) : Theme.green)
+                            .lineLimit(1)
+                            .padding(.horizontal, 7)
+                            .frame(minWidth: 88, maxWidth: .infinity, minHeight: 26)
+                            .background(RoundedRectangle(cornerRadius: 5)
+                                .fill(text.isEmpty ? Color.white.opacity(0.02) : Theme.green.opacity(0.10)))
+                            .help(s.id == d.id ? s.displayName
+                                  : text.isEmpty ? "\(s.displayName) cannot reach \(d.displayName)"
+                                  : "\(s.displayName) → \(d.displayName): \(text)")
                     }
                 }
             }

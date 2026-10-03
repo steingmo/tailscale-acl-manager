@@ -3,6 +3,7 @@ import SwiftUI
 struct TestsScreen: View {
     @EnvironmentObject var store: PolicyStore
     @State private var showingAddTest = false
+    @State private var generated: [ACLTest]?
 
     var body: some View {
         let results = store.testResults
@@ -22,6 +23,11 @@ struct TestsScreen: View {
                             .foregroundStyle(Theme.textSecondary)
                     }
                     Spacer()
+                    ToolbarButton(label: "Generate from current access", icon: "wand.and.stars") {
+                        generated = generateTests(store.model, sources: generationSources)
+                    }
+                    .disabled(!store.isValid)
+                    .help("Save today's allowed and denied results as tests, so edits that change access fail")
                     ToolbarButton(label: "Add test", icon: "checkmark.shield") {
                         showingAddTest = true
                     }
@@ -49,9 +55,39 @@ struct TestsScreen: View {
             .frame(maxWidth: .infinity, alignment: .topLeading)
         }
         .background(Theme.background)
+        .confirmationDialog(generatedTitle, isPresented: Binding(get: { generated != nil },
+                                                                 set: { if !$0 { generated = nil } })) {
+            if let generated, !generated.isEmpty {
+                Button("Add to existing tests") { store.setGeneratedTests(generated, replacingExisting: false) }
+                Button("Replace all existing tests", role: .destructive) {
+                    store.setGeneratedTests(generated, replacingExisting: true)
+                }
+            }
+        } message: {
+            Text(generationSourceNote + " Each test lists the tag and host ports a source reaches today, and the ports others reach there that it can't. You can undo this with ⌘Z.")
+        }
         .sheet(isPresented: $showingAddTest) {
             AddTestSheet()
         }
+    }
+
+    /// Your real devices when loaded (each as its tag or user), otherwise
+    /// every user and tag in the policy.
+    private var generationSources: [String] {
+        let fromDevices = store.headscaleNodes.compactMap(\.policyName).uniqued()
+        return fromDevices.isEmpty ? store.model.allUsers + store.model.tagOrder : fromDevices
+    }
+
+    private var generationSourceNote: String {
+        store.headscaleNodes.isEmpty ? "Sources: every user and tag in the policy (load devices to use your real devices)."
+            : "Sources: your \(store.headscaleNodes.count) devices, each as its tag or user."
+    }
+
+    private var generatedTitle: String {
+        guard let generated else { return "" }
+        let n = generated.reduce(0) { $0 + $1.accept.count + $1.deny.count }
+        return generated.isEmpty ? "Nothing to generate — no source reaches any tag or host."
+            : "Generate \(generated.count) test\(generated.count == 1 ? "" : "s") with \(n) checks?"
     }
 
     private func banner(passing: Int, total: Int) -> some View {

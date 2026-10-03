@@ -10,8 +10,11 @@ struct AccessMapScreen: View {
     @State private var picking = false
     @State private var editing: RuleSummary?
     @State private var adding = false
+    @State private var direction: Direction = .reaches
+    @State private var editingTags: HeadscaleNode?
 
-    enum Kind: Hashable { case device, user, group, tag }
+    enum Kind: Hashable { case device, user, group, tag, host, ipset }
+    enum Direction: Hashable { case reaches, reachedBy }
 
     // MARK: - Layout constants
 
@@ -31,11 +34,16 @@ struct AccessMapScreen: View {
                     Text("Access Map")
                         .font(.system(size: 16, weight: .bold))
                         .foregroundStyle(Theme.textPrimary)
-                    Text("Pick a device, user, group, or tag to see every rule that applies to it and what it can reach")
+                    Text(direction == .reaches
+                         ? "Pick a device, user, group, or tag to see every rule that applies to it and what it can reach"
+                         : "Pick a device, server, tag, or IP set to see everyone who can reach it, and through which rules")
                         .font(.system(size: 11.5))
                         .foregroundStyle(Theme.textSecondary)
                 }
                 Spacer()
+                if let node, store.headscaleClient() != nil {
+                    ToolbarButton(label: "Edit tags…", icon: "tag") { editingTags = node }
+                }
                 if store.isValid && !items.isEmpty {
                     ToolbarButton(label: "Add rule", icon: "plus") { adding = true }
                 }
@@ -43,9 +51,14 @@ struct AccessMapScreen: View {
             .padding(.horizontal, 16)
             .padding(.top, 12)
 
-            PillTabs(tabs: tabs, selection: $kind)
-                .padding(.horizontal, 16)
-                .padding(.vertical, 12)
+            HStack(spacing: 12) {
+                PillTabs(tabs: [(Direction.reaches, "Reaches", "arrow.right"),
+                                (Direction.reachedBy, "Reached by", "arrow.left")],
+                         selection: $direction)
+                PillTabs(tabs: tabs, selection: $kind)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
 
             if !store.isValid {
                 notice("Fix the policy in the editor to see the access map.")
@@ -63,8 +76,15 @@ struct AccessMapScreen: View {
         .onChange(of: kind) { validateSelection() }
         .onChange(of: store.currentWorkspaceID) { validateSelection() }
         .onChange(of: store.headscaleNodes.count) { validateSelection() }
+        .onAppear(perform: applyFocusRequest)
+        .onChange(of: store.mapFocusRequest) { applyFocusRequest() }
         .sheet(item: $editing) { RuleSheet(existing: $0) }
-        .sheet(isPresented: $adding) { RuleSheet(existing: nil, prefillSource: prefillSource) }
+        .sheet(isPresented: $adding) {
+            direction == .reaches
+                ? RuleSheet(existing: nil, prefillSource: policyName)
+                : RuleSheet(existing: nil, prefillDestination: policyName)
+        }
+        .sheet(item: $editingTags) { DeviceTagsSheet(node: $0) }
     }
 
     private var tabs: [(value: Kind, label: String, icon: String)] {
@@ -73,6 +93,8 @@ struct AccessMapScreen: View {
         t.append((.user, "User", "person"))
         t.append((.group, "Group", "person.2"))
         t.append((.tag, "Tag", "tag"))
+        if !store.model.hostOrder.isEmpty { t.append((.host, "Host", "server.rack")) }
+        if !store.model.ipsetOrder.isEmpty { t.append((.ipset, "IP set", "square.stack.3d.up")) }
         return t
     }
 
@@ -82,6 +104,8 @@ struct AccessMapScreen: View {
         case .user: return "user"
         case .group: return "group"
         case .tag: return "tag"
+        case .host: return "host"
+        case .ipset: return "IP set"
         }
     }
 
@@ -91,12 +115,32 @@ struct AccessMapScreen: View {
         case .user: return store.model.allUsers
         case .group: return store.model.groupOrder
         case .tag: return store.model.tagOrder
+        case .host: return store.model.hostOrder
+        case .ipset: return store.model.ipsetOrder
         }
     }
 
     private func validateSelection() {
-        if kind == .device && store.headscaleNodes.isEmpty { kind = .group }
+        if !tabs.contains(where: { $0.value == kind }) { kind = .group }
         if !items.contains(selection) { selection = items.first ?? "" }
+    }
+
+    /// Focus the map on an entity name ("node:<id>" for a device).
+    private func focus(_ name: String) {
+        if name.hasPrefix("node:") {
+            kind = .device
+            selection = String(name.dropFirst(5))
+            return
+        }
+        kind = name.hasPrefix("group:") ? .group : name.hasPrefix("tag:") ? .tag
+            : name.hasPrefix("ipset:") ? .ipset : store.model.hosts[name] != nil ? .host : .user
+        selection = name
+    }
+
+    private func applyFocusRequest() {
+        guard let name = store.mapFocusRequest else { return }
+        store.mapFocusRequest = nil
+        focus(name)
     }
 
     private var node: HeadscaleNode? {
@@ -107,14 +151,11 @@ struct AccessMapScreen: View {
         kind == .device ? (store.headscaleNodes.first { $0.id == item }?.displayName ?? item) : item
     }
 
-    /// Identities the focused source matches as in the policy.
-    private var sourceIDs: [String] { node?.identities ?? [selection] }
+    /// Identities the focused entity matches as in the policy.
+    private var focusIDs: [String] { node?.identities ?? [selection] }
 
-    /// How a new rule refers to the focused source: a device by its tag or user.
-    private var prefillSource: String {
-        guard let node else { return selection }
-        return node.identities.first { $0.hasPrefix("tag:") || $0.contains("@") } ?? selection
-    }
+    /// How a new rule refers to the focused entity: a device by its tag or user.
+    private var policyName: String { node?.policyName ?? selection }
 
     private func color(_ kind: RuleSummary.Kind) -> Color {
         switch kind {
@@ -126,31 +167,48 @@ struct AccessMapScreen: View {
 
     // MARK: - Rules
 
-    private var pills: [RuleSummary] { ruleSummaries(store.model, sourceIDs: sourceIDs) }
+    private var pills: [RuleSummary] {
+        direction == .reaches ? ruleSummaries(store.model, sourceIDs: focusIDs)
+            : ruleSummaries(store.model, sourceIDs: nil, destIDs: focusIDs)
+    }
+
+    /// The far column: what the rules reach, or who they let in.
+    private func endpoints(_ pill: RuleSummary) -> [String] {
+        direction == .reaches ? pill.destinations : pill.sources
+    }
 
     // MARK: - Map
 
     private var map: some View {
         let pills = self.pills
-        let dests = pills.flatMap(\.destinations).uniqued()
-        let height = max(CGFloat(pills.count) * pillRow, CGFloat(dests.count) * destRow, 140) + 40
-        let cardCenter = CGPoint(x: 24 + cardSize.width / 2, y: height / 2)
+        let dests = pills.flatMap(endpoints).uniqued()
+        let top: CGFloat = 28 // room for the column labels
+        let height = max(CGFloat(pills.count) * pillRow, CGFloat(dests.count) * destRow, 140) + 40 + top
+        let mid = top + (height - top) / 2
+        let cardCenter = CGPoint(x: 24 + cardSize.width / 2, y: mid)
         func pillY(_ i: Int) -> CGFloat {
-            height / 2 + (CGFloat(i) - CGFloat(pills.count - 1) / 2) * pillRow
+            mid + (CGFloat(i) - CGFloat(pills.count - 1) / 2) * pillRow
         }
         func destY(_ i: Int) -> CGFloat {
-            height / 2 + (CGFloat(i) - CGFloat(dests.count - 1) / 2) * destRow
+            mid + (CGFloat(i) - CGFloat(dests.count - 1) / 2) * destRow
         }
         let dash = StrokeStyle(lineWidth: 1.5, dash: [5, 4])
 
         return ZStack(alignment: .topLeading) {
             DotGrid()
 
+            ForEach([(pillX, "RULES"), (destX, direction == .reaches ? "REACHES" : "CAN REACH IT")], id: \.1) { x, label in
+                Text(label)
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(Theme.textSecondary)
+                    .position(x: x + 60, y: 12)
+            }
+
             ForEach(Array(pills.enumerated()), id: \.element.id) { i, pill in
                 ConnectionCurve(from: CGPoint(x: 24 + cardSize.width, y: cardCenter.y),
                                 to: CGPoint(x: pillX, y: pillY(i)))
                     .stroke(color(pill.kind).opacity(0.85), style: dash)
-                ForEach(pill.destinations, id: \.self) { d in
+                ForEach(endpoints(pill), id: \.self) { d in
                     if let j = dests.firstIndex(of: d) {
                         ConnectionCurve(from: CGPoint(x: pillX + pillSize.width, y: pillY(i)),
                                         to: CGPoint(x: destX, y: destY(j)))
@@ -164,10 +222,11 @@ struct AccessMapScreen: View {
                 .position(cardCenter)
 
             if pills.isEmpty {
-                Text("No rules apply to \(title(selection)).")
+                Text(direction == .reaches ? "No rules apply to \(title(selection))."
+                     : "Nothing can reach \(title(selection)).")
                     .font(.system(size: 12))
                     .foregroundStyle(Theme.textSecondary)
-                    .position(x: pillX + pillSize.width / 2, y: height / 2)
+                    .position(x: pillX + pillSize.width / 2, y: mid)
             }
 
             ForEach(Array(pills.enumerated()), id: \.element.id) { i, pill in
@@ -256,6 +315,11 @@ struct AccessMapScreen: View {
         case .tag:
             let n = store.headscaleNodes.filter { $0.allTags.contains(selection) }.count
             return store.headscaleNodes.isEmpty ? "tag" : "\(n) device\(n == 1 ? "" : "s")"
+        case .host:
+            return store.model.hosts[selection] ?? "host"
+        case .ipset:
+            let n = store.model.ipsets[selection]?.count ?? 0
+            return "\(n) address\(n == 1 ? "" : "es")"
         default:
             return "user"
         }
@@ -293,11 +357,11 @@ struct AccessMapScreen: View {
     }
 
     private func destCard(_ name: String) -> some View {
+        let m = store.model
         let focusable = name.hasPrefix("group:") || name.hasPrefix("tag:") || name.contains("@")
+            || m.hosts[name] != nil || m.ipsets[name] != nil
         return Button {
-            guard focusable else { return }
-            kind = name.hasPrefix("group:") ? .group : name.hasPrefix("tag:") ? .tag : .user
-            selection = name
+            if focusable { focus(name) }
         } label: {
             HStack(spacing: 9) {
                 iconSquare(Theme.entityIcon(name), color: Theme.entityColor(name))
