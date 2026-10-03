@@ -120,6 +120,25 @@ final class PolicyStore: ObservableObject {
         SnapshotStore.record(currentWorkspaceID, text: text, reason: reason)
     }
 
+    /// Write a change into other workspaces' saved policies (not the open one).
+    /// Each target gets a snapshot before and after, since there's no undo there.
+    func modifyWorkspaces(_ targets: [UUID], reason: String,
+                          _ change: (String) -> (text: String?, outcome: CopyOutcome)) -> [(name: String, outcome: CopyOutcome)] {
+        var results: [(name: String, outcome: CopyOutcome)] = []
+        for id in targets where id != currentWorkspaceID {
+            guard let i = workspaces.firstIndex(where: { $0.id == id }) else { continue }
+            let (text, outcome) = change(workspaces[i].policy)
+            if let text, text != workspaces[i].policy {
+                SnapshotStore.record(id, text: workspaces[i].policy, reason: "before \(reason)")
+                workspaces[i].policy = text
+                SnapshotStore.record(id, text: text, reason: reason)
+            }
+            results.append((workspaces[i].name, outcome))
+        }
+        saveWorkspaces()
+        return results
+    }
+
     /// Add a template's rules and definitions in one undoable step.
     func applyTemplate(_ template: PolicyTemplate, values: [String: String]) {
         mutate { template.apply(&$0, values) }
@@ -553,14 +572,8 @@ final class PolicyStore: ObservableObject {
     /// Add generated tests, or replace all existing tests with them.
     func setGeneratedTests(_ tests: [ACLTest], replacingExisting: Bool) {
         mutate { tree in
-            var list = replacingExisting ? [] : (tree["tests"]?.elements ?? [])
-            for t in tests {
-                var members: [JSON.Member] = [.init(comments: [], key: "src", value: .string(t.src))]
-                if !t.accept.isEmpty { members.append(.init(comments: [], key: "accept", value: stringArrayJSON(t.accept))) }
-                if !t.deny.isEmpty { members.append(.init(comments: [], key: "deny", value: stringArrayJSON(t.deny))) }
-                list.append(JSON.Element(comments: [], value: .object(members)))
-            }
-            tree["tests"] = .array(list)
+            let existing = replacingExisting ? [] : (tree["tests"]?.elements ?? [])
+            tree["tests"] = .array(existing + testElements(tests))
         }
     }
 

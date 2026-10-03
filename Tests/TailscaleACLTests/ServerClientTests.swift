@@ -134,12 +134,13 @@ final class TailscaleClientTests: XCTestCase {
         let c = client(tailnet: "example.com")
         StubProtocol.handler = { _, _ in .init() }
         let ok = try await c.validate("{}")
-        XCTAssertNil(ok)
+        XCTAssertEqual(ok?.passed, true)
         XCTAssertEqual(StubProtocol.requests[0].request.url?.absoluteString,
                        "https://api.tailscale.com/api/v2/tailnet/example.com/acl/validate")
         StubProtocol.handler = { _, _ in .init(body: Data(#"{"message": "test(s) failed", "data": [{"user": "a@x", "errors": ["want Drop, got Accept"]}]}"#.utf8)) }
         let failed = try await c.validate("{}")
-        XCTAssertEqual(failed, "test(s) failed · a@x: want Drop, got Accept")
+        XCTAssertEqual(failed?.summary, "test(s) failed · a@x: want Drop, got Accept")
+        XCTAssertEqual(failed?.failures.first?.user, "a@x")
 
         StubProtocol.handler = { _, _ in .init(body: Data("{}".utf8)) }
         try await c.setTags(nodeID: "nB", tags: ["tag:x"])
@@ -173,8 +174,7 @@ final class HeadscaleClientTests: XCTestCase {
         XCTAssertEqual(put.request.httpMethod, "PUT")
         XCTAssertEqual(try JSONSerialization.jsonObject(with: put.body) as? [String: String], ["policy": "{\"groups\": {}}"])
         let skipped = try await c.validate("{}")
-        XCTAssertNil(skipped)
-        XCTAssertFalse(c.hasValidation)
+        XCTAssertNil(skipped, "Headscale has no validate endpoint")
 
         StubProtocol.handler = { _, _ in .init(status: 401, body: Data("Unauthorized".utf8)) }
         do {

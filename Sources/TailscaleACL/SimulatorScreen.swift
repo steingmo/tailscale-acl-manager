@@ -10,6 +10,9 @@ struct SimulatorScreen: View {
     @State private var hasServer = false
     @State private var loadingNodes = false
     @State private var nodeError: String?
+    /// Tailscale's answer for the current query: (agrees, text).
+    @State private var tailscaleCheck: (agrees: Bool?, text: String)?
+    @State private var checkingTailscale = false
 
     private var sourceSections: [(name: String, items: [String])] {
         entitySections(special: ["*", "autogroup:members"])
@@ -154,6 +157,7 @@ struct SimulatorScreen: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(Theme.background)
+        .onChange(of: "\(source)|\(dest)|\(port)|\(sshMode)|\(store.text.hashValue)") { tailscaleCheck = nil }
         .onChange(of: store.currentWorkspaceID) {
             hasServer = store.serverClient() != nil
             nodeError = nil
@@ -304,6 +308,34 @@ struct SimulatorScreen: View {
         .frame(maxWidth: 760, alignment: .leading)
     }
 
+    /// Ask Tailscale to evaluate this source → destination:port against the
+    /// editor's policy, by validating it with a single synthetic test.
+    private func checkWithTailscale(expectAllowed: Bool) {
+        guard let client = store.serverClient() else { return }
+        let src = node(for: source)?.policyName ?? source
+        let dstHost = node(for: dest).flatMap { n in n.ipAddresses?.first { !$0.contains(":") } } ?? dest
+        let entry = "\(dstHost):\(port)"
+        let test = ACLTest(index: 0, src: src, accept: expectAllowed ? [entry] : [], deny: expectAllowed ? [] : [entry])
+        checkingTailscale = true
+        tailscaleCheck = nil
+        Task {
+            defer { checkingTailscale = false }
+            do {
+                guard let report = try await client.validate(try policyWithTests(store.text, [test])) else { return }
+                let verdict = expectAllowed ? "allowed" : "denied"
+                if report.passed {
+                    tailscaleCheck = (true, "Tailscale agrees: \(verdict).")
+                } else if !report.failures.isEmpty {
+                    tailscaleCheck = (false, "Tailscale disagrees — \(report.failures.flatMap(\.errors).joined(separator: "; "))")
+                } else {
+                    tailscaleCheck = (nil, "Tailscale couldn't check this (\(src) → \(entry)): \(report.message ?? "")")
+                }
+            } catch {
+                tailscaleCheck = (nil, "Tailscale couldn't check this: \(error.localizedDescription)")
+            }
+        }
+    }
+
     private var resultSection: some View {
         let result = store.evaluator.evaluate(sourceIDs: identities(for: source),
                                               destIDs: identities(for: dest), port: port)
@@ -341,6 +373,22 @@ struct SimulatorScreen: View {
                 RoundedRectangle(cornerRadius: 8)
                     .stroke((result.allowed ? Theme.green : Theme.red).opacity(0.35), lineWidth: 1)
             )
+
+            if store.currentWorkspace.kind == .tailscale, store.serverClient() != nil {
+                HStack(spacing: 8) {
+                    Button("Check with Tailscale") { checkWithTailscale(expectAllowed: result.allowed) }
+                        .disabled(checkingTailscale)
+                        .help("Ask Tailscale's own policy engine the same question about the editor's policy")
+                    if checkingTailscale { ProgressView().controlSize(.small) }
+                    if let check = tailscaleCheck {
+                        Label(check.text, systemImage: check.agrees == true ? "checkmark.seal"
+                              : check.agrees == false ? "exclamationmark.triangle.fill" : "questionmark.circle")
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(check.agrees == true ? Theme.green : check.agrees == false ? Theme.red : Theme.textSecondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
 
             if !result.matches.isEmpty {
                 Text("Matching rules")

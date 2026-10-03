@@ -5,6 +5,8 @@ struct TestsScreen: View {
     @State private var showingAddTest = false
     @State private var generated: [ACLTest]?
     @State private var editingRule: RuleSummary?
+    @State private var tailscaleRun: (ok: Bool?, text: String, disagreements: [TestDisagreement])?
+    @State private var runningOnTailscale = false
 
     var body: some View {
         let results = store.testResults
@@ -36,6 +38,9 @@ struct TestsScreen: View {
 
                 if store.isValid && !results.isEmpty {
                     banner(passing: passing, total: results.count)
+                    if store.currentWorkspace.kind == .tailscale, store.serverClient() != nil {
+                        tailscaleRow(results)
+                    }
                     ForEach(results) { result in
                         testCard(result)
                     }
@@ -68,8 +73,57 @@ struct TestsScreen: View {
             Text(generationSourceNote + " Each test lists the tag and host ports a source reaches today, and the ports others reach there that it can't. You can undo this with ⌘Z.")
         }
         .sheet(item: $editingRule) { RuleSheet(existing: $0) }
+        .onChange(of: store.text) { tailscaleRun = nil }
         .sheet(isPresented: $showingAddTest) {
             AddTestSheet()
+        }
+    }
+
+    /// Run the same tests in Tailscale's own policy engine and show where it
+    /// disagrees with the app.
+    private func tailscaleRow(_ results: [TestResult]) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Button("Check with Tailscale") { runOnTailscale(results) }
+                    .disabled(runningOnTailscale)
+                    .help("Run these tests on Tailscale against the editor's policy (nothing is saved)")
+                if runningOnTailscale { ProgressView().controlSize(.small) }
+                if let run = tailscaleRun {
+                    Label(run.text, systemImage: run.ok == true ? "checkmark.seal" : run.ok == false ? "exclamationmark.triangle.fill" : "questionmark.circle")
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(run.ok == true ? Theme.green : run.ok == false ? Theme.red : Theme.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            ForEach(tailscaleRun?.disagreements ?? []) { d in
+                Text(verbatim: "\(d.src): the app says \(d.appPasses ? "pass" : "fail"), Tailscale says \(d.appPasses ? "fail" : "pass")"
+                     + (d.errors.isEmpty ? "" : " — \(d.errors.joined(separator: "; "))"))
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(Theme.red)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    private func runOnTailscale(_ results: [TestResult]) {
+        guard let client = store.serverClient() else { return }
+        let text = store.text
+        runningOnTailscale = true
+        tailscaleRun = nil
+        Task {
+            defer { runningOnTailscale = false }
+            do {
+                guard let report = try await client.validate(text) else { return }
+                if let disagreements = compareWithServer(local: results, report: report) {
+                    tailscaleRun = disagreements.isEmpty
+                        ? (true, "Tailscale agrees with the app on all \(results.count) tests.", [])
+                        : (false, "Tailscale disagrees on \(disagreements.count) source\(disagreements.count == 1 ? "" : "s"):", disagreements)
+                } else {
+                    tailscaleRun = (nil, "Tailscale couldn't run the tests: \(report.message ?? "")", [])
+                }
+            } catch {
+                tailscaleRun = (nil, "Tailscale couldn't run the tests: \(error.localizedDescription)", [])
+            }
         }
     }
 

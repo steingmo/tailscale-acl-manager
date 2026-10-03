@@ -567,6 +567,7 @@ private struct EditEntitySheet: View {
     @State private var items: [String] = []
     @State private var newItem = ""
     @State private var address = ""
+    @State private var copying = false
 
     private enum Kind { case group, tag, host, ipset }
     private var kind: Kind {
@@ -619,6 +620,10 @@ private struct EditEntitySheet: View {
             }
 
             HStack {
+                if store.workspaces.count > 1 {
+                    Button("Copy to workspaces…") { copying = true }
+                        .help("Copies the saved definition; save your edits first")
+                }
                 Spacer()
                 Button("Cancel") { dismiss() }
                     .keyboardShortcut(.cancelAction)
@@ -630,6 +635,7 @@ private struct EditEntitySheet: View {
         .padding(20)
         .frame(width: 440)
         .background(Theme.background)
+        .sheet(isPresented: $copying) { CopyToWorkspacesSheet(payload: .entities([name])) }
         .onAppear {
             newName = name
             switch kind {

@@ -171,6 +171,16 @@ struct RootView: View {
             Button("New Workspace…") { workspaceSheet = .new }
             Button("Duplicate Workspace…") { workspaceSheet = .duplicate }
             Button("Rename Workspace…") { workspaceSheet = .rename }
+            Menu("Compare With") {
+                ForEach(store.workspaces.filter { $0.id != store.currentWorkspaceID }) { ws in
+                    Button(ws.name) {
+                        overlay = .compare(DiffPresentation(title: "\(ws.name) vs \(store.currentWorkspace.name)",
+                                                           oldLabel: ws.name, newLabel: store.currentWorkspace.name,
+                                                           old: ws.policy, new: store.text))
+                    }
+                }
+            }
+            .disabled(store.workspaces.count < 2)
             Button("Delete Workspace…") { confirmingDelete = true }
                 .disabled(store.workspaces.count < 2)
         } label: {

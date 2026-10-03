@@ -11,13 +11,16 @@ enum ServerKind: String, Codable, CaseIterable {
 protocol PolicyServer: AnyObject {
     /// Shown in the UI and recorded in push history.
     var displayHost: String { get }
-    /// True when `validate` actually asks the server (Tailscale), not a no-op.
-    var hasValidation: Bool { get }
     func getPolicy() async throws -> String
     func setPolicy(_ policy: String) async throws
-    /// The server's own verdict on a policy without saving it: nil when it
-    /// passes or the server has no such check, otherwise the failure text.
-    func validate(_ policy: String) async throws -> String?
+    /// The server's own verdict on a policy (and its tests) without saving it,
+    /// or nil when the server has no such check (Headscale).
+    func validate(_ policy: String) async throws -> ValidationReport?
+    /// Users that can own auth keys (Headscale); empty when keys don't need one.
+    func listUsers() async throws -> [ServerUser]
+    /// Create a pre-authorized key for joining devices. Returns the secret,
+    /// which the server shows only once.
+    func createAuthKey(_ request: AuthKeyRequest) async throws -> String
     func listNodes() async throws -> [HeadscaleNode]
     func setTags(nodeID: String, tags: [String]) async throws
     /// Replaces the device's whole list of approved routes.
@@ -48,6 +51,35 @@ func serverName(kind: ServerKind, serverURL: String, tailnet: String) -> String 
         let t = tailnet.trimmingCharacters(in: .whitespaces)
         return t.isEmpty || t == "-" ? "Tailscale" : "Tailscale (\(t))"
     }
+}
+
+/// A server's validation verdict: nil message means the policy and its tests pass.
+struct ValidationReport {
+    var message: String?
+    /// Failing test sources and their errors.
+    var failures: [(user: String, errors: [String])] = []
+
+    var passed: Bool { message == nil }
+    var summary: String {
+        ([message ?? "Passed"] + failures.prefix(5).flatMap { f in f.errors.map { "\(f.user): \($0)" } })
+            .joined(separator: " · ")
+    }
+}
+
+struct ServerUser: Identifiable, Hashable {
+    var id: String
+    var name: String
+}
+
+struct AuthKeyRequest {
+    var tags: [String]
+    var reusable = false
+    var ephemeral = false
+    /// Tailscale: devices joining with the key skip device approval.
+    var preauthorized = true
+    var expiry: TimeInterval = 86_400
+    /// Headscale user id; optional when tags are given.
+    var user: String?
 }
 
 struct ServerError: LocalizedError {
@@ -96,7 +128,6 @@ final class TailscaleClient: PolicyServer {
     }
 
     var displayHost: String { serverName(kind: .tailscale, serverURL: "", tailnet: tailnet) }
-    var hasValidation: Bool { true }
 
     private var tailnetPath: String {
         "tailnet/\(tailnet.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? tailnet)"
@@ -120,17 +151,36 @@ final class TailscaleClient: PolicyServer {
         }
     }
 
-    func validate(_ policy: String) async throws -> String? {
+    func validate(_ policy: String) async throws -> ValidationReport? {
         let (data, _) = try await request("POST", "\(tailnetPath)/acl/validate", body: Data(policy.utf8),
                                           headers: ["Content-Type": "application/hujson"])
         // An empty body (or no message) means the policy and its tests pass.
         guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let message = json["message"] as? String, !message.isEmpty else { return nil }
-        let details = (json["data"] as? [[String: Any]] ?? []).flatMap { entry -> [String] in
-            let who = entry["user"] as? String
-            return (entry["errors"] as? [String] ?? []).map { error in who.map { "\($0): \(error)" } ?? error }
+              let message = json["message"] as? String, !message.isEmpty else { return ValidationReport() }
+        let failures = (json["data"] as? [[String: Any]] ?? []).map { entry in
+            (user: entry["user"] as? String ?? "", errors: entry["errors"] as? [String] ?? [])
         }
-        return ([message] + details.prefix(5)).joined(separator: " · ")
+        return ValidationReport(message: message, failures: failures)
+    }
+
+    /// Tailscale auth keys don't take a user: they belong to the token's user,
+    /// or to the tailnet (tags required) when made with an OAuth client.
+    func listUsers() async throws -> [ServerUser] { [] }
+
+    func createAuthKey(_ r: AuthKeyRequest) async throws -> String {
+        let body: [String: Any] = [
+            "description": "Created with Tailscale ACL app",
+            "expirySeconds": Int(r.expiry),
+            "capabilities": ["devices": ["create": [
+                "reusable": r.reusable, "ephemeral": r.ephemeral,
+                "preauthorized": r.preauthorized, "tags": r.tags,
+            ]]],
+        ]
+        let (data, _) = try await request("POST", "\(tailnetPath)/keys",
+                                          body: try JSONSerialization.data(withJSONObject: body),
+                                          headers: ["Content-Type": "application/json"])
+        struct Key: Decodable { var key: String }
+        return try JSONDecoder().decode(Key.self, from: data).key
     }
 
     func listNodes() async throws -> [HeadscaleNode] {

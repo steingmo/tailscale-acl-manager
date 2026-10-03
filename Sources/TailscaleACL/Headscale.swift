@@ -79,7 +79,6 @@ final class HeadscaleClient: PolicyServer {
     }
 
     var displayHost: String { serverName(kind: .headscale, serverURL: baseURL.absoluteString, tailnet: "") }
-    var hasValidation: Bool { false }
 
     func getPolicy() async throws -> String {
         struct Response: Decodable { var policy: String? }
@@ -94,7 +93,32 @@ final class HeadscaleClient: PolicyServer {
     }
 
     /// Headscale has no validate-only endpoint; it validates on push.
-    func validate(_ policy: String) async throws -> String? { nil }
+    func validate(_ policy: String) async throws -> ValidationReport? { nil }
+
+    func listUsers() async throws -> [ServerUser] {
+        let data = try await send("GET", "user")
+        let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        // Ids are uint64, sent as strings by newer servers and numbers by older ones.
+        return (json?["users"] as? [[String: Any]] ?? []).compactMap { u in
+            guard let id = (u["id"] as? String) ?? (u["id"] as? NSNumber)?.stringValue else { return nil }
+            return ServerUser(id: id, name: (u["name"] as? String) ?? (u["email"] as? String) ?? id)
+        }
+    }
+
+    func createAuthKey(_ r: AuthKeyRequest) async throws -> String {
+        var body: [String: any Encodable] = [
+            "reusable": r.reusable, "ephemeral": r.ephemeral,
+            "expiration": ISO8601DateFormatter().string(from: Date().addingTimeInterval(r.expiry)),
+            "aclTags": r.tags,
+        ]
+        if let user = r.user { body["user"] = user }
+        let data = try await send("POST", "preauthkey", body: body)
+        struct Response: Decodable {
+            struct Key: Decodable { var key: String }
+            var preAuthKey: Key
+        }
+        return try JSONDecoder().decode(Response.self, from: data).preAuthKey.key
+    }
 
     func setApprovedRoutes(nodeID: String, routes: [String]) async throws {
         _ = try await send("POST", "node/\(nodeID)/approve_routes", body: ["routes": routes])

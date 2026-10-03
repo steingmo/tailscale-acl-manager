@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 /// Talk to the workspace's control server (self-hosted Headscale or the
 /// official Tailscale API): pull/push the policy, list devices.
@@ -14,6 +15,16 @@ struct HeadscaleScreen: View {
     @State private var openingRecord: PushRecord?
     @State private var comparing: DiffPresentation?
     @State private var editingTags: HeadscaleNode?
+    // Auth key form
+    @State private var keyTags: [String] = []
+    @State private var keyUser = ""
+    @State private var users: [ServerUser] = []
+    @State private var keyReusable = false
+    @State private var keyEphemeral = false
+    @State private var keyPreauthorized = true
+    @State private var keyExpiry: TimeInterval = 86_400
+    @State private var createdKey: String?
+    @State private var keyError: String?
 
     private var serverURL: Binding<String> {
         Binding(get: { store.currentWorkspace.serverURL }, set: { store.setServerURL($0) })
@@ -59,6 +70,7 @@ struct HeadscaleScreen: View {
 
                 connectionPanel
                 policyPanel
+                if client != nil { authKeyPanel }
                 if !serverHistory.isEmpty { historyPanel }
                 if !store.headscaleNodes.isEmpty { nodesPanel }
             }
@@ -71,6 +83,9 @@ struct HeadscaleScreen: View {
         .onChange(of: store.currentWorkspaceID) {
             loadKey()
             status = nil
+            createdKey = nil
+            users = []
+            keyUser = ""
         }
         .confirmationDialog("Replace the editor contents with the policy from \(serverName)?",
                             isPresented: $confirmingPull) {
@@ -180,6 +195,113 @@ struct HeadscaleScreen: View {
                 ToolbarButton(label: "Compare with server…", icon: "doc.on.doc") { compareWithServer() }
                     .disabled(client == nil || busy)
             }
+        }
+    }
+
+    private var authKeyPanel: some View {
+        panel {
+            Text("Auth keys")
+                .font(.system(size: 13, weight: .bold))
+                .foregroundStyle(Theme.textPrimary)
+            Text(kind == .tailscale
+                 ? "Create a key for joining new devices. Devices that join with tags get those tags from the start, so the policy applies right away. Keys made with an OAuth client must have tags."
+                 : "Create a pre-auth key for joining new devices. Give it tags for tagged devices, or a user for that user's devices.")
+                .font(.system(size: 10.5))
+                .foregroundStyle(Theme.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+            StringListEditor(title: "Tags", addPrompt: "e.g. tag:server", suggestions: store.model.tagOrder, items: $keyTags)
+            if kind == .headscale {
+                HStack(spacing: 8) {
+                    Picker("User", selection: $keyUser) {
+                        Text("No user (tags only)").tag("")
+                        ForEach(users) { Text($0.name).tag($0.id) }
+                    }
+                    .frame(width: 280)
+                    Button("Load users") { loadUsers() }
+                        .font(.system(size: 11))
+                }
+            }
+            HStack(spacing: 16) {
+                Toggle("Reusable", isOn: $keyReusable)
+                Toggle("Ephemeral", isOn: $keyEphemeral)
+                    .help("Devices are removed automatically after going offline")
+                if kind == .tailscale {
+                    Toggle("Pre-approved", isOn: $keyPreauthorized)
+                        .help("Devices skip device approval")
+                }
+                Picker("Expires in", selection: $keyExpiry) {
+                    Text("1 hour").tag(3_600.0)
+                    Text("1 day").tag(86_400.0)
+                    Text("7 days").tag(604_800.0)
+                    Text("30 days").tag(2_592_000.0)
+                    Text("90 days").tag(7_776_000.0)
+                }
+                .frame(width: 180)
+            }
+            .font(.system(size: 11.5))
+            HStack(spacing: 10) {
+                ToolbarButton(label: "Create key", icon: "key") { createKey() }
+                    .disabled(busy || (keyTags.isEmpty && (kind == .tailscale ? false : keyUser.isEmpty))
+                              || !keyTags.allSatisfy { $0.hasPrefix("tag:") })
+                if let keyError {
+                    Label(keyError, systemImage: "xmark.octagon.fill")
+                        .font(.system(size: 11))
+                        .foregroundStyle(Theme.red)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            if let createdKey {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Copy it now — the server won't show this key again, and the app doesn't save it.")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(Theme.orange)
+                    HStack(spacing: 8) {
+                        Text(verbatim: createdKey)
+                            .font(.system(size: 11.5, design: .monospaced))
+                            .foregroundStyle(Theme.textPrimary)
+                            .textSelection(.enabled)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        Button("Copy") {
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.setString(createdKey, forType: .string)
+                        }
+                        Button("Done") { self.createdKey = nil }
+                    }
+                    .font(.system(size: 11))
+                }
+                .padding(10)
+                .background(RoundedRectangle(cornerRadius: 8).fill(Theme.orange.opacity(0.10)))
+            }
+        }
+    }
+
+    private func loadUsers() {
+        guard let client else { return }
+        Task {
+            do {
+                users = try await client.listUsers()
+                keyError = nil
+            } catch {
+                keyError = "Couldn't load users: \(error.localizedDescription)"
+            }
+        }
+    }
+
+    private func createKey() {
+        guard let client else { return }
+        let request = AuthKeyRequest(tags: keyTags, reusable: keyReusable, ephemeral: keyEphemeral,
+                                     preauthorized: keyPreauthorized, expiry: keyExpiry,
+                                     user: keyUser.isEmpty ? nil : keyUser)
+        busy = true
+        keyError = nil
+        Task {
+            do {
+                createdKey = try await client.createAuthKey(request)
+            } catch {
+                keyError = "The server refused: \(error.localizedDescription)"
+            }
+            busy = false
         }
     }
 
@@ -539,8 +661,8 @@ struct PushReviewSheet: View {
         do {
             let current = try await client.getPolicy()
             serverText = current
-            if client.hasValidation {
-                serverVerdict = try? await client.validate(candidate.text) ?? ""
+            if let report = try? await client.validate(candidate.text) {
+                serverVerdict = report.passed ? "" : report.summary
             }
             if let last = store.currentWorkspace.lastSyncedPolicy {
                 if last != current { conflictBase = last }
