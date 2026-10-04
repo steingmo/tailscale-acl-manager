@@ -299,16 +299,11 @@ extension Evaluator {
         if route == "0.0.0.0/0" || route == "::/0" {
             approvers = model.exitNodeApprovers
         } else {
-            approvers = model.routeApprovers.filter { routeContains($0.route, route) }.flatMap(\.approvers)
+            approvers = model.routeApprovers.filter { prefixContains($0.route, route) }.flatMap(\.approvers)
         }
         return approvers.contains { a in node.identities.contains { sourceMatches(spec: a, sourceID: $0) } }
     }
 
-    private func routeContains(_ outer: String, _ inner: String) -> Bool {
-        guard isAddressLike(outer), isAddressLike(inner) else { return outer == inner }
-        guard let o = parseCIDR(outer), let i = parseCIDR(inner) else { return false }
-        return o.bits <= i.bits && cidrContains(cidr: outer, ip: inner)
-    }
 }
 
 // MARK: - Tests from current behavior
@@ -340,6 +335,32 @@ func generateTests(_ m: PolicyModel, sources: [String]) -> [ACLTest] {
         }
         return accept.isEmpty && deny.isEmpty ? nil : ACLTest(index: 0, src: s, accept: accept, deny: deny)
     }
+}
+
+/// SSH tests pinning today's SSH access: for each source and SSH
+/// destination the rules name (a user's own devices via autogroup:self),
+/// every login the rules name plus root, as accept, check, or deny.
+/// Pairs with no SSH access at all are left out.
+func generateSSHTests(_ m: PolicyModel, sources: [String]) -> [SSHTest] {
+    let ev = Evaluator(model: m)
+    let dsts = m.sshRules.flatMap(\.dst).filter { !$0.hasPrefix("autogroup:") && $0 != "*" }.uniqued()
+    let usesSelf = m.sshRules.contains { $0.dst.contains("autogroup:self") }
+    let logins = (m.sshRules.flatMap(\.users).filter { !$0.hasPrefix("autogroup:") } + ["root"]).uniqued()
+    var out: [SSHTest] = []
+    for s in sources.uniqued() {
+        for d in dsts + (usesSelf && s.contains("@") ? [s] : []) {
+            var t = SSHTest(index: 0, src: s, dst: [d])
+            for login in logins {
+                switch ev.sshOutcome(src: s, dst: d, login: login) {
+                case .accept: t.accept.append(login)
+                case .check: t.check.append(login)
+                case .deny: t.deny.append(login)
+                }
+            }
+            if !t.accept.isEmpty || !t.check.isEmpty { out.append(t) }
+        }
+    }
+    return out
 }
 
 // MARK: - Failing test explanation

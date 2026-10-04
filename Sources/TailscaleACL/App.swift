@@ -248,14 +248,15 @@ struct RootView: View {
 
             Spacer()
 
-            let results = store.testResults
+            let passed = store.testResults.filter(\.passed).count + store.sshTestResults.filter(\.passed).count
+            let total = store.testResults.count + store.sshTestResults.count
             let problems = store.lintIssues.count
             VStack(alignment: .leading, spacing: 6) {
                 StatusPill(label: store.isValid ? "Policy valid" : "Policy invalid",
                            ok: store.isValid)
                 StatusPill(
-                    label: "\(results.filter(\.passed).count)/\(results.count) tests pass",
-                    ok: !results.isEmpty && results.allSatisfy(\.passed)
+                    label: "\(passed)/\(total) tests pass",
+                    ok: total > 0 && passed == total
                 )
                 StatusPill(
                     label: problems == 0 ? "No problems" : "\(problems) problem\(problems == 1 ? "" : "s")",

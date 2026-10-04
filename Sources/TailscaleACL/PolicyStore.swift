@@ -13,10 +13,20 @@ final class PolicyStore: ObservableObject {
     @Published private(set) var model = PolicyModel()
     @Published private(set) var parseError: HuJSONError?
     @Published private(set) var testResults: [TestResult] = []
+    @Published private(set) var sshTestResults: [SSHTestResult] = []
     @Published private(set) var lintIssues: [LintIssue] = []
     /// Nodes last fetched from Headscale (shared by the Headscale and simulator screens).
     @Published var headscaleNodes: [HeadscaleNode] = [] {
-        didSet { if isValid { lintIssues = lintPolicy(model) + lintNodes(model, nodes: headscaleNodes) } }
+        didSet { if isValid { lintIssues = allLint() } }
+    }
+    /// The server's user logins, for spotting users who left; nil when
+    /// unknown (no server, or the credential can't list users).
+    @Published var serverLogins: Set<String>? {
+        didSet { if isValid { lintIssues = allLint() } }
+    }
+
+    private func allLint() -> [LintIssue] {
+        lintPolicy(model) + lintNodes(model, nodes: headscaleNodes) + lintUsers(model, logins: serverLogins)
     }
 
     /// Set (e.g. from Problems) to show the Policy Editor at a 1-based line;
@@ -72,6 +82,7 @@ final class PolicyStore: ObservableObject {
         currentWorkspaceID = id
         UserDefaults.standard.set(id.uuidString, forKey: "currentWorkspaceID")
         headscaleNodes = []
+        serverLogins = nil
         serverDrift = nil
         linkedFileContents = nil
         text = currentWorkspace.policy
@@ -264,6 +275,7 @@ final class PolicyStore: ObservableObject {
         workspaces[i].lastSyncedPolicy = nil
         serverDrift = nil
         headscaleNodes = []
+        serverLogins = nil
         saveWorkspaces()
     }
 
@@ -279,6 +291,8 @@ final class PolicyStore: ObservableObject {
         let workspace = currentWorkspaceID
         let nodes = try await client.listNodes()
         if workspace == currentWorkspaceID { headscaleNodes = nodes }
+        let logins = try? await client.userLogins()
+        if workspace == currentWorkspaceID { serverLogins = logins }
     }
 
     private func saveWorkspaces() {
@@ -327,11 +341,13 @@ final class PolicyStore: ObservableObject {
             vocabulary = EditorVocabulary(model)
             parseError = nil
             testResults = evaluator.runTests()
-            lintIssues = lintPolicy(model) + lintNodes(model, nodes: headscaleNodes)
+            sshTestResults = evaluator.runSSHTests()
+            lintIssues = allLint()
             writeLinkedFile()
         } catch let error as HuJSONError {
             parseError = error
             testResults = []
+            sshTestResults = []
             lintIssues = [LintIssue(severity: .error, title: "Policy does not parse",
                                     detail: "Line \(error.line): \(error.message)", line: error.line)]
         } catch {
@@ -645,6 +661,12 @@ final class PolicyStore: ObservableObject {
             deleteEntity(name)
         case .deleteRule(let section, let index):
             deleteRule(section: section, index: index)
+        case .removeGroupMember(let group, let member):
+            mutate { tree in
+                guard var members = tree["groups"]?[group]?.elements else { return }
+                members.removeAll { $0.value.stringValue == member }
+                tree["groups"]?[group] = .array(members)
+            }
         }
     }
 
@@ -677,11 +699,21 @@ final class PolicyStore: ObservableObject {
     }
 
     /// Add generated tests, or replace all existing tests with them.
-    func setGeneratedTests(_ tests: [ACLTest], replacingExisting: Bool) {
+    func setGeneratedTests(_ tests: [ACLTest], ssh: [SSHTest] = [], replacingExisting: Bool) {
         mutate { tree in
             let existing = replacingExisting ? [] : (tree["tests"]?.elements ?? [])
-            tree["tests"] = .array(existing + testElements(tests))
+            let all = existing + testElements(tests)
+            tree["tests"] = all.isEmpty ? nil : .array(all)
+            if !ssh.isEmpty || replacingExisting {
+                let existingSSH = replacingExisting ? [] : (tree["sshTests"]?.elements ?? [])
+                let allSSH = existingSSH + sshTestElements(ssh)
+                tree["sshTests"] = allSSH.isEmpty ? nil : .array(allSSH)
+            }
         }
+    }
+
+    func deleteSSHTest(index: Int) {
+        deleteRule(section: "sshTests", index: index)
     }
 
     func deleteSSHRule(index: Int) {

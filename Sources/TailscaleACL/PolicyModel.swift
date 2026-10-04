@@ -64,6 +64,20 @@ struct ACLTest: Identifiable {
     var id: Int { index }
 }
 
+/// One "sshTests" entry: for every dst, each listed login must be allowed
+/// (accept), allowed only after a check (check), or not allowed (deny).
+struct SSHTest: Identifiable {
+    var index: Int
+    var src: String
+    var dst: [String]
+    var accept: [String] = []
+    var check: [String] = []
+    var deny: [String] = []
+    var srcPostureAttrs: [String: String]?
+
+    var id: Int { index }
+}
+
 struct PolicyModel {
     var groups: [String: [String]] = [:]
     var groupOrder: [String] = []
@@ -85,6 +99,7 @@ struct PolicyModel {
     var exitNodeApprovers: [String] = []
     var nodeAttrs: [NodeAttrRule] = []
     var tests: [ACLTest] = []
+    var sshTests: [SSHTest] = []
 
     init() {}
 
@@ -182,6 +197,23 @@ struct PolicyModel {
                     dst: e.value["dst"]?.stringArray ?? [],
                     users: e.value["users"]?.stringArray ?? [],
                     expires: c.expires
+                ))
+            }
+        }
+        if let elements = tree["sshTests"]?.elements {
+            for (i, e) in elements.enumerated() {
+                guard case .object = e.value else { continue }
+                sshTests.append(SSHTest(
+                    index: i,
+                    src: e.value["src"]?.stringValue ?? "",
+                    dst: e.value["dst"]?.stringArray ?? [],
+                    accept: e.value["accept"]?.stringArray ?? [],
+                    check: e.value["check"]?.stringArray ?? [],
+                    deny: e.value["deny"]?.stringArray ?? [],
+                    srcPostureAttrs: e.value["srcPostureAttrs"]?.members.map { members in
+                        Dictionary(members.compactMap { m in m.value.scalarText.map { (m.key, $0) } },
+                                   uniquingKeysWith: { a, _ in a })
+                    }
                 ))
             }
         }

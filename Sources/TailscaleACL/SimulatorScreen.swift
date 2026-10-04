@@ -3,7 +3,16 @@ import SwiftUI
 struct SimulatorScreen: View {
     @EnvironmentObject var store: PolicyStore
     @State private var source = ""
-    @State private var dest = ""
+    @State private var pickedDest = ""
+    /// An IP typed instead of picking a destination.
+    @State private var typedDest = ""
+    @State private var pinned: String?
+
+    /// The destination: a typed IP when it's valid, else the picked entity.
+    private var dest: String {
+        let typed = typedDest.trimmingCharacters(in: .whitespaces)
+        return isAddressLike(typed) ? typed : pickedDest
+    }
     @State private var port = 443
     @State private var sshMode = false
     @State private var login = "root"
@@ -101,7 +110,15 @@ struct SimulatorScreen: View {
                     }
 
                     formRow(title: "Destination", subtitle: "The device or resource being reached") {
-                        sectionedPicker(selection: $dest, sections: destSections)
+                        HStack(spacing: 8) {
+                            sectionedPicker(selection: $pickedDest, sections: destSections)
+                                .disabled(isAddressLike(typedDest.trimmingCharacters(in: .whitespaces)))
+                            TextField("or type an IP", text: $typedDest)
+                                .textFieldStyle(.roundedBorder)
+                                .font(.system(size: 12, design: .monospaced))
+                                .frame(width: 140)
+                                .help("Any IPv4 or IPv6 address, e.g. 10.114.32.11 — overrides the picker")
+                        }
                     }
 
                     formRow(title: "Check", subtitle: "Network access on a port, or Tailscale SSH login") {
@@ -159,18 +176,21 @@ struct SimulatorScreen: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(Theme.background)
-        .onChange(of: "\(source)|\(dest)|\(port)|\(sshMode)|\(store.text.hashValue)") { tailscaleCheck = nil }
+        .onChange(of: "\(source)|\(dest)|\(port)|\(sshMode)|\(login)|\(store.text.hashValue)") {
+            tailscaleCheck = nil
+            pinned = nil
+        }
         .onChange(of: store.currentWorkspaceID) {
             hasServer = store.serverClient() != nil
             nodeError = nil
             source = sources.first ?? ""
-            dest = store.model.tagOrder.first ?? store.model.hostOrder.first ?? dests.first ?? ""
+            pickedDest = store.model.tagOrder.first ?? store.model.hostOrder.first ?? dests.first ?? ""
         }
         .onAppear {
             hasServer = store.serverClient() != nil
             if source.isEmpty { source = sources.first ?? "" }
-            if dest.isEmpty {
-                dest = store.model.tagOrder.first
+            if pickedDest.isEmpty {
+                pickedDest = store.model.tagOrder.first
                     ?? store.model.hostOrder.first
                     ?? dests.first ?? ""
             }
@@ -281,6 +301,8 @@ struct SimulatorScreen: View {
                 .font(.system(size: 11.5))
                 .foregroundStyle(network ? Theme.green : Theme.red)
 
+            pinButton
+
             if !matches.isEmpty {
                 Text("Matching SSH rules")
                     .font(.system(size: 13, weight: .bold))
@@ -317,16 +339,73 @@ struct SimulatorScreen: View {
     /// editor's policy, by validating it with a single synthetic test. The
     /// test carries the device's known posture attributes, and the app's
     /// expectation is computed the same way (only those attributes are set).
-    private func checkWithTailscale() {
-        guard let client = store.serverClient() else { return }
-        let src = node(for: source)?.policyName ?? source
-        let dstHost = node(for: dest).flatMap { n in n.ipAddresses?.first { !$0.contains(":") } } ?? dest
-        let entry = "\(dstHost):\(port)"
+    /// The query as a policy test's source, or nil when tests can't use it.
+    private var testSource: String? {
+        let s = node(for: source)?.policyName ?? source
+        return s == "*" || s.hasPrefix("autogroup:") || s.hasPrefix("ipset:") || s.isEmpty ? nil : s
+    }
+
+    /// The network question as a test. Its expectation is computed the way
+    /// tests run: the source has only the device's known posture attributes.
+    private var networkTest: ACLTest? {
+        guard let src = testSource else { return nil }
+        let target = node(for: dest).flatMap { n in n.ipAddresses?.first { !$0.contains(":") } ?? n.ipAddresses?.first } ?? dest
+        guard isAddressLike(target) || target.hasPrefix("tag:") || store.model.hosts[target] != nil else { return nil }
+        let entry = DestSpec(target: target, ports: String(port)).spec
         let attrs = sourceAttributes ?? [:]
-        let expectAllowed = Evaluator(model: store.model, sourceAttributes: attrs, attributesComplete: true)
+        let allowed = Evaluator(model: store.model, sourceAttributes: attrs, attributesComplete: true)
             .evaluate(sourceIDs: identities(for: source), destIDs: identities(for: dest), port: port).allowed
-        let test = ACLTest(index: 0, src: src, accept: expectAllowed ? [entry] : [], deny: expectAllowed ? [] : [entry],
-                           srcPostureAttrs: attrs.isEmpty ? nil : attrs)
+        return ACLTest(index: 0, src: src, accept: allowed ? [entry] : [], deny: allowed ? [] : [entry],
+                       srcPostureAttrs: attrs.isEmpty ? nil : attrs)
+    }
+
+    /// The SSH question as an sshTest (SSH rules only, like Tailscale's).
+    private var sshTest: SSHTest? {
+        guard let src = testSource else { return nil }
+        let target = node(for: dest)?.policyName ?? dest
+        guard target.hasPrefix("tag:") || target.hasPrefix("group:") || target.contains("@")
+                || store.model.hosts[target] != nil else { return nil }
+        let user = login.trimmingCharacters(in: .whitespaces).isEmpty ? "root" : login.trimmingCharacters(in: .whitespaces)
+        var test = SSHTest(index: 0, src: src, dst: [target])
+        switch store.evaluator.sshOutcome(src: src, dst: target, login: user) {
+        case .accept: test.accept = [user]
+        case .check: test.check = [user]
+        case .deny: test.deny = [user]
+        }
+        return test
+    }
+
+    /// Adds this question and today's answer to the policy's tests.
+    private var pinButton: some View {
+        HStack(spacing: 8) {
+            Button("Pin as test") {
+                if sshMode, let t = sshTest {
+                    store.setGeneratedTests([], ssh: [t], replacingExisting: false)
+                    pinned = "Added as sshTests[\(store.model.sshTests.count - 1)]."
+                } else if !sshMode, let t = networkTest {
+                    store.setGeneratedTests([t], replacingExisting: false)
+                    pinned = "Added as tests[\(store.model.tests.count - 1)]."
+                }
+            }
+            .disabled(sshMode ? sshTest == nil : networkTest == nil)
+            .help(testSource == nil ? "Tests need a user, group, tag, host, or device as the source"
+                  : (sshMode ? sshTest == nil : networkTest == nil)
+                    ? (sshMode ? "SSH tests need a user, group, tag, host, or device as the destination"
+                       : "Tests need a tag, host, or device as the destination — or type an IP")
+                    : "Save this question and today's answer as a policy test, so a change that alters it fails the tests")
+            if let pinned {
+                Label(pinned, systemImage: "pin.fill")
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(Theme.textSecondary)
+            }
+        }
+    }
+
+    private func checkWithTailscale() {
+        guard let client = store.serverClient(), let test = networkTest else { return }
+        let src = test.src
+        let entry = (test.accept + test.deny).first ?? ""
+        let expectAllowed = !test.accept.isEmpty
         checkingTailscale = true
         tailscaleCheck = nil
         Task {
@@ -388,10 +467,23 @@ struct SimulatorScreen: View {
                     .textSelection(.enabled)
             }
 
+            if isAddressLike(dest) {
+                let ev = store.evaluator
+                let sets = store.model.ipsetOrder.filter { ev.ipsetContains($0, ip: dest) }
+                let hosts = store.model.hostOrder.filter { cidrContains(cidr: store.model.hosts[$0] ?? "", ip: dest) }
+                Text(verbatim: sets.isEmpty && hosts.isEmpty ? "\(dest) isn't in any host or IP set."
+                     : "\(dest) is in: " + (hosts + sets).joined(separator: ", "))
+                    .font(.system(size: 10.5, design: .monospaced))
+                    .foregroundStyle(Theme.textSecondary)
+                    .textSelection(.enabled)
+            }
+
+            pinButton
+
             if store.currentWorkspace.kind == .tailscale, store.serverClient() != nil {
                 HStack(spacing: 8) {
                     Button("Check with Tailscale") { checkWithTailscale() }
-                        .disabled(checkingTailscale)
+                        .disabled(checkingTailscale || networkTest == nil)
                         .help("Ask Tailscale's own policy engine the same question about the editor's policy")
                     if checkingTailscale { ProgressView().controlSize(.small) }
                     if let check = tailscaleCheck {

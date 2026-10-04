@@ -244,6 +244,27 @@ struct TestAssertion: Identifiable {
     var id: String { "\(kind)-\(dst)" }
 }
 
+extension TestAssertion {
+    enum SSHKind: String { case accept, check, deny }
+}
+
+struct SSHTestAssertion: Identifiable {
+    var dst: String
+    var login: String
+    var expected: TestAssertion.SSHKind
+    var actual: TestAssertion.SSHKind
+    var passed: Bool { expected == actual }
+    var id: String { "\(dst)-\(login)-\(expected)" }
+}
+
+struct SSHTestResult: Identifiable {
+    var testIndex: Int
+    var src: String
+    var assertions: [SSHTestAssertion]
+    var passed: Bool { assertions.allSatisfy(\.passed) }
+    var id: Int { testIndex }
+}
+
 struct TestResult: Identifiable {
     var testIndex: Int
     var src: String
@@ -307,6 +328,29 @@ extension Evaluator {
     /// Network access for SSH: the session runs over TCP 22.
     func sshNetworkAllowed(sourceIDs: [String], destIDs: [String]) -> Bool {
         evaluate(sourceIDs: sourceIDs, destIDs: destIDs, port: 22).allowed
+    }
+
+    /// How SSH rules treat `login` from `src` to `dst`: accept, check, or deny.
+    /// Like Tailscale's sshTests, only SSH rules are consulted (not network access).
+    func sshOutcome(src: String, dst: String, login: String) -> TestAssertion.SSHKind {
+        let matches = evaluateSSH(sourceIDs: [src], destIDs: [dst], login: login)
+        if matches.contains(where: { $0.action == "accept" }) { return .accept }
+        return matches.isEmpty ? .deny : .check
+    }
+
+    func runSSHTests() -> [SSHTestResult] {
+        model.sshTests.map { test in
+            var assertions: [SSHTestAssertion] = []
+            for dst in test.dst {
+                for (kind, logins) in [(TestAssertion.SSHKind.accept, test.accept), (.check, test.check), (.deny, test.deny)] {
+                    for login in logins {
+                        assertions.append(SSHTestAssertion(dst: dst, login: login, expected: kind,
+                                                           actual: sshOutcome(src: test.src, dst: dst, login: login)))
+                    }
+                }
+            }
+            return SSHTestResult(testIndex: test.index, src: test.src, assertions: assertions)
+        }
     }
 
     func loginAllowed(_ login: String, users: [String]) -> Bool {

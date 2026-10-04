@@ -4,13 +4,16 @@ struct TestsScreen: View {
     @EnvironmentObject var store: PolicyStore
     @State private var showingAddTest = false
     @State private var generated: [ACLTest]?
+    @State private var generatedSSH: [SSHTest] = []
     @State private var editingRule: RuleSummary?
     @State private var tailscaleRun: (ok: Bool?, text: String, disagreements: [TestDisagreement])?
     @State private var runningOnTailscale = false
 
     var body: some View {
         let results = store.testResults
-        let passing = results.filter(\.passed).count
+        let ssh = store.sshTestResults
+        let passing = results.filter(\.passed).count + ssh.filter(\.passed).count
+        let total = results.count + ssh.count
 
         return ScrollView {
             VStack(alignment: .leading, spacing: 12) {
@@ -20,13 +23,14 @@ struct TestsScreen: View {
                             .font(.system(size: 16, weight: .bold))
                             .foregroundStyle(Theme.textPrimary)
                         Text(store.isValid
-                             ? "\(passing)/\(results.count) passing"
+                             ? "\(passing)/\(total) passing"
                              : "Policy is invalid")
                             .font(.system(size: 11.5))
                             .foregroundStyle(Theme.textSecondary)
                     }
                     Spacer()
                     ToolbarButton(label: "Generate from current access", icon: "wand.and.stars") {
+                        generatedSSH = generateSSHTests(store.model, sources: generationSources)
                         generated = generateTests(store.model, sources: generationSources)
                     }
                     .disabled(!store.isValid)
@@ -36,13 +40,20 @@ struct TestsScreen: View {
                     }
                 }
 
-                if store.isValid && !results.isEmpty {
-                    banner(passing: passing, total: results.count)
+                if store.isValid && total > 0 {
+                    banner(passing: passing, total: total)
                     if store.currentWorkspace.kind == .tailscale, store.serverClient() != nil {
                         tailscaleRow(results)
                     }
                     ForEach(results) { result in
                         testCard(result)
+                    }
+                    if !ssh.isEmpty {
+                        Text("SSH tests")
+                            .font(.system(size: 13, weight: .bold))
+                            .foregroundStyle(Theme.textPrimary)
+                            .padding(.top, 6)
+                        ForEach(ssh) { sshTestCard($0) }
                     }
                 } else if store.isValid {
                     Text("No tests yet. Add one to lock in the behavior you expect.")
@@ -63,14 +74,16 @@ struct TestsScreen: View {
         .background(Theme.background)
         .confirmationDialog(generatedTitle, isPresented: Binding(get: { generated != nil },
                                                                  set: { if !$0 { generated = nil } })) {
-            if let generated, !generated.isEmpty {
-                Button("Add to existing tests") { store.setGeneratedTests(generated, replacingExisting: false) }
+            if let generated, !(generated.isEmpty && generatedSSH.isEmpty) {
+                Button("Add to existing tests") {
+                    store.setGeneratedTests(generated, ssh: generatedSSH, replacingExisting: false)
+                }
                 Button("Replace all existing tests", role: .destructive) {
-                    store.setGeneratedTests(generated, replacingExisting: true)
+                    store.setGeneratedTests(generated, ssh: generatedSSH, replacingExisting: true)
                 }
             }
         } message: {
-            Text(generationSourceNote + " Each test lists the tag and host ports a source reaches today, and the ports others reach there that it can't. You can undo this with ⌘Z.")
+            Text(generationSourceNote + " Each test lists the tag and host ports a source reaches today, and the ports others reach there that it can't; SSH tests list which logins each source gets on each SSH destination. You can undo this with ⌘Z.")
         }
         .sheet(item: $editingRule) { RuleSheet(existing: $0) }
         .onChange(of: store.text) { tailscaleRun = nil }
@@ -142,8 +155,10 @@ struct TestsScreen: View {
     private var generatedTitle: String {
         guard let generated else { return "" }
         let n = generated.reduce(0) { $0 + $1.accept.count + $1.deny.count }
-        return generated.isEmpty ? "Nothing to generate — no source reaches any tag or host."
-            : "Generate \(generated.count) test\(generated.count == 1 ? "" : "s") with \(n) checks?"
+            + generatedSSH.reduce(0) { $0 + $1.accept.count + $1.check.count + $1.deny.count }
+        let count = generated.count + generatedSSH.count
+        return count == 0 ? "Nothing to generate — no source reaches any tag or host."
+            : "Generate \(count) test\(count == 1 ? "" : "s") with \(n) checks?"
     }
 
     private func banner(passing: Int, total: Int) -> some View {
@@ -167,6 +182,47 @@ struct TestsScreen: View {
             RoundedRectangle(cornerRadius: 8)
                 .stroke((allPass ? Theme.green : Theme.red).opacity(0.35), lineWidth: 1)
         )
+    }
+
+    private func sshTestCard(_ result: SSHTestResult) -> some View {
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(spacing: 8) {
+                Text(result.passed ? "Pass" : "Fail")
+                    .font(.system(size: 10.5, weight: .bold))
+                    .foregroundStyle(result.passed ? Theme.green : Theme.red)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(Capsule().fill((result.passed ? Theme.green : Theme.red).opacity(0.12)))
+                Text("SSH test #\(result.testIndex + 1)")
+                    .font(.system(size: 12.5, weight: .semibold))
+                    .foregroundStyle(Theme.textSecondary)
+                Spacer()
+                Chip(text: result.src, color: Theme.green, icon: "person")
+                Button { store.deleteSSHTest(index: result.testIndex) } label: {
+                    Image(systemName: "trash").font(.system(size: 10.5)).foregroundStyle(Theme.textSecondary)
+                }
+                .buttonStyle(.plain)
+                .help("Delete this SSH test")
+            }
+            ForEach(result.assertions) { a in
+                HStack(spacing: 8) {
+                    Image(systemName: a.passed ? "checkmark" : "xmark")
+                        .font(.system(size: 10.5, weight: .bold))
+                        .foregroundStyle(a.passed ? Theme.green : Theme.red)
+                    Chip(text: "\(a.expected.rawValue) \(a.login) on \(a.dst)",
+                         color: a.expected == .deny ? Theme.orange : Theme.pink, icon: "terminal")
+                    if !a.passed {
+                        Text(verbatim: "but SSH rules say \(a.actual.rawValue)")
+                            .font(.system(size: 10.5))
+                            .foregroundStyle(Theme.red)
+                    }
+                }
+            }
+        }
+        .padding(13)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 9).fill(Theme.panel))
+        .overlay(RoundedRectangle(cornerRadius: 9).stroke(Theme.panelBorder, lineWidth: 1))
     }
 
     private func testCard(_ result: TestResult) -> some View {

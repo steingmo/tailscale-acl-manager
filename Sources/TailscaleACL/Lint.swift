@@ -22,6 +22,7 @@ struct LintFix: Identifiable {
         case defineGroup(String)          // groups[group] = []
         case deleteEntity(String)         // definition + every reference
         case deleteRule(section: String, index: Int)
+        case removeGroupMember(group: String, member: String)
     }
 
     var label: String
@@ -62,6 +63,10 @@ func lintPolicy(_ m: PolicyModel, now: Date = Date()) -> [LintIssue] {
         for e in t.accept + t.deny {
             references.append((DestSpec(e).target, "tests[\(t.index)]"))
         }
+    }
+    for t in m.sshTests {
+        references.append((t.src, "sshTests[\(t.index)]"))
+        for d in t.dst { references.append((d, "sshTests[\(t.index)]")) }
     }
     for (tag, owners) in m.tagOwners {
         for o in owners { references.append((o, "tagOwners[\(tag)]")) }
@@ -368,6 +373,25 @@ func ipRange(_ s: String) -> (lo: [UInt8], hi: [UInt8])? {
     return (lo, hi)
 }
 
+/// Is prefix `inner` (or an address) entirely inside prefix `outer`?
+func prefixContains(_ outer: String, _ inner: String) -> Bool {
+    guard let o = parseCIDR(outer), let i = parseCIDR(inner) else { return outer == inner }
+    return o.bits <= i.bits && cidrContains(cidr: outer, ip: inner)
+}
+
+/// The address prefixes a destination stands for: IPs, CIDRs, host
+/// addresses, and what IP sets add; the internet as 0.0.0.0/0. Empty for
+/// device selectors (tags, groups, users), which need no route.
+func addressPrefixes(_ target: String, _ m: PolicyModel, visiting: Set<String> = []) -> [String] {
+    let t = target.hasPrefix("host:") ? String(target.dropFirst(5)) : target
+    if isAddressLike(t) { return [t] }
+    if let ip = m.hosts[t] { return [ip] }
+    if t == "autogroup:internet" { return ["0.0.0.0/0"] }
+    guard let entries = m.ipsets[t], !visiting.contains(t) else { return [] }
+    return entries.compactMap(IPSetEntry.init).filter { !$0.remove }
+        .flatMap { addressPrefixes($0.target, m, visiting: visiting.union([t])) }
+}
+
 /// Public internet addresses (what autogroup:internet means): not private,
 /// CGNAT/Tailscale, loopback, link-local, multicast, or reserved.
 func isPublicAddress(_ s: String) -> Bool {
@@ -400,6 +424,33 @@ private func isValidIPSpec(_ spec: String) -> Bool {
         return rest == "*" || isValidPortToken(rest)
     }
     return isValidPortToken(spec)
+}
+
+// MARK: - User checks (need the server's user list)
+
+/// Users the policy names who aren't users on the server (anymore): stale
+/// group members, and users named directly in rules.
+func lintUsers(_ m: PolicyModel, logins: Set<String>?) -> [LintIssue] {
+    guard let logins, !logins.isEmpty else { return [] }
+    func known(_ u: String) -> Bool { !u.contains("@") || u.contains("*") || logins.contains(u.lowercased()) }
+    var issues: [LintIssue] = []
+    for g in m.groupOrder {
+        for u in m.groups[g] ?? [] where !known(u) {
+            issues.append(.init(severity: .warning, title: "Not a user on the server",
+                                detail: "\(u) is in \(g) but isn't a user on the server — maybe they left. Remove them so access doesn't return if the address is reused.",
+                                fixes: [.init(label: "Remove from \(g)", action: .removeGroupMember(group: g, member: u))],
+                                path: "groups[\(g)]"))
+        }
+    }
+    let direct = m.rules.map { ("acls[\($0.index)]", $0.src) } + m.grants.map { ("grants[\($0.index)]", $0.src) }
+        + m.sshRules.map { ("ssh[\($0.index)]", $0.src) }
+    for (where_, src) in direct {
+        for u in src where !known(u) {
+            issues.append(.init(severity: .warning, title: "Not a user on the server",
+                                detail: "\(u) in \(where_) isn't a user on the server — maybe they left.", path: where_))
+        }
+    }
+    return issues
 }
 
 // MARK: - Device checks (need nodes loaded from Headscale)
@@ -451,6 +502,32 @@ func lintNodes(_ m: PolicyModel, nodes: [HeadscaleNode]) -> [LintIssue] {
     }
     for r in m.rules where r.action == "accept" {
         check("acls[\(r.index)]", src: r.src, dstTargets: r.dst.map { DestSpec($0).target })
+    }
+
+    // "via" sends traffic through devices with those tags, so one of them
+    // must have an approved route covering each destination address.
+    for g in m.grants where !g.via.isEmpty {
+        let prefixes = g.dst.flatMap { addressPrefixes($0, m) }.uniqued()
+        guard !prefixes.isEmpty else { continue }
+        let via = g.via.joined(separator: " or ")
+        let routers = nodes.filter { !Set($0.allTags).isDisjoint(with: g.via) }
+        if routers.isEmpty {
+            issues.append(.init(severity: .warning, title: "No router for via",
+                                detail: "grants[\(g.index)] routes via \(via), but no current device carries that tag, so the traffic has no path.",
+                                path: "grants[\(g.index)].via"))
+            continue
+        }
+        func served(_ p: String, by routes: (HeadscaleNode) -> [String]?) -> Bool {
+            routers.contains { r in (routes(r) ?? []).contains { prefixContains($0, p) } }
+        }
+        let missing = prefixes.filter { !served($0, by: \.approvedRoutes) }
+        guard !missing.isEmpty else { continue }
+        let advertised = missing.filter { served($0, by: \.availableRoutes) }
+        let shown = missing.prefix(4).joined(separator: ", ") + (missing.count > 4 ? ", …" : "")
+        issues.append(.init(severity: .warning, title: "Route not served via",
+                            detail: "grants[\(g.index)] sends \(shown) via \(via), but no \(via) device (\(routers.map(\.displayName).joined(separator: ", "))) has an approved route covering \(missing.count == 1 ? "it" : "them")"
+                                + (advertised.isEmpty ? "." : " — \(advertised.count == missing.count ? "they are" : "some are") advertised but not yet approved (see Routes)."),
+                            path: "grants[\(g.index)].via"))
     }
     for g in m.grants {
         check("grants[\(g.index)]", src: g.src, dstTargets: g.dst)

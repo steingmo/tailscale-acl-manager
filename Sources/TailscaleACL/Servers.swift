@@ -33,6 +33,9 @@ protocol PolicyServer: AnyObject {
     /// Who changed the policy on the server in the last `days` days, newest
     /// first; nil when the server keeps no audit log (Headscale).
     func policyChanges(days: Int) async throws -> [PolicyChange]?
+    /// Every name a policy can use for a server user (emails, "name@"),
+    /// lowercased, to spot group members who are no longer users.
+    func userLogins() async throws -> Set<String>
 }
 
 struct PolicyChange: Identifiable {
@@ -232,6 +235,13 @@ final class TailscaleClient: PolicyServer {
 
     func expireNode(nodeID: String) async throws {
         _ = try await request("POST", "device/\(nodeID)/expire")
+    }
+
+    /// Needs the users:read scope.
+    func userLogins() async throws -> Set<String> {
+        let (data, _) = try await request("GET", "\(tailnetPath)/users")
+        let users = (try JSONSerialization.jsonObject(with: data) as? [String: Any])?["users"] as? [[String: Any]] ?? []
+        return Set(users.compactMap { ($0["loginName"] as? String)?.lowercased() })
     }
 
     /// From the configuration audit log (needs the logs:configuration:read scope).

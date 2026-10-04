@@ -18,6 +18,17 @@ func testElements(_ tests: [ACLTest]) -> [JSON.Element] {
     }
 }
 
+func sshTestElements(_ tests: [SSHTest]) -> [JSON.Element] {
+    tests.map { t in
+        var members: [JSON.Member] = [.init(comments: [], key: "src", value: .string(t.src)),
+                                      .init(comments: [], key: "dst", value: stringArrayJSON(t.dst))]
+        for (key, logins) in [("accept", t.accept), ("check", t.check), ("deny", t.deny)] where !logins.isEmpty {
+            members.append(.init(comments: [], key: key, value: stringArrayJSON(logins)))
+        }
+        return JSON.Element(comments: [], value: .object(members))
+    }
+}
+
 /// The policy with its tests replaced, so Tailscale evaluates exactly these
 /// cases against the editor's (unsaved) policy.
 func policyWithTests(_ text: String, _ tests: [ACLTest]) throws -> String {

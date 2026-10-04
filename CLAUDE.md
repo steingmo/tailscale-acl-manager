@@ -67,6 +67,12 @@ Swift Package (no Xcode project). All source in `Sources/TailscaleACL/`:
   via `JSON.line(at:)` (the parser records each member's/element's line);
   Problems links to it (`PolicyStore.editorLineRequest`), the gutter marks
   it, and the CLI prints `file:line:`.
+- SSH tests: `PolicyModel.sshTests`, `Evaluator.runSSHTests`/`sshOutcome`
+  (SSH rules only, no network check — like Tailscale), `generateSSHTests`.
+- Server checks in Lint.swift: `lintNodes` also checks `via` grants against
+  routers' approved routes (`addressPrefixes`, `prefixContains`);
+  `lintUsers` flags group members missing from `PolicyServer.userLogins()`
+  (`PolicyStore.serverLogins`, loaded with devices).
 - `convertACLsToGrants` (Templates.swift) rewrites ACLs as grants; the sheet
   proves equivalence with `entityAccessDifferences` (+ `accessChanges` on
   devices). Headscale accepts grants from 0.29.0.

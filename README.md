@@ -89,6 +89,14 @@ Use `-` to read the policy from standard input.
   access.
 - **Editor help** — completes group, tag, host, IP set, posture, and
   autogroup names inside strings, and shows what a name is on hover.
+- **SSH tests** — the policy's `sshTests` run locally next to the network
+  tests, and "Generate from current access" pins SSH logins too.
+- **Simulator extras** — type any IP as the destination (it shows which
+  hosts and IP sets contain it), and "Pin as test" saves the question and
+  today's answer as a policy test.
+- **Server hygiene** — with a server connected, Problems flags `via` grants
+  whose routers lack an approved route for the destination, and group
+  members who are no longer users on the server (one-click removal).
 - **Who changed it** — for Tailscale, the configuration audit log shows who
   changed the policy and when (needs the `logs:configuration:read` scope).
 

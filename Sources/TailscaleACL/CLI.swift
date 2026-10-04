@@ -63,8 +63,16 @@ func runCommandLine(_ args: [String], output: (String) -> Void = { print($0) }) 
                 output("\(at): FAIL tests[\(r.testIndex)] \(r.src) should \(a.kind == .accept ? "reach" : "not reach") \(a.dst)")
             }
         }
-        failed = results.filter { !$0.passed }.count
-        output("\(results.count) test\(results.count == 1 ? "" : "s"), \(failed) failed; \(errors) error\(errors == 1 ? "" : "s"), \(issues.count - errors) warning\(issues.count - errors == 1 ? "" : "s")")
+        let ssh = Evaluator(model: model).runSSHTests()
+        for r in ssh {
+            let at = tree.line(at: "sshTests[\(r.testIndex)]").map { "\(path):\($0)" } ?? path
+            for a in r.assertions where !a.passed {
+                output("\(at): FAIL sshTests[\(r.testIndex)] \(r.src) → \(a.dst) as \(a.login): expected \(a.expected.rawValue), got \(a.actual.rawValue)")
+            }
+        }
+        failed = results.filter { !$0.passed }.count + ssh.filter { !$0.passed }.count
+        let total = results.count + ssh.count
+        output("\(total) test\(total == 1 ? "" : "s"), \(failed) failed; \(errors) error\(errors == 1 ? "" : "s"), \(issues.count - errors) warning\(issues.count - errors == 1 ? "" : "s")")
     } else {
         output("\(errors) error\(errors == 1 ? "" : "s"), \(issues.count - errors) warning\(issues.count - errors == 1 ? "" : "s")")
     }

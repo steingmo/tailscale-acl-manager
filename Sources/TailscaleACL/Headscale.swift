@@ -172,6 +172,21 @@ final class HeadscaleClient: PolicyServer {
         _ = try await send("DELETE", "node/\(nodeID)")
     }
 
+    /// Policies name Headscale users by email or as "name@".
+    func userLogins() async throws -> Set<String> {
+        let data = try await send("GET", "user")
+        let users = (try JSONSerialization.jsonObject(with: data) as? [String: Any])?["users"] as? [[String: Any]] ?? []
+        var logins = Set<String>()
+        for u in users {
+            for key in ["email", "name"] {
+                guard let v = (u[key] as? String)?.lowercased(), !v.isEmpty else { continue }
+                logins.insert(v)
+                if !v.contains("@") { logins.insert(v + "@") }
+            }
+        }
+        return logins
+    }
+
     /// Headscale keeps no audit log.
     func policyChanges(days: Int) async throws -> [PolicyChange]? { nil }
 
