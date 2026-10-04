@@ -70,6 +70,12 @@ func lintPolicy(_ m: PolicyModel, now: Date = Date()) -> [LintIssue] {
         for a in approvers { references.append((a, "autoApprovers.routes[\(route)]")) }
     }
     for a in m.exitNodeApprovers { references.append((a, "autoApprovers.exitNode")) }
+    for (name, entries) in m.ipsets {
+        for e in entries.compactMap(IPSetEntry.init)
+        where e.target.hasPrefix("host:") || e.target.hasPrefix("ipset:") {
+            references.append((e.target, "ipsets[\(name)]"))
+        }
+    }
     for n in m.nodeAttrs {
         for t in n.target { references.append((t, "nodeAttrs[\(n.index)].target")) }
     }
@@ -157,9 +163,9 @@ func lintPolicy(_ m: PolicyModel, now: Date = Date()) -> [LintIssue] {
                             detail: "Host \"\(name)\" has value \"\(addr)\", which is not an IP address or CIDR.", path: "hosts[\(name)]"))
     }
     for (name, entries) in m.ipsets {
-        for e in entries where !isAddressLike(e) {
+        for e in entries where IPSetEntry(e) == nil {
             issues.append(.init(severity: .warning, title: "Invalid IP set entry",
-                                detail: "\(name) contains \"\(e)\", which is not an IP address or CIDR.", path: "ipsets[\(name)]"))
+                                detail: "\(name) contains \"\(e)\", which is not valid — expected an IP, CIDR, range (a-b), host:, ipset:, or autogroup:internet, optionally after add or remove.", path: "ipsets[\(name)]"))
         }
     }
     for g in m.grants {
@@ -332,6 +338,34 @@ func cidrContains(cidr: String, ip: String) -> Bool {
         if net.bytes[i] & mask != addr.bytes[i] & mask { return false }
     }
     return true
+}
+
+/// One "ipsets" entry: "[add|remove] <target>", where the target is an IP,
+/// CIDR, range ("10.0.0.5-10.0.0.9"), host:name, ipset:name, or
+/// autogroup:internet. Without an operation the entry is an add.
+struct IPSetEntry {
+    var remove: Bool
+    var target: String
+
+    init?(_ raw: String) {
+        let words = raw.split(separator: " ", omittingEmptySubsequences: true).map(String.init)
+        switch (words.count, words.first?.lowercased()) {
+        case (1, _): (remove, target) = (false, words[0])
+        case (2, "add"): (remove, target) = (false, words[1])
+        case (2, "remove"): (remove, target) = (true, words[1])
+        default: return nil
+        }
+        guard isAddressLike(target) || ipRange(target) != nil || target.hasPrefix("host:")
+                || target.hasPrefix("ipset:") || target == "autogroup:internet" else { return nil }
+    }
+}
+
+/// "10.0.0.5-10.0.0.9" (or IPv6) as byte bounds of one family.
+func ipRange(_ s: String) -> (lo: [UInt8], hi: [UInt8])? {
+    let ends = s.split(separator: "-", omittingEmptySubsequences: false)
+    guard ends.count == 2, let lo = ipBytes(String(ends[0])), let hi = ipBytes(String(ends[1])),
+          lo.count == hi.count else { return nil }
+    return (lo, hi)
 }
 
 /// Public internet addresses (what autogroup:internet means): not private,

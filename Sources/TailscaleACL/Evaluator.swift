@@ -177,10 +177,31 @@ struct Evaluator {
     private func addressSelectorMatches(_ selector: String, id: String) -> Bool {
         guard let ip = model.hosts[id] ?? (isAddressLike(id) ? id : nil) else { return false }
         if let cidr = model.hosts[selector] { return cidrContains(cidr: cidr, ip: ip) }
-        if let entries = model.ipsets[selector] {
-            return entries.contains { cidrContains(cidr: $0, ip: ip) }
-        }
+        if model.ipsets[selector] != nil { return ipsetContains(selector, ip: ip) }
         return isAddressLike(selector) && cidrContains(cidr: selector, ip: ip)
+    }
+
+    /// Entries apply in order ("add 10.0.0.0/8", "remove 10.0.0.33"), so the
+    /// last entry covering the address decides. `visiting` stops ipset cycles.
+    func ipsetContains(_ name: String, ip: String, visiting: Set<String> = []) -> Bool {
+        guard let entries = model.ipsets[name], !visiting.contains(name) else { return false }
+        var member = false
+        for entry in entries.compactMap(IPSetEntry.init) {
+            let t = entry.target
+            let covers: Bool
+            if t.hasPrefix("ipset:") {
+                covers = ipsetContains(t, ip: ip, visiting: visiting.union([name]))
+            } else if t == "autogroup:internet" {
+                covers = isPublicAddress(ip)
+            } else if let r = ipRange(t), let a = parseCIDR(ip)?.bytes, a.count == r.lo.count {
+                covers = !a.lexicographicallyPrecedes(r.lo) && !r.hi.lexicographicallyPrecedes(a)
+            } else {
+                let cidr = t.hasPrefix("host:") ? model.hosts[String(t.dropFirst(5))] ?? "" : t
+                covers = cidrContains(cidr: cidr, ip: ip)
+            }
+            if covers { member = !entry.remove }
+        }
+        return member
     }
 
     func portMatches(spec: String, port: Int) -> Bool {

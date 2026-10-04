@@ -268,3 +268,45 @@ final class AuditLogTests: XCTestCase {
         XCTAssertTrue(StubProtocol.requests.isEmpty)
     }
 }
+
+final class IPSetSyntaxTests: XCTestCase {
+    let m = model("""
+    {"hosts": {"db": "10.9.0.5"},
+     "ipsets": {
+       "ipset:mgmt": ["add 10.114.16.88/29", "add 172.16.50.0/24", "remove 172.16.50.7"],
+       "ipset:plain": ["10.1.0.0/16", "10.2.0.1-10.2.0.9"],
+       "ipset:nested": ["add ipset:plain", "add host:db", "remove 10.1.5.0/24"],
+       "ipset:web": ["add autogroup:internet"],
+       "ipset:loop": ["add ipset:loop2"], "ipset:loop2": ["add ipset:loop"],
+     },
+     "grants": [{"src": ["*"], "dst": ["ipset:mgmt", "ipset:nested", "ipset:web", "ipset:loop"], "ip": ["22"]}]}
+    """)
+
+    func testEntriesParseAndLintClean() {
+        XCTAssertNotNil(IPSetEntry("add 10.114.16.88/29"))
+        XCTAssertEqual(IPSetEntry("remove 172.16.50.7")?.remove, true)
+        XCTAssertNotNil(IPSetEntry("10.2.0.1-10.2.0.9"))
+        XCTAssertNil(IPSetEntry("delete 10.0.0.0/8"))
+        XCTAssertNil(IPSetEntry("add nonsense"))
+        let issues = lintPolicy(m)
+        XCTAssertFalse(issues.contains { $0.title == "Invalid IP set entry" }, issues.map(\.detail).joined(separator: "\n"))
+        XCTAssertFalse(issues.contains { $0.title == "Unused host" }, "host:db is used by an IP set")
+        XCTAssertTrue(lintPolicy(model(#"{"ipsets": {"ipset:x": ["add host:nope"]}}"#)).contains { $0.title == "Unknown host" })
+    }
+
+    func testMembershipAppliesAddAndRemoveInOrder() {
+        let ev = Evaluator(model: m)
+        func reach(_ ip: String) -> Bool { ev.evaluate(sourceID: "a@x.com", destID: ip, port: 22).allowed }
+        XCTAssertTrue(reach("10.114.16.90"))
+        XCTAssertFalse(reach("10.114.16.96"))
+        XCTAssertTrue(reach("172.16.50.6"))
+        XCTAssertFalse(reach("172.16.50.7"), "removed")
+        XCTAssertTrue(reach("10.2.0.5"), "range via nested set")
+        XCTAssertFalse(reach("10.2.0.10"))
+        XCTAssertTrue(reach("10.9.0.5"), "host via nested set")
+        XCTAssertFalse(reach("10.1.5.9"), "removed from nested set")
+        XCTAssertTrue(reach("10.1.6.9"))
+        XCTAssertTrue(reach("8.8.8.8"), "autogroup:internet")
+        XCTAssertFalse(ev.ipsetContains("ipset:loop", ip: "10.0.0.1"), "cycles end")
+    }
+}
