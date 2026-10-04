@@ -133,13 +133,24 @@ func pushReviewMarkdown(_ r: PushReview, date: Date = Date()) -> String {
             out.append("| \(cell(c.src)) | \(cell(c.dst)) | \(cell(gains.joined(separator: ", "))) | \(cell(loses.joined(separator: ", "))) |")
         }
     }
-    let failures = r.tests.filter { !$0.passed }.flatMap { t in
-        t.assertions.filter { !$0.passed }.map { "- tests[\(t.testIndex)] \(t.src) should \($0.kind == .accept ? "reach" : "not reach") \($0.dst)" }
-    } + r.sshTests.filter { !$0.passed }.flatMap { t in
-        t.assertions.filter { !$0.passed }.map { "- sshTests[\(t.testIndex)] \(t.src) → \($0.dst) as \($0.login): expected \($0.expected.rawValue), got \($0.actual.rawValue)" }
+    // Plain loops: the chained flatMap form timed out the type checker on CI.
+    var failures: [String] = []
+    for t in r.tests {
+        for a in t.assertions where !a.passed {
+            let verb = a.kind == .accept ? "reach" : "not reach"
+            failures.append("- tests[\(t.testIndex)] \(t.src) should \(verb) \(a.dst)")
+        }
+    }
+    for t in r.sshTests {
+        for a in t.assertions where !a.passed {
+            failures.append("- sshTests[\(t.testIndex)] \(t.src) → \(a.dst) as \(a.login): expected \(a.expected.rawValue), got \(a.actual.rawValue)")
+        }
     }
     if !failures.isEmpty { out += ["", "## Failing tests", ""] + failures }
-    if !r.errors.isEmpty { out += ["", "## Problems", ""] + r.errors.map { "- **\($0.title)**: \($0.detail)" } }
+    if !r.errors.isEmpty {
+        out += ["", "## Problems", ""]
+        for e in r.errors { out.append("- **\(e.title)**: \(e.detail)") }
+    }
 
     if let old = r.serverText, old != r.candidate {
         out += ["", "## Text changes", "", "```diff"]
