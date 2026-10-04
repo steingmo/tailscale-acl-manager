@@ -103,6 +103,11 @@ Use `-` to read the policy from standard input.
   `autogroup:admin` and the other role autogroups match real people.
 - **Shareable reviews** — copy or export a push review (access changes,
   checks, and the text diff) as Markdown for a ticket or pull request.
+- **Users** — invite people to Tailscale (with a role) or create Headscale
+  users with a pre-auth key, and put them in the policy's groups in the same
+  step; change roles, approve, suspend, restore, and offboard (suspend or
+  delete, and remove from every group). Policy edits go through the reviewed
+  push as usual.
 - **Who changed it** — for Tailscale, the configuration audit log shows who
   changed the policy and when (needs the `logs:configuration:read` scope).
 

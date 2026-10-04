@@ -100,6 +100,7 @@ struct HeadscaleScreen: View {
                 connectionPanel
                 policyPanel
                 if kind == .tailscale, client != nil { changesPanel }
+                if client != nil { UsersPanel() }
                 if client != nil { authKeyPanel }
                 if !serverHistory.isEmpty { historyPanel }
                 if !store.headscaleNodes.isEmpty { nodesPanel }

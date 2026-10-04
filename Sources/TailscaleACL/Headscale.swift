@@ -173,19 +173,41 @@ final class HeadscaleClient: PolicyServer {
     }
 
     /// Policies name Headscale users by email or as "name@".
-    /// Headscale has no roles, so only logins.
+    /// Headscale has no roles. Policies name its users by email or "name@".
     func serverUsers() async throws -> ServerUsers {
         let data = try await send("GET", "user")
         let users = (try JSONSerialization.jsonObject(with: data) as? [String: Any])?["users"] as? [[String: Any]] ?? []
-        var logins = Set<String>()
-        for u in users {
-            for key in ["email", "name"] {
-                guard let v = (u[key] as? String)?.lowercased(), !v.isEmpty else { continue }
-                logins.insert(v)
-                if !v.contains("@") { logins.insert(v + "@") }
-            }
+        return ServerUsers(accounts: users.compactMap(Self.account))
+    }
+
+    private static func account(_ u: [String: Any]) -> ServerAccount? {
+        guard let id = (u["id"] as? String) ?? (u["id"] as? NSNumber)?.stringValue else { return nil }
+        let name = (u["name"] as? String) ?? ""
+        let email = (u["email"] as? String) ?? ""
+        var names: [String] = []
+        for v in [email, name].map({ $0.lowercased() }) where !v.isEmpty {
+            names.append(v)
+            if !v.contains("@") { names.append(v + "@") }
         }
-        return ServerUsers(logins: logins)
+        let login = !email.isEmpty ? email : name.contains("@") ? name : name + "@"
+        let display = (u["displayName"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? name
+        return ServerAccount(id: id, login: login, displayName: display, policyNames: names.uniqued())
+    }
+
+    func createUser(name: String, displayName: String, email: String) async throws -> ServerAccount {
+        var body: [String: any Encodable] = ["name": name]
+        if !displayName.isEmpty { body["displayName"] = displayName }
+        if !email.isEmpty { body["email"] = email }
+        let data = try await send("POST", "user", body: body)
+        guard let user = (try JSONSerialization.jsonObject(with: data) as? [String: Any])?["user"] as? [String: Any],
+              let account = Self.account(user) else {
+            throw ServerError(status: 0, message: "Headscale didn't return the new user.")
+        }
+        return account
+    }
+
+    func deleteUser(id: String) async throws {
+        _ = try await send("DELETE", "user/\(id)")
     }
 
     /// Headscale keeps no audit log.

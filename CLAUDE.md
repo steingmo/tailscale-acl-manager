@@ -77,6 +77,11 @@ Swift Package (no Xcode project). All source in `Sources/TailscaleACL/`:
   (Tailscale roles/shared). They're injected as `PolicyModel.userAutogroups`
   (not part of the policy) so every `Evaluator(model:)` sees them; the push
   review copies them onto both models it compares.
+- Users (UsersPanel.swift on the Server screen): `PolicyServer` invite/user
+  methods are protocol requirements with throwing defaults in an extension
+  (so calls through the existential dispatch to each server). Tailscale
+  invites need a personal access token; user changes need the `users` scope.
+  `PolicyStore.addUser(_:toGroups:)` / `removeUserEverywhere` edit the policy.
 - `ipLookup` (SharedSheets.swift) backs ⌘K IP search; `pushReviewMarkdown`
   (Report.swift) exports the push review.
 - `convertACLsToGrants` (Templates.swift) rewrites ACLs as grants; the sheet

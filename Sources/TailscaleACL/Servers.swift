@@ -36,14 +36,83 @@ protocol PolicyServer: AnyObject {
     /// The server's users: to spot group members who are no longer users,
     /// and (Tailscale) to know who holds a role.
     func serverUsers() async throws -> ServerUsers
+    func deleteUser(id: String) async throws
+    // Declared here (with defaults below) so calls dispatch to each server.
+    func listInvites() async throws -> [PendingInvite]
+    func invite(email: String, role: String) async throws -> PendingInvite
+    func resendInvite(id: String) async throws
+    func cancelInvite(id: String) async throws
+    func createUser(name: String, displayName: String, email: String) async throws -> ServerAccount
+    func setRole(userID: String, role: String) async throws
+    func approveUser(id: String) async throws
+    func suspendUser(id: String) async throws
+    func restoreUser(id: String) async throws
 }
 
 struct ServerUsers {
+    var accounts: [ServerAccount] = []
+
     /// Every name a policy can use for a user (emails, "name@"), lowercased.
-    var logins: Set<String> = []
+    var logins: Set<String> { Set(accounts.flatMap(\.policyNames)) }
+
     /// Lowercased login → the role autogroups it belongs to, e.g.
     /// ["autogroup:admin"] or ["autogroup:shared"]. Empty for Headscale.
-    var autogroups: [String: Set<String>] = [:]
+    var autogroups: [String: Set<String>] {
+        var out: [String: Set<String>] = [:]
+        for a in accounts {
+            var groups = Set<String>()
+            if let role = a.role, Evaluator.roleAutogroups.contains("autogroup:\(role)") { groups.insert("autogroup:\(role)") }
+            if a.isShared { groups.insert("autogroup:shared") }
+            guard !groups.isEmpty else { continue }
+            for name in a.policyNames { out[name] = groups }
+        }
+        return out
+    }
+}
+
+/// A user on the control server.
+struct ServerAccount: Identifiable, Equatable {
+    var id: String
+    /// How a policy names the user: their email, or "name@" on Headscale.
+    var login: String
+    var displayName: String
+    /// Every lowercased name a policy may use for this user.
+    var policyNames: [String]
+    /// Tailscale: owner, admin, member, it-admin, network-admin, billing-admin, auditor.
+    var role: String?
+    /// Tailscale: active, idle, suspended, needs-approval, over-billing-limit.
+    var status: String?
+    var isShared = false
+    var deviceCount: Int?
+    var lastSeen: String?
+}
+
+/// A Tailscale invite nobody has accepted yet.
+struct PendingInvite: Identifiable {
+    var id: String
+    var email: String
+    var role: String
+    var lastEmailSentAt: String?
+    var inviteURL: String?
+}
+
+/// User management the app offers. Each server supports part of it:
+/// Tailscale invites people and manages roles; Headscale creates users.
+extension PolicyServer {
+    private func unsupported(_ what: String) -> ServerError {
+        ServerError(status: 0, message: "\(displayHost) doesn't support \(what).")
+    }
+    func listInvites() async throws -> [PendingInvite] { [] }
+    func invite(email: String, role: String) async throws -> PendingInvite { throw unsupported("invites") }
+    func resendInvite(id: String) async throws { throw unsupported("invites") }
+    func cancelInvite(id: String) async throws { throw unsupported("invites") }
+    func createUser(name: String, displayName: String, email: String) async throws -> ServerAccount {
+        throw unsupported("creating users directly — invite them instead")
+    }
+    func setRole(userID: String, role: String) async throws { throw unsupported("user roles") }
+    func approveUser(id: String) async throws { throw unsupported("user approval") }
+    func suspendUser(id: String) async throws { throw unsupported("suspending users") }
+    func restoreUser(id: String) async throws { throw unsupported("suspending users") }
 }
 
 struct PolicyChange: Identifiable {
@@ -251,19 +320,51 @@ final class TailscaleClient: PolicyServer {
     func serverUsers() async throws -> ServerUsers {
         let (data, _) = try await request("GET", "\(tailnetPath)/users")
         let users = (try JSONSerialization.jsonObject(with: data) as? [String: Any])?["users"] as? [[String: Any]] ?? []
-        var result = ServerUsers()
-        for u in users {
-            guard let login = (u["loginName"] as? String)?.lowercased() else { continue }
-            result.logins.insert(login)
-            var groups = Set<String>()
-            if let role = u["role"] as? String, Evaluator.roleAutogroups.contains("autogroup:\(role)") {
-                groups.insert("autogroup:\(role)")
-            }
-            if u["type"] as? String == "shared" { groups.insert("autogroup:shared") }
-            if !groups.isEmpty { result.autogroups[login] = groups }
-        }
-        return result
+        return ServerUsers(accounts: users.compactMap { u in
+            guard let login = u["loginName"] as? String else { return nil }
+            let id = (u["id"] as? String) ?? (u["id"] as? NSNumber)?.stringValue ?? login
+            return ServerAccount(id: id, login: login, displayName: u["displayName"] as? String ?? login,
+                                 policyNames: [login.lowercased()], role: u["role"] as? String,
+                                 status: u["status"] as? String, isShared: u["type"] as? String == "shared",
+                                 deviceCount: u["deviceCount"] as? Int, lastSeen: u["lastSeen"] as? String)
+        })
     }
+
+    // Invites need a personal access token: Tailscale only lets a user invite.
+    func listInvites() async throws -> [PendingInvite] {
+        let (data, _) = try await request("GET", "\(tailnetPath)/user-invites")
+        return (try JSONSerialization.jsonObject(with: data) as? [[String: Any]] ?? []).compactMap(Self.invite)
+    }
+
+    func invite(email: String, role: String) async throws -> PendingInvite {
+        let body = try JSONSerialization.data(withJSONObject: [["email": email, "role": role]])
+        let (data, _) = try await request("POST", "\(tailnetPath)/user-invites", body: body,
+                                          headers: ["Content-Type": "application/json"])
+        guard let first = (try JSONSerialization.jsonObject(with: data) as? [[String: Any]])?.first,
+              let invite = Self.invite(first) else {
+            throw ServerError(status: 0, message: "Tailscale didn't return the invite.")
+        }
+        return invite
+    }
+
+    private static func invite(_ j: [String: Any]) -> PendingInvite? {
+        guard let id = (j["id"] as? String) ?? (j["id"] as? NSNumber)?.stringValue else { return nil }
+        return PendingInvite(id: id, email: j["email"] as? String ?? "", role: j["role"] as? String ?? "member",
+                             lastEmailSentAt: j["lastEmailSentAt"] as? String, inviteURL: j["inviteUrl"] as? String)
+    }
+
+    func resendInvite(id: String) async throws { _ = try await request("POST", "user-invites/\(id)/resend") }
+    func cancelInvite(id: String) async throws { _ = try await request("DELETE", "user-invites/\(id)") }
+
+    func setRole(userID: String, role: String) async throws {
+        _ = try await request("POST", "users/\(userID)/role",
+                              body: try JSONSerialization.data(withJSONObject: ["role": role]),
+                              headers: ["Content-Type": "application/json"])
+    }
+    func approveUser(id: String) async throws { _ = try await request("POST", "users/\(id)/approve") }
+    func suspendUser(id: String) async throws { _ = try await request("POST", "users/\(id)/suspend") }
+    func restoreUser(id: String) async throws { _ = try await request("POST", "users/\(id)/restore") }
+    func deleteUser(id: String) async throws { _ = try await request("POST", "users/\(id)/delete") }
 
     /// From the configuration audit log (needs the logs:configuration:read scope).
     func policyChanges(days: Int) async throws -> [PolicyChange]? {

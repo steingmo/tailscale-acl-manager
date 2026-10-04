@@ -24,6 +24,8 @@ final class PolicyStore: ObservableObject {
     @Published var serverLogins: Set<String>? {
         didSet { if isValid { lintIssues = allLint() } }
     }
+    /// The server's users (empty when unknown).
+    @Published var serverAccounts: [ServerAccount] = []
     /// Role autogroups of the server's users; re-evaluates the policy when set.
     @Published var serverUserAutogroups: [String: Set<String>] = [:] {
         didSet { if serverUserAutogroups != oldValue { reparseNow() } }
@@ -88,6 +90,7 @@ final class PolicyStore: ObservableObject {
         headscaleNodes = []
         serverLogins = nil
         serverUserAutogroups = [:]
+        serverAccounts = []
         serverDrift = nil
         linkedFileContents = nil
         text = currentWorkspace.policy
@@ -244,6 +247,47 @@ final class PolicyStore: ObservableObject {
         return results
     }
 
+    /// Groups whose members include any of `names` (case-insensitive).
+    func groups(containing names: [String]) -> [String] {
+        let wanted = Set(names.map { $0.lowercased() })
+        return model.groupOrder.filter { g in (model.groups[g] ?? []).contains { wanted.contains($0.lowercased()) } }
+    }
+
+    /// Add a user to groups (skipping ones they're in) in one undoable step.
+    func addUser(_ login: String, toGroups groups: [String]) {
+        guard !groups.isEmpty else { return }
+        mutate { tree in
+            var list = tree["groups"]?.members ?? []
+            for g in groups {
+                if let i = list.firstIndex(where: { $0.key == g }) {
+                    var members = list[i].value.elements ?? []
+                    guard !members.contains(where: { $0.value.stringValue?.lowercased() == login.lowercased() }) else { continue }
+                    members.append(JSON.Element(comments: [], value: .string(login)))
+                    list[i].value = .array(members)
+                } else {
+                    list.append(JSON.Member(comments: [], key: g, value: stringArrayJSON([login])))
+                }
+            }
+            tree["groups"] = .object(list)
+        }
+    }
+
+    /// Offboarding: remove every name of a user from all groups and tag
+    /// owners in one undoable step. Rules naming them directly are left for
+    /// Problems to flag, since editing those changes other people's access.
+    func removeUserEverywhere(_ names: [String]) {
+        let wanted = Set(names.map { $0.lowercased() })
+        mutate { tree in
+            for section in ["groups", "tagOwners"] {
+                guard var list = tree[section]?.members else { continue }
+                for i in list.indices {
+                    list[i].value.elements?.removeAll { wanted.contains($0.value.stringValue?.lowercased() ?? "") }
+                }
+                tree[section] = .object(list)
+            }
+        }
+    }
+
     /// Rewrite ACL rules as grants in one undoable step.
     func convertToGrants() {
         mutate { convertACLsToGrants(&$0) }
@@ -282,6 +326,7 @@ final class PolicyStore: ObservableObject {
         headscaleNodes = []
         serverLogins = nil
         serverUserAutogroups = [:]
+        serverAccounts = []
         saveWorkspaces()
     }
 
@@ -299,6 +344,7 @@ final class PolicyStore: ObservableObject {
         if workspace == currentWorkspaceID { headscaleNodes = nodes }
         let users = try? await client.serverUsers()
         if workspace == currentWorkspaceID {
+            serverAccounts = users?.accounts ?? []
             serverLogins = users?.logins
             serverUserAutogroups = users?.autogroups ?? [:]
         }
