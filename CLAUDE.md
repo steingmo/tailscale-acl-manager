@@ -73,6 +73,12 @@ Swift Package (no Xcode project). All source in `Sources/TailscaleACL/`:
   routers' approved routes (`addressPrefixes`, `prefixContains`);
   `lintUsers` flags group members missing from `PolicyServer.userLogins()`
   (`PolicyStore.serverLogins`, loaded with devices).
+- `PolicyServer.serverUsers()` returns logins plus role autogroups
+  (Tailscale roles/shared). They're injected as `PolicyModel.userAutogroups`
+  (not part of the policy) so every `Evaluator(model:)` sees them; the push
+  review copies them onto both models it compares.
+- `ipLookup` (SharedSheets.swift) backs ⌘K IP search; `pushReviewMarkdown`
+  (Report.swift) exports the push review.
 - `convertACLsToGrants` (Templates.swift) rewrites ACLs as grants; the sheet
   proves equivalence with `entityAccessDifferences` (+ `accessChanges` on
   devices). Headscale accepts grants from 0.29.0.

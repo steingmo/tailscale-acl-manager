@@ -460,6 +460,12 @@ struct SimulatorScreen: View {
             .padding(12)
             .background(RoundedRectangle(cornerRadius: 8).fill(color.opacity(0.10)))
             .overlay(RoundedRectangle(cornerRadius: 8).stroke(color.opacity(0.35), lineWidth: 1))
+            let roles = identities(for: source).flatMap { store.model.userAutogroups[$0.lowercased()] ?? [] }.uniqued().sorted()
+            if !roles.isEmpty {
+                Text(verbatim: "Roles from \(store.serverDisplayName): " + roles.joined(separator: ", "))
+                    .font(.system(size: 10.5, design: .monospaced))
+                    .foregroundStyle(Theme.textSecondary)
+            }
             if let attrs = sourceAttributes, !attrs.isEmpty {
                 Text(verbatim: "Posture attributes from the device list: " + attrs.sorted { $0.key < $1.key }.map { "\($0.key) = \($0.value)" }.joined(separator: ", "))
                     .font(.system(size: 10.5, design: .monospaced))

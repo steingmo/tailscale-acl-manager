@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import UniformTypeIdentifiers
 
 /// Talk to the workspace's control server (self-hosted Headscale or the
 /// official Tailscale API): pull/push the policy, list devices.
@@ -748,6 +749,14 @@ struct PushReviewSheet: View {
             }
 
             HStack {
+                if !loading, blocker == nil {
+                    Button("Copy as Markdown") {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(reviewMarkdown, forType: .string)
+                    }
+                    .help("For a ticket or pull request, so someone can approve the change before it goes live")
+                    Button("Export…") { exportReview() }
+                }
                 if pushing { ProgressView().controlSize(.small) }
                 Spacer()
                 Button("Cancel") { dismiss() }
@@ -766,6 +775,27 @@ struct PushReviewSheet: View {
     }
 
     private var host: String { client.displayHost }
+
+    /// This review — summary, access changes, checks, and the text diff — as Markdown.
+    private var reviewMarkdown: String {
+        var model = (try? HuJSONParser.parse(candidate.text)).map(PolicyModel.init(tree:)) ?? PolicyModel()
+        model.userAutogroups = store.model.userAutogroups
+        let ev = Evaluator(model: model)
+        return pushReviewMarkdown(PushReview(
+            workspace: store.currentWorkspace.name, host: host, isRestore: candidate.isRestore,
+            serverText: serverText, candidate: candidate.text, changes: changes, deviceCount: deviceCount,
+            note: previewNote, verdict: serverVerdict, errors: candidateErrors,
+            tests: ev.runTests(), sshTests: ev.runSSHTests(), conflict: conflictBase != nil))
+    }
+
+    private func exportReview() {
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [UTType(filenameExtension: "md") ?? .plainText]
+        panel.nameFieldStringValue = "\(store.currentWorkspace.name) change review.md"
+        if panel.runModal() == .OK, let url = panel.url {
+            try? reviewMarkdown.write(to: url, atomically: true, encoding: .utf8)
+        }
+    }
 
     @ViewBuilder
     private var summary: some View {
@@ -834,7 +864,8 @@ struct PushReviewSheet: View {
             loading = false
             return
         }
-        let newModel = PolicyModel(tree: newTree)
+        var newModel = PolicyModel(tree: newTree)
+        newModel.userAutogroups = store.model.userAutogroups
         candidateErrors = lintPolicy(newModel).filter { $0.severity == .error }
         do {
             let current = try await client.getPolicy()
@@ -856,7 +887,9 @@ struct PushReviewSheet: View {
             if current.isEmpty {
                 previewNote = "The server has no policy yet, so there's nothing to compare against."
             } else if let oldTree = try? HuJSONParser.parse(current) {
-                changes = accessChanges(from: PolicyModel(tree: oldTree), to: newModel, nodes: nodes)
+                var oldModel = PolicyModel(tree: oldTree)
+                oldModel.userAutogroups = newModel.userAutogroups
+                changes = accessChanges(from: oldModel, to: newModel, nodes: nodes)
             } else {
                 previewNote = "The server's current policy couldn't be parsed here, so no access comparison is available."
             }

@@ -100,6 +100,9 @@ struct PolicyModel {
     var nodeAttrs: [NodeAttrRule] = []
     var tests: [ACLTest] = []
     var sshTests: [SSHTest] = []
+    /// Not from the policy: role autogroups of real users (lowercased login →
+    /// e.g. ["autogroup:admin"]), filled in from the server's user list.
+    var userAutogroups: [String: Set<String>] = [:]
 
     init() {}
 

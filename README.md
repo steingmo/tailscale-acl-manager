@@ -97,6 +97,12 @@ Use `-` to read the policy from standard input.
 - **Server hygiene** — with a server connected, Problems flags `via` grants
   whose routers lack an approved route for the destination, and group
   members who are no longer users on the server (one-click removal).
+- **IP lookup** — type an IP into ⌘K search to see every host, IP set,
+  rule, test, and device that covers it, each linked to its line.
+- **Real roles** — for Tailscale, users' roles from the users API make
+  `autogroup:admin` and the other role autogroups match real people.
+- **Shareable reviews** — copy or export a push review (access changes,
+  checks, and the text diff) as Markdown for a ticket or pull request.
 - **Who changed it** — for Tailscale, the configuration audit log shows who
   changed the policy and when (needs the `logs:configuration:read` scope).
 

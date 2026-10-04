@@ -108,6 +108,9 @@ struct RootView: View {
                         overlay = nil
                     case .rule(let rule):
                         overlay = .rule(rule)
+                    case .line(let line):
+                        overlay = nil
+                        store.editorLineRequest = line
                     }
                 }
             case .rule(let rule):

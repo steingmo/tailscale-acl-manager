@@ -124,8 +124,8 @@ struct Evaluator {
         s.hasPrefix("host:") ? String(s.dropFirst(5)) : s
     }
 
-    /// Role-based autogroups: the app can't know who has a role, so they
-    /// match only when simulating that role itself as the source.
+    /// Role-based autogroups: they match users the server says hold the
+    /// role (Tailscale), or the role itself when simulated as the source.
     static let roleAutogroups: Set<String> = [
         "autogroup:owner", "autogroup:admin", "autogroup:it-admin", "autogroup:network-admin",
         "autogroup:billing-admin", "autogroup:auditor",
@@ -139,9 +139,12 @@ struct Evaluator {
         if spec == "autogroup:members" || spec == "autogroup:member" {
             // Group members are tailnet users, so a group-as-source query
             // ("would a member of group:X be allowed?") is covered too; so is
-            // a role, since everyone with a role is a member.
+            // a role, since everyone with a role is a member. Users shared
+            // in from another tailnet aren't members.
+            if serverAutogroups(sourceID).contains("autogroup:shared") { return false }
             return sourceID.contains("@") || sourceID.hasPrefix("group:") || Self.roleAutogroups.contains(sourceID)
         }
+        if serverAutogroups(sourceID).contains(spec) { return true }
         if spec == "autogroup:tagged" { return sourceID.hasPrefix("tag:") }
         if spec.hasPrefix("group:") {
             return model.groups[spec]?.contains(sourceID) ?? false
@@ -159,10 +162,16 @@ struct Evaluator {
         }
         if target == "autogroup:tagged" { return destID.hasPrefix("tag:") }
         if target == "autogroup:internet" { return isPublicAddress(destID) }
+        if serverAutogroups(destID).contains(target) { return true }
         if target.hasPrefix("group:") {
             return model.groups[target]?.contains(destID) ?? false
         }
         return addressSelectorMatches(target, id: destID)
+    }
+
+    /// Role autogroups the server says a user holds.
+    private func serverAutogroups(_ id: String) -> Set<String> {
+        id.contains("@") ? model.userAutogroups[id.lowercased()] ?? [] : []
     }
 
     /// A rule destination, including autogroup:self: the source user's own

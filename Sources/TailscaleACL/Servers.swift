@@ -33,9 +33,17 @@ protocol PolicyServer: AnyObject {
     /// Who changed the policy on the server in the last `days` days, newest
     /// first; nil when the server keeps no audit log (Headscale).
     func policyChanges(days: Int) async throws -> [PolicyChange]?
-    /// Every name a policy can use for a server user (emails, "name@"),
-    /// lowercased, to spot group members who are no longer users.
-    func userLogins() async throws -> Set<String>
+    /// The server's users: to spot group members who are no longer users,
+    /// and (Tailscale) to know who holds a role.
+    func serverUsers() async throws -> ServerUsers
+}
+
+struct ServerUsers {
+    /// Every name a policy can use for a user (emails, "name@"), lowercased.
+    var logins: Set<String> = []
+    /// Lowercased login → the role autogroups it belongs to, e.g.
+    /// ["autogroup:admin"] or ["autogroup:shared"]. Empty for Headscale.
+    var autogroups: [String: Set<String>] = [:]
 }
 
 struct PolicyChange: Identifiable {
@@ -237,11 +245,24 @@ final class TailscaleClient: PolicyServer {
         _ = try await request("POST", "device/\(nodeID)/expire")
     }
 
-    /// Needs the users:read scope.
-    func userLogins() async throws -> Set<String> {
+    /// Needs the users:read scope. Roles map to autogroup:owner, :admin,
+    /// :it-admin, :network-admin, :billing-admin, :auditor; users shared in
+    /// from other tailnets to autogroup:shared.
+    func serverUsers() async throws -> ServerUsers {
         let (data, _) = try await request("GET", "\(tailnetPath)/users")
         let users = (try JSONSerialization.jsonObject(with: data) as? [String: Any])?["users"] as? [[String: Any]] ?? []
-        return Set(users.compactMap { ($0["loginName"] as? String)?.lowercased() })
+        var result = ServerUsers()
+        for u in users {
+            guard let login = (u["loginName"] as? String)?.lowercased() else { continue }
+            result.logins.insert(login)
+            var groups = Set<String>()
+            if let role = u["role"] as? String, Evaluator.roleAutogroups.contains("autogroup:\(role)") {
+                groups.insert("autogroup:\(role)")
+            }
+            if u["type"] as? String == "shared" { groups.insert("autogroup:shared") }
+            if !groups.isEmpty { result.autogroups[login] = groups }
+        }
+        return result
     }
 
     /// From the configuration audit log (needs the logs:configuration:read scope).

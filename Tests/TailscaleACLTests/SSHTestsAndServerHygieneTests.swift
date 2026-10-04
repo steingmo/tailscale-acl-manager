@@ -133,13 +133,13 @@ final class StaleUserTests: XCTestCase {
         """.utf8)) }
         let hs = makeServer(kind: .headscale, serverURL: "https://hs.example", tailnet: "", credential: "k",
                             session: StubProtocol.session())!
-        let headscaleLogins = try await hs.userLogins()
+        let headscaleLogins = try await hs.serverUsers().logins
         XCTAssertEqual(headscaleLogins, ["carl", "carl@", "amy", "amy@", "amy@x.com"])
 
         StubProtocol.handler = { _, _ in .init(body: Data(#"{"users": [{"loginName": "Amy@x.com"}, {"loginName": "bob@x.com"}]}"#.utf8)) }
         let ts = makeServer(kind: .tailscale, serverURL: "", tailnet: "-", credential: "tskey-api-x",
                             session: StubProtocol.session())!
-        let tailscaleLogins = try await ts.userLogins()
+        let tailscaleLogins = try await ts.serverUsers().logins
         XCTAssertEqual(tailscaleLogins, ["amy@x.com", "bob@x.com"])
         XCTAssertEqual(StubProtocol.requests.last?.request.url?.path, "/api/v2/tailnet/-/users")
     }

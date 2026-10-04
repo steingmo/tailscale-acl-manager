@@ -82,3 +82,78 @@ func policyReport(workspace: String, model m: PolicyModel, nodes: [HeadscaleNode
     }
     return out.joined(separator: "\n") + "\n"
 }
+
+/// What a push review covers, for exporting it.
+struct PushReview {
+    var workspace: String
+    var host: String
+    var isRestore = false
+    var serverText: String?
+    var candidate: String
+    var changes: [AccessChange] = []
+    var deviceCount = 0
+    /// Why there is no access comparison, if there isn't one.
+    var note: String?
+    /// Tailscale's verdict: nil not checked, "" passed, otherwise the failure.
+    var verdict: String?
+    var errors: [LintIssue] = []
+    var tests: [TestResult] = []
+    var sshTests: [SSHTestResult] = []
+    /// The server changed since the last pull/push; pushing overwrites it.
+    var conflict = false
+}
+
+/// A push review as Markdown, to paste into a ticket or pull request so
+/// someone else can approve the change before it goes live.
+func pushReviewMarkdown(_ r: PushReview, date: Date = Date()) -> String {
+    func cell(_ s: String) -> String { s.isEmpty ? "—" : s.replacingOccurrences(of: "|", with: "\\|") }
+    var out = ["# Policy change review — \(r.workspace)", ""]
+    out.append("\(r.isRestore ? "Restore an earlier policy" : "Push") to **\(r.host)** · prepared \(date.formatted(date: .long, time: .shortened))")
+    out += ["", "## Summary", ""]
+    if r.serverText == r.candidate {
+        out.append("- The policy is identical to what's on the server.")
+    } else if let note = r.note {
+        out.append("- \(note)")
+    } else {
+        out.append(r.changes.isEmpty ? "- No network or SSH access changes between the \(r.deviceCount) devices."
+                   : "- \(r.changes.count) device pair\(r.changes.count == 1 ? "" : "s") of \(r.deviceCount) devices change access.")
+    }
+    if r.conflict { out.append("- ⚠️ The server's policy changed since the last pull or push; this push overwrites those changes.") }
+    if let v = r.verdict { out.append(v.isEmpty ? "- ✅ Tailscale's own check passed." : "- ❌ Tailscale's check failed: \(v)") }
+    let failing = r.tests.filter { !$0.passed }.count + r.sshTests.filter { !$0.passed }.count
+    let total = r.tests.count + r.sshTests.count
+    if total > 0 { out.append(failing == 0 ? "- ✅ All \(total) policy tests pass." : "- ❌ \(failing) of \(total) policy tests fail.") }
+    if !r.errors.isEmpty { out.append("- ❌ \(r.errors.count) problem\(r.errors.count == 1 ? "" : "s") (errors).") }
+
+    if !r.changes.isEmpty {
+        out += ["", "## Access changes", "", "| From | To | Gains | Loses |", "| --- | --- | --- | --- |"]
+        for c in r.changes {
+            let gains = c.gained + c.sshGained.map { "SSH as \($0)" }
+            let loses = c.lost + c.sshLost.map { "SSH as \($0)" }
+            out.append("| \(cell(c.src)) | \(cell(c.dst)) | \(cell(gains.joined(separator: ", "))) | \(cell(loses.joined(separator: ", "))) |")
+        }
+    }
+    let failures = r.tests.filter { !$0.passed }.flatMap { t in
+        t.assertions.filter { !$0.passed }.map { "- tests[\(t.testIndex)] \(t.src) should \($0.kind == .accept ? "reach" : "not reach") \($0.dst)" }
+    } + r.sshTests.filter { !$0.passed }.flatMap { t in
+        t.assertions.filter { !$0.passed }.map { "- sshTests[\(t.testIndex)] \(t.src) → \($0.dst) as \($0.login): expected \($0.expected.rawValue), got \($0.actual.rawValue)" }
+    }
+    if !failures.isEmpty { out += ["", "## Failing tests", ""] + failures }
+    if !r.errors.isEmpty { out += ["", "## Problems", ""] + r.errors.map { "- **\($0.title)**: \($0.detail)" } }
+
+    if let old = r.serverText, old != r.candidate {
+        out += ["", "## Text changes", "", "```diff"]
+        var lines = lineDiff(old: old, new: r.candidate)
+        while let last = lines.last, last.kind == .same, last.text.isEmpty { lines.removeLast() }  // final newline
+        for line in lines {
+            switch line.kind {
+            case .same: out.append(" " + line.text)
+            case .added: out.append("+" + line.text)
+            case .removed: out.append("-" + line.text)
+            case .skipped: out.append("@@ \(line.text) unchanged line\(line.text == "1" ? "" : "s") @@")
+            }
+        }
+        out.append("```")
+    }
+    return out.joined(separator: "\n") + "\n"
+}

@@ -24,6 +24,10 @@ final class PolicyStore: ObservableObject {
     @Published var serverLogins: Set<String>? {
         didSet { if isValid { lintIssues = allLint() } }
     }
+    /// Role autogroups of the server's users; re-evaluates the policy when set.
+    @Published var serverUserAutogroups: [String: Set<String>] = [:] {
+        didSet { if serverUserAutogroups != oldValue { reparseNow() } }
+    }
 
     private func allLint() -> [LintIssue] {
         lintPolicy(model) + lintNodes(model, nodes: headscaleNodes) + lintUsers(model, logins: serverLogins)
@@ -83,6 +87,7 @@ final class PolicyStore: ObservableObject {
         UserDefaults.standard.set(id.uuidString, forKey: "currentWorkspaceID")
         headscaleNodes = []
         serverLogins = nil
+        serverUserAutogroups = [:]
         serverDrift = nil
         linkedFileContents = nil
         text = currentWorkspace.policy
@@ -276,6 +281,7 @@ final class PolicyStore: ObservableObject {
         serverDrift = nil
         headscaleNodes = []
         serverLogins = nil
+        serverUserAutogroups = [:]
         saveWorkspaces()
     }
 
@@ -291,8 +297,11 @@ final class PolicyStore: ObservableObject {
         let workspace = currentWorkspaceID
         let nodes = try await client.listNodes()
         if workspace == currentWorkspaceID { headscaleNodes = nodes }
-        let logins = try? await client.userLogins()
-        if workspace == currentWorkspaceID { serverLogins = logins }
+        let users = try? await client.serverUsers()
+        if workspace == currentWorkspaceID {
+            serverLogins = users?.logins
+            serverUserAutogroups = users?.autogroups ?? [:]
+        }
     }
 
     private func saveWorkspaces() {
@@ -338,6 +347,7 @@ final class PolicyStore: ObservableObject {
             let parsed = try HuJSONParser.parse(source)
             tree = parsed
             model = PolicyModel(tree: parsed)
+            model.userAutogroups = serverUserAutogroups
             vocabulary = EditorVocabulary(model)
             parseError = nil
             testResults = evaluator.runTests()

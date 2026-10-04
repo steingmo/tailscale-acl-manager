@@ -173,7 +173,8 @@ final class HeadscaleClient: PolicyServer {
     }
 
     /// Policies name Headscale users by email or as "name@".
-    func userLogins() async throws -> Set<String> {
+    /// Headscale has no roles, so only logins.
+    func serverUsers() async throws -> ServerUsers {
         let data = try await send("GET", "user")
         let users = (try JSONSerialization.jsonObject(with: data) as? [String: Any])?["users"] as? [[String: Any]] ?? []
         var logins = Set<String>()
@@ -184,7 +185,7 @@ final class HeadscaleClient: PolicyServer {
                 if !v.contains("@") { logins.insert(v + "@") }
             }
         }
-        return logins
+        return ServerUsers(logins: logins)
     }
 
     /// Headscale keeps no audit log.
