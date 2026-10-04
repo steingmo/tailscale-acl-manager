@@ -310,3 +310,18 @@ final class IPSetSyntaxTests: XCTestCase {
         XCTAssertFalse(ev.ipsetContains("ipset:loop", ip: "10.0.0.1"), "cycles end")
     }
 }
+
+final class IPSetDisplayTests: XCTestCase {
+    func testLinesExpandNestedSetsAndHosts() {
+        let m = model("""
+        {"hosts": {"dc1": "10.114.32.11"},
+         "ipsets": {"ipset:mgmt": ["add 10.114.16.88/29", "remove 10.114.16.90", "add ipset:web", "add host:dc1"],
+                    "ipset:web": ["10.114.32.20", "10.114.32.21-10.114.32.29"]}}
+        """)
+        let lines = m.ipsetLines("ipset:mgmt")
+        XCTAssertEqual(lines.map(\.text), ["10.114.16.88/29", "10.114.16.90", "ipset:web", "10.114.32.20",
+                                           "10.114.32.21-10.114.32.29", "host:dc1  10.114.32.11"])
+        XCTAssertEqual(lines.map(\.remove), [false, true, false, false, false, false])
+        XCTAssertEqual(lines.map(\.depth), [0, 0, 0, 1, 1, 0])
+    }
+}

@@ -6,6 +6,8 @@ import AppKit
 /// what it can reach.
 struct AccessMapScreen: View {
     @EnvironmentObject var store: PolicyStore
+    /// The IP set card under the pointer, whose addresses are shown.
+    @State private var hoveredSet: String?
     @State private var kind: Kind = .group
     @State private var selection = ""
     @State private var picking = false
@@ -358,7 +360,7 @@ struct AccessMapScreen: View {
             return store.model.hosts[selection] ?? "host"
         case .ipset:
             let n = store.model.ipsets[selection]?.count ?? 0
-            return "\(n) address\(n == 1 ? "" : "es")"
+            return "\(n) entr\(n == 1 ? "y" : "ies")"
         default:
             return "user"
         }
@@ -404,6 +406,7 @@ struct AccessMapScreen: View {
         let m = store.model
         let focusable = name.hasPrefix("group:") || name.hasPrefix("tag:") || name.contains("@")
             || m.hosts[name] != nil || m.ipsets[name] != nil
+        let isSet = m.ipsets[name] != nil
         return Button {
             if focusable { focus(name) }
         } label: {
@@ -428,8 +431,47 @@ struct AccessMapScreen: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .help(focusable ? "Click to focus the map on \(name)" : name)
+        .help(isSet ? "" : focusable ? "Click to focus the map on \(name)" : name)
+        // IP sets list their addresses as soon as the pointer is over them.
+        .onHover { inside in
+            if inside, isSet { hoveredSet = name } else if hoveredSet == name { hoveredSet = nil }
+        }
+        .popover(isPresented: Binding(get: { hoveredSet == name }, set: { if !$0, hoveredSet == name { hoveredSet = nil } }),
+                 arrowEdge: .leading) {
+            ipsetPopover(name)
+        }
     }
+
+    /// An IP set's entries in order; nested sets and hosts are expanded.
+    private func ipsetPopover(_ name: String) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(verbatim: name)
+                .font(.system(size: 12, weight: .bold, design: .monospaced))
+                .foregroundStyle(Theme.textPrimary)
+                .padding(.bottom, 3)
+            ForEach(Array(store.model.ipsetLines(name).enumerated()), id: \.offset) { _, line in
+                HStack(spacing: 6) {
+                    Image(systemName: line.remove ? "minus.circle" : "plus.circle")
+                        .font(.system(size: 10))
+                        .foregroundStyle(line.remove ? Theme.red : Theme.green)
+                    Text(verbatim: line.text)
+                        .font(.system(size: 11.5, design: .monospaced))
+                        .foregroundStyle(line.remove ? Theme.textSecondary : Theme.textPrimary)
+                }
+                .padding(.leading, CGFloat(line.depth) * 16)
+            }
+            if store.model.ipsetLines(name).contains(where: \.remove) {
+                Text("Entries apply top to bottom; − removes addresses added above it.")
+                    .font(.system(size: 10))
+                    .foregroundStyle(Theme.textSecondary)
+                    .padding(.top, 4)
+            }
+        }
+        .padding(12)
+        .frame(minWidth: 220, alignment: .leading)
+        .textSelection(.enabled)
+    }
+
 
     private func destSubtitle(_ name: String) -> String {
         let m = store.model
@@ -437,7 +479,7 @@ struct AccessMapScreen: View {
         if name == "autogroup:internet" { return "internet via exit node" }
         if name == "autogroup:self" { return "the user's own devices" }
         if let ip = m.hosts[name] { return ip }
-        if let set = m.ipsets[name] { return "\(set.count) address\(set.count == 1 ? "" : "es")" }
+        if let set = m.ipsets[name] { return "\(set.count) entr\(set.count == 1 ? "y" : "ies") — hover to list" }
         if let members = m.groups[name] { return "\(members.count) member\(members.count == 1 ? "" : "s")" }
         if !store.headscaleNodes.isEmpty, name.hasPrefix("tag:") || name.contains("@") {
             let ev = store.evaluator
@@ -468,5 +510,32 @@ struct AccessMapScreen: View {
                 .foregroundStyle(Theme.textSecondary)
         }
         .padding(16)
+    }
+}
+
+extension PolicyModel {
+    /// An IP set's entries for display, in order: nested IP sets are
+    /// expanded (indented by depth) and host: entries show their address.
+    func ipsetLines(_ name: String, depth: Int = 0,
+                    visiting: Set<String> = []) -> [(text: String, remove: Bool, depth: Int)] {
+        guard !visiting.contains(name) else { return [] }
+        var out: [(text: String, remove: Bool, depth: Int)] = []
+        for raw in ipsets[name] ?? [] {
+            guard let e = IPSetEntry(raw) else {
+                out.append(("\(raw)  (invalid)", false, depth))
+                continue
+            }
+            if e.target.hasPrefix("host:"), let ip = hosts[String(e.target.dropFirst(5))] {
+                out.append(("\(e.target)  \(ip)", e.remove, depth))
+            } else {
+                out.append((e.target, e.remove, depth))
+                if e.target.hasPrefix("ipset:") {
+                    // Inside "remove ipset:x", its additions are removals.
+                    out += ipsetLines(e.target, depth: depth + 1, visiting: visiting.union([name]))
+                        .map { ($0.text, $0.remove != e.remove, $0.depth) }
+                }
+            }
+        }
+        return out
     }
 }
