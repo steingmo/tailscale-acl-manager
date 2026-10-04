@@ -47,6 +47,8 @@ protocol PolicyServer: AnyObject {
     func approveUser(id: String) async throws
     func suspendUser(id: String) async throws
     func restoreUser(id: String) async throws
+    /// Network flow logs between two times; nil when the server keeps none.
+    func flowRecords(from: Date, to: Date) async throws -> [FlowRecord]?
 }
 
 struct ServerUsers {
@@ -113,6 +115,7 @@ extension PolicyServer {
     func approveUser(id: String) async throws { throw unsupported("user approval") }
     func suspendUser(id: String) async throws { throw unsupported("suspending users") }
     func restoreUser(id: String) async throws { throw unsupported("suspending users") }
+    func flowRecords(from: Date, to: Date) async throws -> [FlowRecord]? { nil }
 }
 
 struct PolicyChange: Identifiable {
@@ -351,6 +354,37 @@ final class TailscaleClient: PolicyServer {
         guard let id = (j["id"] as? String) ?? (j["id"] as? NSNumber)?.stringValue else { return nil }
         return PendingInvite(id: id, email: j["email"] as? String ?? "", role: j["role"] as? String ?? "member",
                              lastEmailSentAt: j["lastEmailSentAt"] as? String, inviteURL: j["inviteUrl"] as? String)
+    }
+
+    /// Needs flow logging on in the tailnet and the logs:network:read scope.
+    func flowRecords(from: Date, to: Date) async throws -> [FlowRecord]? {
+        let iso = ISO8601DateFormatter()
+        var query = URLComponents()
+        query.queryItems = [URLQueryItem(name: "start", value: iso.string(from: from)),
+                            URLQueryItem(name: "end", value: iso.string(from: to))]
+        let (data, _) = try await request("GET", "\(tailnetPath)/logging/network?\(query.percentEncodedQuery ?? "")")
+        struct Log: Decodable {
+            var end: String?
+            var logged: String?
+            var virtualTraffic: [FlowRecord]?
+            var subnetTraffic: [FlowRecord]?
+            var exitTraffic: [FlowRecord]?
+        }
+        struct Response: Decodable { var logs: [Log]? }
+        let fractional = ISO8601DateFormatter()
+        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        var out: [FlowRecord] = []
+        for log in try JSONDecoder().decode(Response.self, from: data).logs ?? [] {
+            let date = (log.end ?? log.logged).flatMap { fractional.date(from: $0) ?? iso.date(from: $0) }
+            for (kind, records) in [(FlowRecord.Kind.virtual, log.virtualTraffic), (.subnet, log.subnetTraffic), (.exit, log.exitTraffic)] {
+                for var r in records ?? [] {
+                    r.kind = kind
+                    r.end = date
+                    out.append(r)
+                }
+            }
+        }
+        return out
     }
 
     func resendInvite(id: String) async throws { _ = try await request("POST", "user-invites/\(id)/resend") }

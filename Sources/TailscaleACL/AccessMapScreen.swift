@@ -67,6 +67,12 @@ struct AccessMapScreen: View {
                 }
                 Spacer()
                 if store.isValid {
+                    if store.currentWorkspace.kind == .tailscale, !selection.isEmpty {
+                        ToolbarButton(label: "Traffic", icon: "chart.bar.xaxis") {
+                            store.trafficFilterRequest = node.map { $0.ipAddresses?.first ?? $0.displayName } ?? selection
+                        }
+                        .help("Real connections for \(node?.displayName ?? selection) from Tailscale's flow logs")
+                    }
                     ToolbarButton(label: "Templates", icon: "square.grid.2x2") { showingTemplates = true }
                 }
                 if store.isValid && !items.isEmpty {

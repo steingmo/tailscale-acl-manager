@@ -35,6 +35,14 @@ struct Evaluator {
     /// The attributes are the device's full set (a test's srcPostureAttrs),
     /// so a missing attribute is unset rather than unknown.
     var attributesComplete = false
+    /// The query's IP protocol (6 TCP, 17 UDP) when known, e.g. for real
+    /// traffic; nil asks about TCP or UDP alike, as the Simulator does.
+    var proto: Int? = nil
+
+    /// "tcp"/"udp"/"6" → IANA number.
+    static func protoNumber(_ s: String) -> Int? {
+        ["tcp": 6, "udp": 17, "icmp": 1, "sctp": 132][s.lowercased()] ?? Int(s)
+    }
 
     /// Postures still in question for a rule: [] when none is required or one
     /// is met, nil when the source can't meet any (the rule doesn't apply).
@@ -61,6 +69,7 @@ struct Evaluator {
         for rule in model.rules where rule.action == "accept" {
             // Port queries are TCP/UDP, like grants' proto:port entries.
             if let proto = rule.proto?.lowercased(), !["tcp", "udp", "6", "17"].contains(proto) { continue }
+            if let q = self.proto, let p = rule.proto.flatMap(Self.protoNumber), p != q { continue }
             guard let posture = pendingPostures(rule.srcPosture) else { continue }
             for src in rule.src where sourceMatches(spec: src, sourceID: sourceID) {
                 for dst in rule.dst {
@@ -113,6 +122,7 @@ struct Evaluator {
         if let colon = spec.firstIndex(of: ":") {
             let proto = String(spec[..<colon]).lowercased()
             guard ["tcp", "udp", "6", "17"].contains(proto) else { return false }
+            if let q = self.proto, Self.protoNumber(proto) != q { return false }
             portPart = String(spec[spec.index(after: colon)...])
         }
         if portPart == "*" { return true }

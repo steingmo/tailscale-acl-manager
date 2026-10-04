@@ -676,6 +676,12 @@ struct PushReviewSheet: View {
     @State private var conflictBase: String?
     @State private var noSyncRecord = false
     @State private var comparing: DiffPresentation?
+    /// Both policies as parsed for the review, for replaying real traffic.
+    @State private var models: (old: PolicyModel, new: PolicyModel)?
+    /// Real connections the old policy allowed that this push would block;
+    /// nil until checked.
+    @State private var blocked: [TrafficConnection]?
+    @State private var trafficError: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -736,6 +742,7 @@ struct PushReviewSheet: View {
                         .foregroundStyle(serverVerdict.isEmpty ? Theme.green : Theme.red)
                         .fixedSize(horizontal: false, vertical: true)
                 }
+                if models != nil, store.currentWorkspace.kind == .tailscale { trafficCheck }
                 if !candidateErrors.isEmpty {
                     Label("The Problems check reports \(candidateErrors.count) error\(candidateErrors.count == 1 ? "" : "s") in this policy — the server may reject it.",
                           systemImage: "exclamationmark.triangle.fill")
@@ -777,6 +784,64 @@ struct PushReviewSheet: View {
 
     private var host: String { client.displayHost }
 
+    /// Replays recent real traffic (flow logs) against the new policy.
+    @ViewBuilder
+    private var trafficCheck: some View {
+        if let blocked {
+            let total = store.traffic?.connections.filter(\.isPortTraffic).count ?? 0
+            if blocked.isEmpty {
+                Label("None of the \(total) kinds of real connections in the loaded traffic would be blocked.",
+                      systemImage: "checkmark.shield")
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(Theme.green)
+            } else {
+                let byIP = nodesByAddress(store.headscaleNodes)
+                VStack(alignment: .leading, spacing: 3) {
+                    Label("This push would block \(blocked.count) kind\(blocked.count == 1 ? "" : "s") of connection that happened recently:",
+                          systemImage: "exclamationmark.triangle.fill")
+                        .font(.system(size: 11.5, weight: .semibold))
+                        .foregroundStyle(Theme.red)
+                    ForEach(blocked.prefix(8)) { c in
+                        Text(verbatim: "\(trafficName(c.client, nodes: byIP)) → \(trafficName(c.server, nodes: byIP)) \(c.protoName) \(c.port) · \(c.connections)×")
+                            .font(.system(size: 11, design: .monospaced))
+                            .foregroundStyle(Theme.textPrimary)
+                    }
+                    if blocked.count > 8 {
+                        Text(verbatim: "…and \(blocked.count - 8) more (in the exported review).")
+                            .font(.system(size: 10.5)).foregroundStyle(Theme.textSecondary)
+                    }
+                }
+            }
+        } else {
+            HStack(spacing: 8) {
+                Button(store.traffic == nil ? "Check against the last 7 days of traffic" : "Check against loaded traffic") {
+                    Task { await checkTraffic() }
+                }
+                .font(.system(size: 11.5))
+                .disabled(store.trafficProgress != nil)
+                if let p = store.trafficProgress {
+                    ProgressView().controlSize(.small)
+                    Text(p).font(.system(size: 10.5)).foregroundStyle(Theme.textSecondary)
+                }
+                if let trafficError {
+                    Text(trafficError).font(.system(size: 10.5)).foregroundStyle(Theme.red).lineLimit(2)
+                }
+            }
+        }
+    }
+
+    private func checkTraffic() async {
+        guard let models else { return }
+        trafficError = nil
+        do {
+            if store.traffic == nil { try await store.loadTraffic(days: 7) }
+            blocked = trafficBlocked(by: models.new, was: models.old, traffic: store.traffic?.connections ?? [],
+                                     nodes: store.headscaleNodes)
+        } catch {
+            trafficError = error.localizedDescription
+        }
+    }
+
     /// This review — summary, access changes, checks, and the text diff — as Markdown.
     private var reviewMarkdown: String {
         var model = (try? HuJSONParser.parse(candidate.text)).map(PolicyModel.init(tree:)) ?? PolicyModel()
@@ -786,7 +851,11 @@ struct PushReviewSheet: View {
             workspace: store.currentWorkspace.name, host: host, isRestore: candidate.isRestore,
             serverText: serverText, candidate: candidate.text, changes: changes, deviceCount: deviceCount,
             note: previewNote, verdict: serverVerdict, errors: candidateErrors,
-            tests: ev.runTests(), sshTests: ev.runSSHTests(), conflict: conflictBase != nil))
+            tests: ev.runTests(), sshTests: ev.runSSHTests(), conflict: conflictBase != nil,
+            blockedTraffic: blocked.map { list in
+                let byIP = nodesByAddress(store.headscaleNodes)
+                return list.map { "\(trafficName($0.client, nodes: byIP)) → \(trafficName($0.server, nodes: byIP)) \($0.protoName) \($0.port) (\($0.connections) connections)" }
+            }))
     }
 
     private func exportReview() {
@@ -891,6 +960,11 @@ struct PushReviewSheet: View {
                 var oldModel = PolicyModel(tree: oldTree)
                 oldModel.userAutogroups = newModel.userAutogroups
                 changes = accessChanges(from: oldModel, to: newModel, nodes: nodes)
+                models = (oldModel, newModel)
+                // Traffic already loaded (Traffic screen): check right away.
+                if let traffic = store.traffic {
+                    blocked = trafficBlocked(by: newModel, was: oldModel, traffic: traffic.connections, nodes: nodes)
+                }
             } else {
                 previewNote = "The server's current policy couldn't be parsed here, so no access comparison is available."
             }

@@ -108,6 +108,11 @@ Use `-` to read the policy from standard input.
   step; change roles, approve, suspend, restore, and offboard (suspend or
   delete, and remove from every group). Policy edits go through the reviewed
   push as usual.
+- **Traffic** (Tailscale flow logs) — see real connections between devices,
+  users, and subnets; find rules no traffic used and broad rules where only
+  a few ports were used; and before a push, replay recent traffic against
+  the new policy to see what it would block. Needs flow logging on and the
+  `logs:network:read` scope.
 - **Who changed it** — for Tailscale, the configuration audit log shows who
   changed the policy and when (needs the `logs:configuration:read` scope).
 

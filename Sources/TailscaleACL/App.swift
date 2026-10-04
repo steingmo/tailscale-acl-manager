@@ -30,6 +30,7 @@ enum Screen: String, CaseIterable, Identifiable {
     case ssh = "SSH"
     case tests = "Tests"
     case routes = "Routes"
+    case traffic = "Traffic"
     case problems = "Problems"
     case headscale = "Server"
 
@@ -45,6 +46,7 @@ enum Screen: String, CaseIterable, Identifiable {
         case .ssh: return "terminal"
         case .tests: return "checkmark.shield"
         case .routes: return "arrow.triangle.branch"
+        case .traffic: return "chart.bar.xaxis"
         case .problems: return "exclamationmark.triangle"
         case .headscale: return "network"
         }
@@ -96,6 +98,7 @@ struct RootView: View {
         }
         .onChange(of: undoManager) { store.undoManager = undoManager }
         .onChange(of: store.editorLineRequest) { if store.editorLineRequest != nil { screen = .policyEditor } }
+        .onChange(of: store.trafficFilterRequest) { if store.trafficFilterRequest != nil { screen = .traffic } }
         .sheet(item: $workspaceSheet) { WorkspaceSheet(mode: $0) }
         .sheet(item: $overlay) { item in
             switch item {
@@ -307,6 +310,7 @@ struct RootView: View {
         case .ssh: SSHScreen()
         case .tests: TestsScreen()
         case .routes: RoutesScreen()
+        case .traffic: TrafficScreen()
         case .problems: ProblemsScreen()
         case .headscale: HeadscaleScreen()
         }

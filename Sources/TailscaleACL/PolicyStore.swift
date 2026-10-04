@@ -24,6 +24,34 @@ final class PolicyStore: ObservableObject {
     @Published var serverLogins: Set<String>? {
         didSet { if isValid { lintIssues = allLint() } }
     }
+    /// Network traffic from the server's flow logs, once loaded.
+    @Published var traffic: TrafficSummary?
+    /// Set (e.g. from the Access Map) to show the Traffic screen filtered to
+    /// a device, user, group, tag, or IP; the screen clears it.
+    @Published var trafficFilterRequest: String?
+    /// "Loading day 2 of 7…" while traffic loads.
+    @Published var trafficProgress: String?
+
+    /// Load the last `days` days of flow logs, a day per request so a busy
+    /// tailnet's logs never have to fit in one response.
+    func loadTraffic(days: Int) async throws {
+        guard let client = serverClient() else { return }
+        let workspace = currentWorkspaceID
+        let end = Date()
+        var acc = TrafficAccumulator()
+        defer { trafficProgress = nil }
+        for day in 0..<days {
+            trafficProgress = "Loading day \(day + 1) of \(days)…"
+            let from = end.addingTimeInterval(-Double(days - day) * 86_400)
+            guard let records = try await client.flowRecords(from: from, to: from.addingTimeInterval(86_400)) else {
+                throw ServerError(status: 0, message: "\(serverDisplayName) doesn't keep network flow logs.")
+            }
+            acc.add(records)
+            guard workspace == currentWorkspaceID else { return }
+        }
+        traffic = TrafficSummary(start: end.addingTimeInterval(-Double(days) * 86_400), end: end, connections: acc.connections)
+    }
+
     /// The server's users (empty when unknown).
     @Published var serverAccounts: [ServerAccount] = []
     /// Role autogroups of the server's users; re-evaluates the policy when set.
@@ -91,6 +119,7 @@ final class PolicyStore: ObservableObject {
         serverLogins = nil
         serverUserAutogroups = [:]
         serverAccounts = []
+        traffic = nil
         serverDrift = nil
         linkedFileContents = nil
         text = currentWorkspace.policy
@@ -327,6 +356,7 @@ final class PolicyStore: ObservableObject {
         serverLogins = nil
         serverUserAutogroups = [:]
         serverAccounts = []
+        traffic = nil
         saveWorkspaces()
     }
 

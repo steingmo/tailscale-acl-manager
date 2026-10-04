@@ -101,6 +101,8 @@ struct PushReview {
     var sshTests: [SSHTestResult] = []
     /// The server changed since the last pull/push; pushing overwrites it.
     var conflict = false
+    /// Recent real connections this push would block; nil when not checked.
+    var blockedTraffic: [String]?
 }
 
 /// A push review as Markdown, to paste into a ticket or pull request so
@@ -117,6 +119,10 @@ func pushReviewMarkdown(_ r: PushReview, date: Date = Date()) -> String {
     } else {
         out.append(r.changes.isEmpty ? "- No network or SSH access changes between the \(r.deviceCount) devices."
                    : "- \(r.changes.count) device pair\(r.changes.count == 1 ? "" : "s") of \(r.deviceCount) devices change access.")
+    }
+    if let blocked = r.blockedTraffic {
+        out.append(blocked.isEmpty ? "- ✅ No recent real traffic (flow logs) would be blocked."
+                   : "- ❌ \(blocked.count) kind\(blocked.count == 1 ? "" : "s") of recent real traffic would be blocked.")
     }
     if r.conflict { out.append("- ⚠️ The server's policy changed since the last pull or push; this push overwrites those changes.") }
     if let v = r.verdict { out.append(v.isEmpty ? "- ✅ Tailscale's own check passed." : "- ❌ Tailscale's check failed: \(v)") }
@@ -145,6 +151,10 @@ func pushReviewMarkdown(_ r: PushReview, date: Date = Date()) -> String {
         for a in t.assertions where !a.passed {
             failures.append("- sshTests[\(t.testIndex)] \(t.src) → \(a.dst) as \(a.login): expected \(a.expected.rawValue), got \(a.actual.rawValue)")
         }
+    }
+    if let blocked = r.blockedTraffic, !blocked.isEmpty {
+        out += ["", "## Real traffic this would block", ""]
+        for b in blocked { out.append("- " + b) }
     }
     if !failures.isEmpty { out += ["", "## Failing tests", ""] + failures }
     if !r.errors.isEmpty {
