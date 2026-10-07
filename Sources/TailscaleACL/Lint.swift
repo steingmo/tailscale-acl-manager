@@ -509,15 +509,25 @@ func prefixContains(_ outer: String, _ inner: String) -> Bool {
 
 /// The address prefixes a destination stands for: IPs, CIDRs, host
 /// addresses, and what IP sets add; the internet as 0.0.0.0/0. Empty for
-/// device selectors (tags, groups, users), which need no route.
-func addressPrefixes(_ target: String, _ m: PolicyModel, visiting: Set<String> = []) -> [String] {
+/// device selectors (tags, groups, users), which need no route. With
+/// `internet: false` autogroup:internet stands for nothing.
+func addressPrefixes(_ target: String, _ m: PolicyModel, internet: Bool = true, visiting: Set<String> = []) -> [String] {
     let t = target.hasPrefix("host:") ? String(target.dropFirst(5)) : target
     if isAddressLike(t) { return [t] }
     if let ip = m.hosts[t] { return [ip] }
-    if t == "autogroup:internet" { return ["0.0.0.0/0"] }
+    if t == "autogroup:internet" { return internet ? ["0.0.0.0/0"] : [] }
     guard let entries = m.ipsets[t], !visiting.contains(t) else { return [] }
     return entries.compactMap(IPSetEntry.init).filter { !$0.remove }
-        .flatMap { addressPrefixes($0.target, m, visiting: visiting.union([t])) }
+        .flatMap { addressPrefixes($0.target, m, internet: internet, visiting: visiting.union([t])) }
+}
+
+/// Is the destination autogroup:internet, or an IP set that adds it?
+func includesInternet(_ target: String, _ m: PolicyModel, visiting: Set<String> = []) -> Bool {
+    if target == "autogroup:internet" { return true }
+    guard let entries = m.ipsets[target], !visiting.contains(target) else { return false }
+    return entries.compactMap(IPSetEntry.init).contains {
+        !$0.remove && includesInternet($0.target, m, visiting: visiting.union([target]))
+    }
 }
 
 /// Public internet addresses (what autogroup:internet means): not private,

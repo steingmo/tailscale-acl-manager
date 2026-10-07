@@ -254,7 +254,7 @@ func ruleSummaries(_ m: PolicyModel, sourceIDs: [String]?, destIDs: [String]? = 
 /// What a source can do with the tailnet's routers: use exit nodes (and
 /// which), and reach which advertised subnets through which routers.
 struct RouteAccess {
-    /// Some rule gives internet access (autogroup:internet or "*").
+    /// Some rule gives internet access (autogroup:internet, directly or in an IP set, or "*").
     var exitNode = false
     /// Tags exit traffic is limited to by "via"; empty means any exit node.
     var exitVia: [String] = []
@@ -275,7 +275,7 @@ func routeAccess(_ m: PolicyModel, sourceIDs: [String], nodes: [HeadscaleNode]) 
     for g in m.grants where applies(g.src) && !g.ip.isEmpty { rules.append((g.dst, g.via)) }
 
     var out = RouteAccess()
-    let exitRules = rules.filter { $0.dst.contains("*") || $0.dst.contains("autogroup:internet") }
+    let exitRules = rules.filter { $0.dst.contains { $0 == "*" || includesInternet($0, m) } }
     out.exitNode = !exitRules.isEmpty
     // Any exit rule without via means any exit node will do.
     out.exitVia = exitRules.contains { $0.via.isEmpty } ? [] : exitRules.flatMap(\.via).uniqued()
@@ -300,8 +300,7 @@ func routeAccess(_ m: PolicyModel, sourceIDs: [String], nodes: [HeadscaleNode]) 
         var via: [String]? = nil  // nil: not reached; []: any router
         for rule in rules {
             // autogroup:internet is public addresses only, so it reaches no subnet route.
-            let targets = rule.dst.filter { $0 != "autogroup:internet" }
-            let reaches = targets.contains("*") || targets.flatMap { addressPrefixes($0, m) }.contains {
+            let reaches = rule.dst.contains("*") || rule.dst.flatMap { addressPrefixes($0, m, internet: false) }.contains {
                 prefixContains(route, $0) || prefixContains($0, route)
             }
             guard reaches else { continue }

@@ -41,6 +41,18 @@ final class RouteAccessTests: XCTestCase {
         XCTAssertEqual(a.subnets.map(\.route), ["9.0.0.0/8", "10.114.2.0/24", "10.114.10.0/24", "fd00::/64"])
     }
 
+    func testInternetInsideAnIPSet() {
+        let p = """
+        {"ipsets": {"ipset:mgmt-internet": ["add autogroup:internet", "remove 1.2.3.4"],
+                    "ipset:outer": ["ipset:mgmt-internet"]},
+         "grants": [{"src": ["amy@x.com"], "dst": ["ipset:outer"], "ip": ["*"], "via": ["tag:client-vpn"]}]}
+        """
+        let a = routeAccess(model(p), sourceIDs: ["amy@x.com"], nodes: [exitA, exitB, router])
+        XCTAssertTrue(a.exitNode)
+        XCTAssertEqual(a.exitNodes, ["exit-office"])
+        XCTAssertTrue(a.subnets.isEmpty, "the internet reaches no subnet route")
+    }
+
     func testZoomClamping() {
         XCTAssertEqual(0.1.clamped(to: 0.3...2.0), 0.3)
         XCTAssertEqual(2.5.clamped(to: 0.3...2.0), 2.0)
