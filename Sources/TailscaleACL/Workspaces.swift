@@ -30,7 +30,7 @@ enum WorkspaceStore {
     }
 
     static func load() -> [Workspace] {
-        guard let data = try? Data(contentsOf: fileURL) else { return [] }
+        guard let data = DataEncryption.read(fileURL) else { return [] }
         return (try? JSONDecoder().decode([Workspace].self, from: data)) ?? []
     }
 
@@ -39,7 +39,7 @@ enum WorkspaceStore {
                                                 withIntermediateDirectories: true)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted]
-        try encoder.encode(workspaces).write(to: fileURL, options: .atomic)
+        try DataEncryption.write(encoder.encode(workspaces), to: fileURL)
     }
 
     /// First launch after workspaces were introduced: carry the single saved

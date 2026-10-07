@@ -107,6 +107,14 @@ Swift Package (no Xcode project). All source in `Sources/TailscaleACL/`:
   (concealed type, cleared after 60 s). `credentialInfo()` reports scopes and
   expiry. CI and the generated GitOps workflow pin actions to commit SHAs
   (Dependabot updates them).
+- App lock and encryption (AppLock.swift, DataProtection.swift): the App
+  owns an `AppSession`; `PolicyStore` is only created after unlocking (when
+  `lockApp` is on) and dropped on lock. All data files go through
+  `DataEncryption.read/write` (AES-GCM, marker-prefixed, key in the Keychain
+  account "data-encryption-key"); plain files still read, an encrypted file
+  is never overwritten with plain text, and an undecryptable
+  workspaces.json stops the app from starting rather than starting empty.
+  New data files must use `DataEncryption` and be listed in `dataFiles`.
 - `ipLookup` (SharedSheets.swift) backs ⌘K IP search; `pushReviewMarkdown`
   (Report.swift) exports the push review.
 - `convertACLsToGrants` (Templates.swift) rewrites ACLs as grants; the sheet

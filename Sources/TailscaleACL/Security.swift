@@ -136,19 +136,14 @@ enum ActivityLog {
         encoder.dateEncodingStrategy = .iso8601
         guard var line = try? encoder.encode(entry) else { return }
         line.append(0x0A)
-        try? FileManager.default.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-        if let handle = try? FileHandle(forWritingTo: fileURL) {
-            defer { try? handle.close() }
-            _ = try? handle.seekToEnd()
-            try? handle.write(contentsOf: line)
-        } else {
-            try? line.write(to: fileURL)
-        }
+        // ponytail: rewrites the whole (small) file per entry so it can be
+        // encrypted as one; cap it if the log ever gets long.
+        try? DataEncryption.write((DataEncryption.read(fileURL) ?? Data()) + line, to: fileURL)
     }
 
     /// Newest first.
     static func recent(server: String? = nil, limit: Int = 20) -> [ActivityEntry] {
-        guard let data = try? Data(contentsOf: fileURL) else { return [] }
+        guard let data = DataEncryption.read(fileURL) else { return [] }
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         let entries = data.split(separator: 0x0A).compactMap { try? decoder.decode(ActivityEntry.self, from: Data($0)) }
@@ -265,11 +260,42 @@ final class GuardedServer: PolicyServer {
 // MARK: - Settings window
 
 struct SettingsView: View {
+    @EnvironmentObject var session: AppSession
     @AppStorage(SecuritySettings.requireAuthKey) private var requireAuth = true
     @AppStorage(SecuritySettings.clearSecretsKey) private var clearSecrets = true
+    @AppStorage(AppSession.lockSettingKey) private var lockApp = false
+    @AppStorage(DataEncryption.settingKey) private var encrypted = false
+    @State private var encryptionError: String?
+    @State private var fileVault: Bool?
 
     var body: some View {
         Form {
+            Section("Protect the app and its data") {
+                Toggle("Require Touch ID or your password to open the app", isOn: $lockApp)
+                Text("Also locks when the Mac sleeps or the screen locks, and with Lock Tailscale ACL (⌃⌘L). Locking unloads every workspace from memory.")
+                    .font(.caption).foregroundStyle(.secondary)
+                Toggle("Encrypt saved policies, history, snapshots, and activity log", isOn: Binding(
+                    get: { encrypted },
+                    set: { on in
+                        encryptionError = nil
+                        do {
+                            if on { try DataEncryption.enable() } else { try DataEncryption.disable() }
+                        } catch {
+                            encryptionError = error.localizedDescription
+                        }
+                    }))
+                    .disabled(session.store == nil)
+                Text("AES-256 with a key in your Keychain, so the files in Application Support can't be read without this app. Linked policy files in Git, exports, and reports stay readable. Keep the Keychain item \u{201C}data-encryption-key\u{201D}: without it the encrypted history can't be recovered (the live policy can always be pulled again).")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                if let encryptionError {
+                    Text(encryptionError).font(.caption).foregroundStyle(.red)
+                }
+                LabeledContent("FileVault (full-disk encryption)") {
+                    Text(fileVault == true ? "On" : fileVault == false ? "Off — turn it on in System Settings ▸ Privacy & Security" : "Unknown")
+                        .foregroundStyle(fileVault == false ? .red : .secondary)
+                }
+            }
             Section("Security") {
                 Toggle("Require Touch ID or your password before changing a server", isOn: $requireAuth)
                 Text("Covers pushes, device and user changes, route approvals, auth keys, and invites. One confirmation lasts two minutes.")
@@ -285,7 +311,8 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .frame(width: 480)
+        .frame(width: 520)
+        .onAppear { fileVault = fileVaultIsOn() }
         .padding(.vertical, 8)
     }
 }

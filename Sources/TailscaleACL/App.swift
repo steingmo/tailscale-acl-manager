@@ -363,18 +363,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
 struct TailscaleACLApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
-    @StateObject private var store = PolicyStore()
+    @StateObject private var session = AppSession()
     @StateObject private var updater = UpdaterViewModel()
 
     var body: some SwiftUI.Scene {
         WindowGroup("Tailscale ACL") {
-            RootView()
-                .environmentObject(store)
+            SessionRootView()
+                .environmentObject(session)
         }
         .defaultSize(width: 1440, height: 900)
 
         Settings {
             SettingsView()
+                .environmentObject(session)
         }
         .commands {
             CommandGroup(after: .appInfo) {
@@ -382,6 +383,9 @@ struct TailscaleACLApp: App {
                     updater.checkForUpdates()
                 }
                 .disabled(!updater.canCheckForUpdates)
+                Button("Lock Tailscale ACL") { session.lock(manual: true) }
+                    .keyboardShortcut("l", modifiers: [.control, .command])
+                    .disabled(session.store == nil)
             }
         }
     }

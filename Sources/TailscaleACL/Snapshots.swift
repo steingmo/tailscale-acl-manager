@@ -21,7 +21,7 @@ enum SnapshotStore {
     }
 
     static func load(_ workspace: UUID) -> [Snapshot] {
-        guard let data = try? Data(contentsOf: fileURL(workspace)) else { return [] }
+        guard let data = DataEncryption.read(fileURL(workspace)) else { return [] }
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         return (try? decoder.decode([Snapshot].self, from: data)) ?? []
@@ -36,7 +36,7 @@ enum SnapshotStore {
         try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
-        try? encoder.encode(Array(list.prefix(limit))).write(to: url, options: .atomic)
+        if let data = try? encoder.encode(Array(list.prefix(limit))) { try? DataEncryption.write(data, to: url) }
     }
 
     static func delete(_ workspace: UUID) {

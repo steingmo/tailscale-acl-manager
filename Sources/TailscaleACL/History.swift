@@ -19,7 +19,7 @@ enum PushHistory {
     static var fileURL: URL { appDataDirectory.appendingPathComponent("push-history.json") }
 
     static func load() -> [PushRecord] {
-        guard let data = try? Data(contentsOf: fileURL) else { return [] }
+        guard let data = DataEncryption.read(fileURL) else { return [] }
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         return (try? decoder.decode([PushRecord].self, from: data)) ?? []
@@ -39,7 +39,7 @@ enum PushHistory {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         encoder.outputFormatting = [.prettyPrinted]
-        try encoder.encode(records).write(to: fileURL, options: .atomic)
+        try DataEncryption.write(encoder.encode(records), to: fileURL)
     }
 }
 

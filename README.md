@@ -127,6 +127,10 @@ Use `-` to read the policy from standard input.
   and invite links hidden from clipboard managers and cleared after a
   minute; warnings for unencrypted `http://` servers; and the credential's
   scopes and expiry shown on the Server screen (Settings, ⌘,).
+- **App lock and encrypted data** (Settings) — require Touch ID or your
+  password to open the app (it locks again on sleep, screen lock, or ⌃⌘L,
+  unloading everything from memory), and encrypt the saved policies,
+  history, snapshots, and activity log with AES-256 and a Keychain key.
 - **Who changed it** — for Tailscale, the configuration audit log shows who
   changed the policy and when (needs the `logs:configuration:read` scope).
 
