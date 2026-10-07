@@ -107,7 +107,8 @@ final class GitOpsTests: XCTestCase {
         XCTAssertNil(GitRepo.gitHubRepo(fromRemote: "git@gitlab.com:nema/tailnet-policy.git"))
 
         let plain = gitOpsWorkflow(policyFile: "policy.hujson", branch: "main")
-        XCTAssertTrue(plain.contains("uses: tailscale/gitops-acl-action@v1"))
+        XCTAssertTrue(plain.contains("uses: tailscale/gitops-acl-action@5a4a17f5708e9bf96f4ee915a95e9f83c2eebe1a # v1.5.2"))
+        XCTAssertFalse(plain.range(of: #"uses: [^\n]+@v\d"#, options: .regularExpression) != nil, "every action pinned to a SHA")
         XCTAssertTrue(plain.contains("action: apply") && plain.contains("action: test"))
         XCTAssertTrue(plain.contains("branches: [ \"main\" ]"))
         XCTAssertFalse(plain.contains("policy-file:"))

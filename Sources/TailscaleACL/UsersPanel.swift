@@ -93,9 +93,8 @@ struct UsersPanel: View {
             Spacer()
             if let url = invite.inviteURL {
                 Button("Copy link") {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(url, forType: .string)
-                    status = (true, "Invite link copied.")
+                    SecureClipboard.copy(url)
+                    status = (true, SecuritySettings.clearCopiedSecrets ? "Invite link copied — cleared from the clipboard in a minute." : "Invite link copied.")
                 }
             }
             if !invite.email.isEmpty {
@@ -262,8 +261,7 @@ struct AddUserSheet: View {
                     .background(RoundedRectangle(cornerRadius: 6).fill(Theme.panel))
                 HStack {
                     Button("Copy") {
-                        NSPasteboard.general.clearContents()
-                        NSPasteboard.general.setString(secret.value, forType: .string)
+                        SecureClipboard.copy(secret.value)
                     }
                     Spacer()
                     Button("Done") { dismiss() }.keyboardShortcut(.defaultAction)

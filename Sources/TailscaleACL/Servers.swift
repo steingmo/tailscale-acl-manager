@@ -49,6 +49,8 @@ protocol PolicyServer: AnyObject {
     func restoreUser(id: String) async throws
     /// Network flow logs between two times; nil when the server keeps none.
     func flowRecords(from: Date, to: Date) async throws -> [FlowRecord]?
+    /// The stored credential's kind, scopes, and expiry, when the server says.
+    func credentialInfo() async throws -> CredentialInfo?
 }
 
 struct ServerUsers {
@@ -116,6 +118,7 @@ extension PolicyServer {
     func suspendUser(id: String) async throws { throw unsupported("suspending users") }
     func restoreUser(id: String) async throws { throw unsupported("suspending users") }
     func flowRecords(from: Date, to: Date) async throws -> [FlowRecord]? { nil }
+    func credentialInfo() async throws -> CredentialInfo? { nil }
 }
 
 struct PolicyChange: Identifiable {
@@ -215,6 +218,8 @@ final class TailscaleClient: PolicyServer {
     private let credential: String
     private let session: URLSession
     private var accessToken: (value: String, expires: Date)?
+    /// Scopes Tailscale granted the OAuth client's token.
+    private var grantedScopes: [String]?
     /// ETag of the policy last read. Sent as If-Match on the next write, so
     /// Tailscale refuses the push if someone changed the policy in between.
     private var etag: String?
@@ -356,6 +361,29 @@ final class TailscaleClient: PolicyServer {
                              lastEmailSentAt: j["lastEmailSentAt"] as? String, inviteURL: j["inviteUrl"] as? String)
     }
 
+    /// OAuth clients: the scopes in their token (they don't expire). Access
+    /// tokens: full access, with the expiry from the keys API.
+    func credentialInfo() async throws -> CredentialInfo? {
+        if oauthClientID != nil {
+            _ = try await bearerToken()
+            return CredentialInfo(kind: "OAuth client", scopes: grantedScopes, expires: nil)
+        }
+        var info = CredentialInfo(kind: "Personal API access token", scopes: ["all"], expires: nil)
+        if credential.hasPrefix("tskey-api-"), let id = credential.dropFirst("tskey-api-".count).split(separator: "-").first {
+            let (data, _) = try await request("GET", "\(tailnetPath)/keys/\(id)")
+            let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+            info.expires = (json?["expires"] as? String).flatMap { Self.date($0) }
+        }
+        return info
+    }
+
+    static func date(_ s: String) -> Date? {
+        let iso = ISO8601DateFormatter()
+        let fractional = ISO8601DateFormatter()
+        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return fractional.date(from: s) ?? iso.date(from: s)
+    }
+
     /// Needs flow logging on in the tailnet and the logs:network:read scope.
     func flowRecords(from: Date, to: Date) async throws -> [FlowRecord]? {
         let iso = ISO8601DateFormatter()
@@ -475,9 +503,11 @@ final class TailscaleClient: PolicyServer {
         struct Token: Decodable {
             var access_token: String
             var expires_in: Double?
+            var scope: String?
         }
         let token = try JSONDecoder().decode(Token.self, from: data)
         accessToken = (token.access_token, Date().addingTimeInterval(token.expires_in ?? 3600))
+        grantedScopes = token.scope.map { $0.split(separator: " ").map(String.init) }
         return token.access_token
     }
 

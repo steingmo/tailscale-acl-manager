@@ -98,6 +98,15 @@ Swift Package (no Xcode project). All source in `Sources/TailscaleACL/`:
   In Git mode the push review opens a PR instead of pushing, and
   `checkServerDrift` compares the server with the file on origin's default
   branch (`driftGitBase`). Tests drive real git against a local bare repo.
+- Security (Security.swift): `PolicyStore.serverClient()` returns a
+  `GuardedServer` — every mutating call asks `Authorizer` (Touch ID or
+  password, 2-minute grace; setting `requireAuthForChanges`) and is appended
+  to `ActivityLog` (<data>/activity.jsonl, no secrets). Reads pass through.
+  New `PolicyServer` methods must be forwarded in `GuardedServer` (changes
+  via `change(…)`). Secrets go to the clipboard via `SecureClipboard`
+  (concealed type, cleared after 60 s). `credentialInfo()` reports scopes and
+  expiry. CI and the generated GitOps workflow pin actions to commit SHAs
+  (Dependabot updates them).
 - `ipLookup` (SharedSheets.swift) backs ⌘K IP search; `pushReviewMarkdown`
   (Report.swift) exports the push review.
 - `convertACLsToGrants` (Templates.swift) rewrites ACLs as grants; the sheet

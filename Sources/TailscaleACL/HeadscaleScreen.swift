@@ -13,6 +13,9 @@ struct HeadscaleScreen: View {
     @State private var confirmingPull = false
     @State private var review: PushCandidate?
     @State private var settingUpGit = false
+    @State private var confirmingInsecure = false
+    @State private var credential: CredentialInfo?
+    @State private var activity: [ActivityEntry] = []
     @State private var history = PushHistory.load()
     @State private var openingRecord: PushRecord?
     @State private var comparing: DiffPresentation?
@@ -104,6 +107,7 @@ struct HeadscaleScreen: View {
                 if client != nil { UsersPanel() }
                 if client != nil { authKeyPanel }
                 if !serverHistory.isEmpty { historyPanel }
+                if !activity.isEmpty { activityPanel }
                 if !store.headscaleNodes.isEmpty { nodesPanel }
             }
             .padding(16)
@@ -112,6 +116,9 @@ struct HeadscaleScreen: View {
         }
         .background(Theme.background)
         .onAppear(perform: loadKey)
+        .onAppear { activity = ActivityLog.recent(server: store.serverDisplayName) }
+        .onChange(of: store.headscaleNodes.map(\.id)) { activity = ActivityLog.recent(server: store.serverDisplayName) }
+        .onChange(of: busy) { activity = ActivityLog.recent(server: store.serverDisplayName) }
         .task(id: "\(store.currentWorkspaceID)\(kind)") { await loadPolicyChanges() }
         .onChange(of: store.currentWorkspaceID) {
             loadKey()
@@ -191,6 +198,13 @@ struct HeadscaleScreen: View {
                         .textFieldStyle(.roundedBorder)
                         .font(.system(size: 12, design: .monospaced))
                 }
+                if isUnencryptedRemote(store.currentWorkspace.serverURL) {
+                    Label("Unencrypted: with http://, your API key and policy cross the network in clear text, readable by anyone on the path. Use https:// (e.g. a reverse proxy with a certificate).",
+                          systemImage: "lock.open.fill")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(Theme.red)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
                 field("API key", hint: "Create one on the server: headscale apikeys create — stored in your Keychain") {
                     SecureField("API key", text: $apiKey)
                         .textFieldStyle(.roundedBorder)
@@ -211,10 +225,18 @@ struct HeadscaleScreen: View {
             }
             HStack(spacing: 10) {
                 Button("Save & test") {
-                    HeadscaleKeychain.save(apiKey, account: store.currentWorkspaceID.uuidString)
-                    refreshNodes(announce: true)
+                    if kind == .headscale, isUnencryptedRemote(store.currentWorkspace.serverURL) {
+                        confirmingInsecure = true
+                    } else {
+                        saveAndTest()
+                    }
                 }
                 .disabled(client == nil || busy)
+                .confirmationDialog("Send the API key over an unencrypted connection?", isPresented: $confirmingInsecure) {
+                    Button("Connect anyway", role: .destructive) { saveAndTest() }
+                } message: {
+                    Text("\(store.currentWorkspace.serverURL) uses http://. Anyone on the network path can read the API key and take over the server's policy. Use https:// if you can.")
+                }
                 if busy { ProgressView().controlSize(.small) }
                 if let status {
                     Label(status.text, systemImage: status.ok ? "checkmark.circle.fill" : "xmark.octagon.fill")
@@ -223,7 +245,57 @@ struct HeadscaleScreen: View {
                         .lineLimit(3)
                 }
             }
+            if let credential { credentialLine(credential) }
         }
+        .task(id: "\(store.currentWorkspaceID)\(kind)") { await loadCredentialInfo() }
+    }
+
+    private func saveAndTest() {
+        HeadscaleKeychain.save(apiKey, account: store.currentWorkspaceID.uuidString)
+        refreshNodes(announce: true)
+        Task { await loadCredentialInfo() }
+    }
+
+    private func loadCredentialInfo() async {
+        credential = nil
+        guard let client else { return }
+        credential = try? await client.credentialInfo()
+    }
+
+    /// What the stored credential is, what it may do, and when it expires.
+    private func credentialLine(_ c: CredentialInfo) -> some View {
+        let days = c.expires.map { Int(($0.timeIntervalSinceNow / 86_400).rounded(.down)) }
+        return VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 6) {
+                Image(systemName: "key.fill").font(.system(size: 10.5)).foregroundStyle(Theme.textSecondary)
+                Text(verbatim: c.kind).font(.system(size: 11, weight: .semibold)).foregroundStyle(Theme.textPrimary)
+                if let days {
+                    Text(verbatim: days < 0 ? "expired" : "expires in \(days) day\(days == 1 ? "" : "s")")
+                        .font(.system(size: 11, weight: days <= 14 ? .semibold : .regular))
+                        .foregroundStyle(days < 0 ? Theme.red : days <= 14 ? Theme.orange : Theme.textSecondary)
+                } else if c.kind == "OAuth client" {
+                    Text("doesn't expire").font(.system(size: 11)).foregroundStyle(Theme.textSecondary)
+                }
+            }
+            if c.isFullAccess {
+                Text(kind == .tailscale
+                     ? "Full access to the tailnet, with your own admin rights. An OAuth client limited to the scopes you use is safer and doesn't expire."
+                     : "Full access to the server. Create keys with a short expiry and rotate them (headscale apikeys create --expiration 90d).")
+                    .font(.system(size: 10.5)).foregroundStyle(Theme.orange).fixedSize(horizontal: false, vertical: true)
+            } else if let scopes = c.scopes {
+                Text(verbatim: "Scopes: " + scopes.joined(separator: ", "))
+                    .font(.system(size: 10.5, design: .monospaced)).foregroundStyle(Theme.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                if !c.missingFeatures.isEmpty {
+                    Text(verbatim: "Not available with these scopes: " + c.missingFeatures.joined(separator: ", ") + ".")
+                        .font(.system(size: 10.5)).foregroundStyle(Theme.textSecondary).fixedSize(horizontal: false, vertical: true)
+                }
+            } else if kind == .headscale {
+                Text("Headscale API keys have full access. Prefer keys with a short expiry, and rotate them.")
+                    .font(.system(size: 10.5)).foregroundStyle(Theme.textSecondary)
+            }
+        }
+        .textSelection(.enabled)
     }
 
     private var policyPanel: some View {
@@ -336,8 +408,7 @@ struct HeadscaleScreen: View {
                             .lineLimit(1)
                             .truncationMode(.middle)
                         Button("Copy") {
-                            NSPasteboard.general.clearContents()
-                            NSPasteboard.general.setString(createdKey, forType: .string)
+                            SecureClipboard.copy(createdKey)
                         }
                         Button("Done") { self.createdKey = nil }
                     }
@@ -469,6 +540,43 @@ struct HeadscaleScreen: View {
             policyChangesError = "Your credential can't read the audit log. Give the OAuth client the logs:configuration:read scope to see who changed the policy."
         } catch {
             policyChangesError = "Couldn't load the audit log: \(error.localizedDescription)"
+        }
+    }
+
+    /// Every change the app made on this server (activity.jsonl).
+    private var activityPanel: some View {
+        panel {
+            HStack {
+                Text("Activity on \(store.serverDisplayName)")
+                    .font(.system(size: 13, weight: .bold))
+                    .foregroundStyle(Theme.textPrimary)
+                Spacer()
+                Button { activity = ActivityLog.recent(server: store.serverDisplayName) } label: {
+                    Image(systemName: "arrow.clockwise").font(.system(size: 11))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(Theme.textSecondary)
+                .help("Refresh")
+                Button("Show log file") { NSWorkspace.shared.activateFileViewerSelecting([ActivityLog.fileURL]) }
+                    .font(.system(size: 11))
+            }
+            ForEach(activity) { e in
+                HStack(spacing: 8) {
+                    Image(systemName: e.error == nil ? "checkmark.circle" : "xmark.circle")
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(e.error == nil ? Theme.green : Theme.red)
+                    Text(e.date, format: .dateTime.day().month().hour().minute())
+                        .font(.system(size: 10.5, design: .monospaced))
+                        .foregroundStyle(Theme.textSecondary)
+                        .frame(width: 110, alignment: .leading)
+                    Text(verbatim: e.action).font(.system(size: 11.5, weight: .semibold)).foregroundStyle(Theme.textPrimary)
+                    Text(verbatim: e.detail).font(.system(size: 11)).foregroundStyle(Theme.textSecondary).lineLimit(1)
+                    Spacer()
+                    Text(verbatim: e.error ?? e.user).font(.system(size: 10.5))
+                        .foregroundStyle(e.error == nil ? Theme.textSecondary : Theme.red).lineLimit(1)
+                        .help(e.error ?? "")
+                }
+            }
         }
     }
 

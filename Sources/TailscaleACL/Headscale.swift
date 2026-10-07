@@ -210,6 +210,19 @@ final class HeadscaleClient: PolicyServer {
         _ = try await send("DELETE", "user/\(id)")
     }
 
+    /// The API key's expiry, found by its prefix ("hskey-api-<prefix>-…", or
+    /// "<prefix>.…" for keys made by older Headscale versions).
+    func credentialInfo() async throws -> CredentialInfo? {
+        let prefix = apiKey.hasPrefix("hskey-api-")
+            ? String(apiKey.dropFirst("hskey-api-".count).prefix(12))
+            : String(apiKey.split(separator: ".").first ?? "")
+        let data = try await send("GET", "apikey")
+        let keys = (try JSONSerialization.jsonObject(with: data) as? [String: Any])?["apiKeys"] as? [[String: Any]] ?? []
+        let mine = keys.first { ($0["prefix"] as? String) == prefix }
+        return CredentialInfo(kind: "Headscale API key", scopes: nil,
+                              expires: (mine?["expiration"] as? String).flatMap { TailscaleClient.date($0) })
+    }
+
     /// Headscale keeps no audit log.
     func policyChanges(days: Int) async throws -> [PolicyChange]? { nil }
 

@@ -372,6 +372,10 @@ struct TailscaleACLApp: App {
                 .environmentObject(store)
         }
         .defaultSize(width: 1440, height: 900)
+
+        Settings {
+            SettingsView()
+        }
         .commands {
             CommandGroup(after: .appInfo) {
                 Button("Check for Updates…") {

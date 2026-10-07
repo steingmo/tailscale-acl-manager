@@ -122,6 +122,11 @@ Use `-` to read the policy from standard input.
   secrets, admin-console lock, external reference). From then on, the push
   review opens a pull request with the review as its description, and the
   app warns when the live policy differs from GitHub.
+- **Security** — Touch ID (or your password) before any change to a live
+  server; an activity log of every change the app makes; copied auth keys
+  and invite links hidden from clipboard managers and cleared after a
+  minute; warnings for unencrypted `http://` servers; and the credential's
+  scopes and expiry shown on the Server screen (Settings, ⌘,).
 - **Who changed it** — for Tailscale, the configuration audit log shows who
   changed the policy and when (needs the `logs:configuration:read` scope).
 

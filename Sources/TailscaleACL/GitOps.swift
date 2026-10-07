@@ -171,6 +171,7 @@ struct GitRepo {
 
 /// Tailscale's GitOps workflow: test the policy on pull requests, apply it
 /// on merge to the default branch. Uses a federated identity (no stored secret).
+/// Actions are pinned to commit SHAs so a moved tag can't change what runs.
 func gitOpsWorkflow(policyFile: String, branch: String) -> String {
     let withPolicy = policyFile == "policy.hujson" ? "" : "\n          policy-file: \(policyFile)"
     return """
@@ -190,10 +191,10 @@ func gitOpsWorkflow(policyFile: String, branch: String) -> String {
         runs-on: ubuntu-latest
 
         steps:
-          - uses: actions/checkout@v6
+          - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
 
           - name: Fetch version-cache.json
-            uses: actions/cache@v5
+            uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
             with:
               path: ./version-cache.json
               key: version-cache.json-${{ github.run_id }}
@@ -202,7 +203,7 @@ func gitOpsWorkflow(policyFile: String, branch: String) -> String {
 
           - name: Deploy ACL
             if: github.event_name == 'push'
-            uses: tailscale/gitops-acl-action@v1
+            uses: tailscale/gitops-acl-action@5a4a17f5708e9bf96f4ee915a95e9f83c2eebe1a # v1.5.2
             with:
               oauth-client-id: ${{ secrets.TS_OAUTH_ID }}
               audience: ${{ secrets.TS_AUDIENCE }}
@@ -211,7 +212,7 @@ func gitOpsWorkflow(policyFile: String, branch: String) -> String {
 
           - name: Test ACL
             if: github.event_name == 'pull_request'
-            uses: tailscale/gitops-acl-action@v1
+            uses: tailscale/gitops-acl-action@5a4a17f5708e9bf96f4ee915a95e9f83c2eebe1a # v1.5.2
             with:
               oauth-client-id: ${{ secrets.TS_OAUTH_ID }}
               audience: ${{ secrets.TS_AUDIENCE }}

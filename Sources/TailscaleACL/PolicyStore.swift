@@ -361,10 +361,12 @@ final class PolicyStore: ObservableObject {
 
     /// Client for the current workspace's server (Headscale or Tailscale),
     /// or nil if not configured.
+    /// Every change through it asks for Touch ID (if enabled) and is logged.
     func serverClient() -> PolicyServer? {
         let ws = currentWorkspace
         return makeServer(kind: ws.kind, serverURL: ws.serverURL, tailnet: ws.tailnet ?? "-",
                           credential: HeadscaleKeychain.load(account: currentWorkspaceID.uuidString) ?? "")
+            .map { GuardedServer($0, workspace: ws.name, requireAuth: SecuritySettings.requireAuth) }
     }
 
     var serverDisplayName: String {
