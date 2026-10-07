@@ -77,6 +77,8 @@ final class PolicyStore: ObservableObject {
     /// The latest policy change in the server's audit log while drifted
     /// (Tailscale only), e.g. "Amy Lee via the admin console, 2 hr. ago".
     @Published var driftAuthor: String?
+    /// Git mode: the policy file on GitHub's default branch, when the server differs from it.
+    @Published var driftGitBase: String?
     @Published private(set) var workspaces: [Workspace]
     @Published private(set) var currentWorkspaceID: UUID
     /// The window's undo manager; visual edits register here so Cmd-Z works everywhere.
@@ -132,6 +134,19 @@ final class PolicyStore: ObservableObject {
     // MARK: - Linked file (GitOps)
 
     var linkedFileURL: URL? { currentWorkspace.linkedFile.map { URL(fileURLWithPath: $0) } }
+
+    /// Changes go to Tailscale as GitHub pull requests (see GitOps.swift).
+    var isGitOps: Bool { currentWorkspace.gitOps == true && linkedFileURL != nil }
+
+    /// Link the workspace to a policy file in a Git repository, managed by
+    /// pull requests; nil turns Git mode off (the file stays linked).
+    func setGitOps(file: URL?) {
+        guard let i = workspaces.firstIndex(where: { $0.id == currentWorkspaceID }) else { return }
+        workspaces[i].gitOps = file != nil ? true : nil
+        saveWorkspaces()
+        if let file { setLinkedFile(file.path) }
+        serverDrift = nil
+    }
 
     /// Keep the workspace in sync with a policy file, e.g. in the Git repo a
     /// GitOps workflow pushes from. The file's contents replace the editor's.
@@ -235,6 +250,17 @@ final class PolicyStore: ObservableObject {
 
     /// Check whether the server's policy changed since the last pull/push.
     func checkServerDrift() async {
+        if isGitOps, let client = serverClient(), let file = linkedFileURL {
+            // Git mode: the server should match the default branch on GitHub.
+            let workspace = currentWorkspaceID
+            guard let repo = await GitRepo.containing(file),
+                  let base = await repo.fileOnDefaultBranch(repo.relativePath(file)),
+                  let current = try? await client.getPolicy(), workspace == currentWorkspaceID else { return }
+            serverDrift = current == base ? nil : current
+            driftGitBase = serverDrift == nil ? nil : base
+            return
+        }
+        driftGitBase = nil
         guard let client = serverClient(), let last = currentWorkspace.lastSyncedPolicy else {
             serverDrift = nil
             return

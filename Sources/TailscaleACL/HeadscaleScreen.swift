@@ -12,6 +12,7 @@ struct HeadscaleScreen: View {
     @State private var busy = false
     @State private var confirmingPull = false
     @State private var review: PushCandidate?
+    @State private var settingUpGit = false
     @State private var history = PushHistory.load()
     @State private var openingRecord: PushRecord?
     @State private var comparing: DiffPresentation?
@@ -141,6 +142,7 @@ struct HeadscaleScreen: View {
         }
         .sheet(item: $comparing) { DiffSheet(diff: $0) }
         .sheet(item: $editingTags) { DeviceTagsSheet(node: $0) }
+        .sheet(isPresented: $settingUpGit) { GitOpsSetupSheet() }
         .confirmationDialog(nodeActionTitle, isPresented: Binding(get: { nodeAction != nil },
                                                                   set: { if !$0 { nodeAction = nil } })) {
             if let action = nodeAction {
@@ -235,15 +237,34 @@ struct HeadscaleScreen: View {
                 .font(.system(size: 10.5))
                 .foregroundStyle(Theme.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
+            if store.isGitOps, let file = store.linkedFileURL {
+                HStack(spacing: 8) {
+                    Image(systemName: "arrow.triangle.branch").foregroundStyle(Theme.green)
+                    Text(verbatim: "Managed in Git: \(file.lastPathComponent) — changes go out as pull requests, and Tailscale's GitHub Action applies them on merge.")
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(Theme.textPrimary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Spacer()
+                    Button("Stop using Git") { store.setGitOps(file: nil) }
+                        .font(.system(size: 11))
+                        .help("Go back to pushing directly. The file stays linked.")
+                }
+            }
             HStack(spacing: 8) {
                 ToolbarButton(label: "Pull from \(serverName)", icon: "arrow.down.circle") {
                     confirmingPull = true
                 }
                 .disabled(client == nil || busy)
-                ToolbarButton(label: "Review & push…", icon: "arrow.up.circle") {
+                ToolbarButton(label: store.isGitOps ? "Review & open pull request…" : "Review & push…",
+                              icon: store.isGitOps ? "arrow.triangle.pull" : "arrow.up.circle") {
                     review = PushCandidate(text: store.text, isRestore: false)
                 }
                 .disabled(client == nil || busy || !store.isValid)
+                if kind == .tailscale, !store.isGitOps {
+                    ToolbarButton(label: "Set up Git…", icon: "arrow.triangle.branch") { settingUpGit = true }
+                        .disabled(client == nil)
+                        .help("Manage this tailnet's policy in a GitHub repository with Tailscale's GitOps action")
+                }
                 ToolbarButton(label: "Compare with server…", icon: "doc.on.doc") { compareWithServer() }
                     .disabled(client == nil || busy)
             }
@@ -682,6 +703,9 @@ struct PushReviewSheet: View {
     /// nil until checked.
     @State private var blocked: [TrafficConnection]?
     @State private var trafficError: String?
+    @State private var prTitle = ""
+    @State private var pullRequest: URL?
+    @State private var prError: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -756,6 +780,25 @@ struct PushReviewSheet: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
 
+            if store.isGitOps, !loading, blocker == nil {
+                if let pullRequest {
+                    HStack {
+                        Label("Pull request opened. Tailscale's action tests it; merging applies it.", systemImage: "checkmark.seal.fill")
+                            .font(.system(size: 11.5, weight: .semibold))
+                            .foregroundStyle(Theme.green)
+                        Button("Open") { NSWorkspace.shared.open(pullRequest) }
+                    }
+                } else {
+                    HStack {
+                        Text("Pull request title").font(.system(size: 11.5)).foregroundStyle(Theme.textSecondary)
+                        TextField("Update tailnet policy", text: $prTitle).textFieldStyle(.roundedBorder)
+                    }
+                }
+                if let prError {
+                    Text(prError).font(.system(size: 11)).foregroundStyle(Theme.red)
+                        .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+                }
+            }
             HStack {
                 if !loading, blocker == nil {
                     Button("Copy as Markdown") {
@@ -769,10 +812,18 @@ struct PushReviewSheet: View {
                 Spacer()
                 Button("Cancel") { dismiss() }
                     .keyboardShortcut(.cancelAction)
-                Button(conflictBase != nil ? "Overwrite and push"
-                       : candidate.isRestore ? "Restore on server" : "Push to server") { push() }
+                if store.isGitOps {
+                    Button(pullRequest == nil ? "Open pull request" : "Done") {
+                        if pullRequest == nil { openPullRequest() } else { dismiss() }
+                    }
                     .keyboardShortcut(.defaultAction)
                     .disabled(loading || pushing || blocker != nil)
+                } else {
+                    Button(conflictBase != nil ? "Overwrite and push"
+                           : candidate.isRestore ? "Restore on server" : "Push to server") { push() }
+                        .keyboardShortcut(.defaultAction)
+                        .disabled(loading || pushing || blocker != nil)
+                }
             }
         }
         .padding(20)
@@ -943,7 +994,9 @@ struct PushReviewSheet: View {
             if let report = try? await client.validate(candidate.text) {
                 serverVerdict = report.passed ? "" : report.summary
             }
-            if let last = store.currentWorkspace.lastSyncedPolicy {
+            if store.isGitOps {
+                // Git is the source of truth; drift shows in the banner instead.
+            } else if let last = store.currentWorkspace.lastSyncedPolicy {
                 if last != current { conflictBase = last }
             } else {
                 noSyncRecord = !current.isEmpty
@@ -972,6 +1025,31 @@ struct PushReviewSheet: View {
             blocker = "Couldn't read the server's current policy, so there would be no rollback copy: \(error.localizedDescription)"
         }
         loading = false
+    }
+
+    /// Git mode: the reviewed policy goes to GitHub as a pull request; the
+    /// review (access changes, checks, traffic) becomes its description.
+    private func openPullRequest() {
+        guard let file = store.linkedFileURL else { return }
+        pushing = true
+        prError = nil
+        let title = prTitle.trimmingCharacters(in: .whitespaces).isEmpty
+            ? (candidate.isRestore ? "Restore an earlier tailnet policy" : "Update tailnet policy") : prTitle
+        Task {
+            defer { pushing = false }
+            do {
+                guard let repo = await GitRepo.containing(file) else {
+                    throw GitError(message: "\(file.lastPathComponent) isn't in a Git repository anymore.")
+                }
+                let url = try await repo.openPullRequest(files: [repo.relativePath(file): candidate.text],
+                                                         title: title, body: reviewMarkdown)
+                pullRequest = url
+                store.snapshot(reason: "pull request opened")
+                NSWorkspace.shared.open(url)
+            } catch {
+                prError = error.localizedDescription
+            }
+        }
     }
 
     private func push() {

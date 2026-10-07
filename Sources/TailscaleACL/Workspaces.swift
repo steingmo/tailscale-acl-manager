@@ -16,6 +16,9 @@ struct Workspace: Codable, Identifiable, Equatable {
     var tailnet: String?
     /// Path of a policy file (e.g. in a Git repo) kept in sync with the editor.
     var linkedFile: String?
+    /// The linked file is in a GitHub repository that Tailscale's GitOps
+    /// action applies: changes go out as pull requests, not direct pushes.
+    var gitOps: Bool?
 
     var kind: ServerKind { serverKind ?? .headscale }
 }

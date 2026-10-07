@@ -116,6 +116,12 @@ Use `-` to read the policy from standard input.
 - **Exit nodes and subnets on the Access Map** — for the focused user,
   group, tag, or device: whether it may use exit nodes (and which, honoring
   `via`), and which approved subnet routes it reaches through which router.
+- **GitOps with GitHub** — "Set up Git…" on the Server screen opens a pull
+  request adding the policy file and Tailscale's GitOps workflow (test on
+  pull requests, apply on merge) and lists the remaining steps (repository
+  secrets, admin-console lock, external reference). From then on, the push
+  review opens a pull request with the review as its description, and the
+  app warns when the live policy differs from GitHub.
 - **Who changed it** — for Tailscale, the configuration audit log shows who
   changed the policy and when (needs the `logs:configuration:read` scope).
 

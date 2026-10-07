@@ -130,26 +130,58 @@ struct RootView: View {
         }
     }
 
+    @State private var gitDriftStatus: String?
+
+    private func proposeServerVersion(_ server: String) {
+        guard let file = store.linkedFileURL else { return }
+        gitDriftStatus = "Opening pull request…"
+        Task {
+            do {
+                guard let repo = await GitRepo.containing(file) else { throw GitError(message: "The linked file isn't in a Git repository.") }
+                let url = try await repo.openPullRequest(
+                    files: [repo.relativePath(file): server], title: "Bring a change made on Tailscale into Git",
+                    body: "The policy on \(store.serverDisplayName) was changed outside Git. This pull request makes the repository match it, so the next merge doesn't silently undo that change.")
+                gitDriftStatus = nil
+                NSWorkspace.shared.open(url)
+            } catch {
+                gitDriftStatus = error.localizedDescription
+            }
+        }
+    }
+
     /// Shown when the server's policy changed since this workspace's last
     /// pull or push — someone edited it elsewhere.
     private func driftBanner(_ server: String) -> some View {
         HStack(spacing: 10) {
             Image(systemName: "exclamationmark.triangle.fill")
                 .foregroundStyle(Theme.orange)
-            Text("The policy on \(store.serverDisplayName) changed since your last pull or push\(store.driftAuthor.map { " — last changed by \($0)" } ?? "").")
+            Text(store.driftGitBase != nil
+                 ? "The policy on \(store.serverDisplayName) differs from the policy file on GitHub — it was changed outside Git."
+                 : "The policy on \(store.serverDisplayName) changed since your last pull or push\(store.driftAuthor.map { " — last changed by \($0)" } ?? "").")
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(Theme.textPrimary)
+            if let gitDriftStatus {
+                Text(gitDriftStatus).font(.system(size: 11)).foregroundStyle(Theme.textSecondary).lineLimit(1)
+            }
             Spacer()
             Button("Compare") {
-                overlay = .compare(DiffPresentation(title: "Changes made on the server",
-                                                    oldLabel: "at your last pull/push", newLabel: "on the server now",
-                                                    old: store.currentWorkspace.lastSyncedPolicy ?? "", new: server))
+                overlay = .compare(store.driftGitBase.map { base in
+                    DiffPresentation(title: "Server vs GitHub", oldLabel: "on GitHub", newLabel: "on the server now",
+                                     old: base, new: server)
+                } ?? DiffPresentation(title: "Changes made on the server",
+                                      oldLabel: "at your last pull/push", newLabel: "on the server now",
+                                      old: store.currentWorkspace.lastSyncedPolicy ?? "", new: server))
             }
-            Button("Pull") {
-                store.loadPolicy(server, reason: "pulled")
-                store.markSynced(server)
+            if store.driftGitBase != nil {
+                Button("Open pull request with the server's version") { proposeServerVersion(server) }
+                    .help("Bring the change made outside Git into the repository, so the next merge doesn't undo it")
+            } else {
+                Button("Pull") {
+                    store.loadPolicy(server, reason: "pulled")
+                    store.markSynced(server)
+                }
+                .help("Replace the editor with the server's policy (undo with ⌘Z)")
             }
-            .help("Replace the editor with the server's policy (undo with ⌘Z)")
             Button {
                 store.serverDrift = nil
             } label: {

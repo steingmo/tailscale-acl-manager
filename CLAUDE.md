@@ -91,6 +91,13 @@ Swift Package (no Xcode project). All source in `Sources/TailscaleACL/`:
 - `routeAccess` (Impact.swift) backs the Access Map's exit-node/subnet
   summary: internet access comes from `autogroup:internet` or `*` (never
   subnets), `via` limits exit nodes and routers to devices with those tags.
+- GitOps (GitOps.swift, GitOpsSheet.swift): `Workspace.gitOps` + linked
+  file in a GitHub clone. `GitRepo.pushBranch` commits in a temporary
+  `git worktree` from origin's default branch (the user's checkout is never
+  touched), `openPullRequest` then uses `gh` (or GitHub's compare page).
+  In Git mode the push review opens a PR instead of pushing, and
+  `checkServerDrift` compares the server with the file on origin's default
+  branch (`driftGitBase`). Tests drive real git against a local bare repo.
 - `ipLookup` (SharedSheets.swift) backs ⌘K IP search; `pushReviewMarkdown`
   (Report.swift) exports the push review.
 - `convertACLsToGrants` (Templates.swift) rewrites ACLs as grants; the sheet
