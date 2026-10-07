@@ -1,0 +1,44 @@
+import XCTest
+@testable import TailscaleACL
+
+final class RouteAccessTests: XCTestCase {
+    let exitA = HeadscaleNode(id: "1", name: "exit-office", availableRoutes: ["0.0.0.0/0", "::/0"],
+                              approvedRoutes: ["0.0.0.0/0", "::/0"], tags: ["tag:client-vpn"])
+    let exitB = HeadscaleNode(id: "2", name: "exit-cloud", approvedRoutes: ["0.0.0.0/0", "::/0"], tags: ["tag:cloud"])
+    let router = HeadscaleNode(id: "3", name: "router-1", approvedRoutes: ["10.114.32.0/24", "10.187.0.0/16"],
+                               tags: ["tag:mgmt-vpn"])
+    let policy = """
+    {"groups": {"group:mgmt": ["amy@x.com"], "group:all": ["bob@x.com"]},
+     "tagOwners": {"tag:client-vpn": [], "tag:cloud": [], "tag:mgmt-vpn": []},
+     "ipsets": {"ipset:mgmt-networks": ["add 10.114.32.0/24"]},
+     "grants": [
+       {"src": ["group:mgmt"], "dst": ["autogroup:internet"], "ip": ["*"], "via": ["tag:client-vpn"]},
+       {"src": ["group:mgmt"], "dst": ["ipset:mgmt-networks"], "ip": ["*"], "via": ["tag:mgmt-vpn"]},
+       {"src": ["group:all"], "dst": ["*"], "ip": ["*"]},
+     ]}
+    """
+
+    func testExitNodeViaAndSubnets() {
+        let a = routeAccess(model(policy), sourceIDs: ["group:mgmt"], nodes: [exitA, exitB, router])
+        XCTAssertTrue(a.exitNode)
+        XCTAssertEqual(a.exitVia, ["tag:client-vpn"])
+        XCTAssertEqual(a.exitNodes, ["exit-office"], "only exit nodes with the via tag")
+        XCTAssertEqual(a.subnets.map(\.route), ["10.114.32.0/24"], "10.187.0.0/16 isn't reached")
+        XCTAssertEqual(a.subnets.first?.routers, ["router-1"])
+    }
+
+    func testWildcardMeansAnyExitNodeAndEverySubnet() {
+        let a = routeAccess(model(policy), sourceIDs: ["bob@x.com"], nodes: [exitA, exitB, router])
+        XCTAssertTrue(a.exitNode)
+        XCTAssertEqual(a.exitVia, [])
+        XCTAssertEqual(a.exitNodes, ["exit-office", "exit-cloud"])
+        XCTAssertEqual(a.subnets.map(\.route), ["10.114.32.0/24", "10.187.0.0/16"])
+    }
+
+    func testNoInternetRule() {
+        let a = routeAccess(model(policy), sourceIDs: ["eve@x.com"], nodes: [exitA, router])
+        XCTAssertFalse(a.exitNode)
+        XCTAssertTrue(a.exitNodes.isEmpty)
+        XCTAssertTrue(a.subnets.isEmpty)
+    }
+}

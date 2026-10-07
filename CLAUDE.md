@@ -88,6 +88,9 @@ Swift Package (no Xcode project). All source in `Sources/TailscaleACL/`:
   `TrafficAccumulator` treats the lower port as the service and counts bytes
   from the client side only. `Evaluator.proto` makes matching protocol-exact
   for real traffic; `ruleUsage` and `trafficBlocked` (push review) use it.
+- `routeAccess` (Impact.swift) backs the Access Map's exit-node/subnet
+  summary: internet access comes from `autogroup:internet` or `*` (never
+  subnets), `via` limits exit nodes and routers to devices with those tags.
 - `ipLookup` (SharedSheets.swift) backs ⌘K IP search; `pushReviewMarkdown`
   (Report.swift) exports the push review.
 - `convertACLsToGrants` (Templates.swift) rewrites ACLs as grants; the sheet

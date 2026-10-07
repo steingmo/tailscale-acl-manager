@@ -236,6 +236,65 @@ func ruleSummaries(_ m: PolicyModel, sourceIDs: [String]?, destIDs: [String]? = 
     return out
 }
 
+// MARK: - Exit nodes and subnet routes
+
+/// What a source can do with the tailnet's routers: use exit nodes (and
+/// which), and reach which advertised subnets through which routers.
+struct RouteAccess {
+    /// Some rule gives internet access (autogroup:internet or "*").
+    var exitNode = false
+    /// Tags exit traffic is limited to by "via"; empty means any exit node.
+    var exitVia: [String] = []
+    /// Devices with an approved exit-node route this source could use.
+    var exitNodes: [String] = []
+    /// Approved subnet routes the source's rules reach, with their routers.
+    var subnets: [(route: String, routers: [String])] = []
+}
+
+func routeAccess(_ m: PolicyModel, sourceIDs: [String], nodes: [HeadscaleNode]) -> RouteAccess {
+    let ev = Evaluator(model: m)
+    func applies(_ src: [String]) -> Bool {
+        src.contains { spec in sourceIDs.contains { ev.sourceMatches(spec: spec, sourceID: $0) } }
+    }
+    // Every rule that applies: its destination targets and via tags.
+    var rules: [(dst: [String], via: [String])] = []
+    for r in m.rules where r.action == "accept" && applies(r.src) { rules.append((r.dst.map { DestSpec($0).target }, [])) }
+    for g in m.grants where applies(g.src) && !g.ip.isEmpty { rules.append((g.dst, g.via)) }
+
+    var out = RouteAccess()
+    let exitRules = rules.filter { $0.dst.contains("*") || $0.dst.contains("autogroup:internet") }
+    out.exitNode = !exitRules.isEmpty
+    // Any exit rule without via means any exit node will do.
+    out.exitVia = exitRules.contains { $0.via.isEmpty } ? [] : exitRules.flatMap(\.via).uniqued()
+    let isExit = { (n: HeadscaleNode) in (n.approvedRoutes ?? []).contains { $0 == "0.0.0.0/0" || $0 == "::/0" } }
+    func carries(_ n: HeadscaleNode, _ via: [String]) -> Bool { via.isEmpty || !Set(n.allTags).isDisjoint(with: via) }
+    if out.exitNode {
+        out.exitNodes = nodes.filter { isExit($0) && carries($0, out.exitVia) }.map(\.displayName)
+    }
+
+    // Subnet routes: approved, non-exit, and overlapping something a rule reaches.
+    var routers: [String: [HeadscaleNode]] = [:]
+    for n in nodes {
+        for r in n.approvedRoutes ?? [] where r != "0.0.0.0/0" && r != "::/0" { routers[r, default: []].append(n) }
+    }
+    for route in routers.keys.sorted() {
+        var via: [String]? = nil  // nil: not reached; []: any router
+        for rule in rules {
+            // autogroup:internet is public addresses only, so it reaches no subnet route.
+            let targets = rule.dst.filter { $0 != "autogroup:internet" }
+            let reaches = targets.contains("*") || targets.flatMap { addressPrefixes($0, m) }.contains {
+                prefixContains(route, $0) || prefixContains($0, route)
+            }
+            guard reaches else { continue }
+            via = rule.via.isEmpty || via == [] ? [] : (via ?? []) + rule.via
+        }
+        guard let via else { continue }
+        let serving = routers[route, default: []].filter { carries($0, via) }.map(\.displayName)
+        out.subnets.append((route, serving))
+    }
+    return out
+}
+
 // MARK: - Line diff
 
 struct DiffLine: Identifiable {

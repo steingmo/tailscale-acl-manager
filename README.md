@@ -113,6 +113,9 @@ Use `-` to read the policy from standard input.
   a few ports were used; and before a push, replay recent traffic against
   the new policy to see what it would block. Needs flow logging on and the
   `logs:network:read` scope.
+- **Exit nodes and subnets on the Access Map** — for the focused user,
+  group, tag, or device: whether it may use exit nodes (and which, honoring
+  `via`), and which approved subnet routes it reaches through which router.
 - **Who changed it** — for Tailscale, the configuration audit log shows who
   changed the policy and when (needs the `logs:configuration:read` scope).
 

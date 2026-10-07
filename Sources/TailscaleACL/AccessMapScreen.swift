@@ -97,6 +97,12 @@ struct AccessMapScreen: View {
             .padding(.horizontal, 16)
             .padding(.vertical, 12)
 
+            if store.isValid, direction == .reaches, !selection.isEmpty, !items.isEmpty {
+                routeSummary
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 8)
+            }
+
             if !store.isValid {
                 notice("Fix the policy in the editor to see the access map.")
             } else if items.isEmpty {
@@ -291,6 +297,52 @@ struct AccessMapScreen: View {
         .frame(width: canvasWidth, height: height, alignment: .topLeading)
         .padding(.horizontal, 16)
         .padding(.bottom, 16)
+    }
+
+    /// Exit-node use and subnet routes for the focused entity.
+    private var routeSummary: some View {
+        let access = routeAccess(store.model, sourceIDs: focusIDs, nodes: store.headscaleNodes)
+        let loaded = !store.headscaleNodes.isEmpty
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Image(systemName: "globe").font(.system(size: 11)).foregroundStyle(Theme.pink).frame(width: 16)
+                Text("Exit nodes").font(.system(size: 11.5, weight: .semibold)).foregroundStyle(Theme.textPrimary)
+                if !access.exitNode {
+                    Text("not allowed — no rule reaches autogroup:internet")
+                        .font(.system(size: 11)).foregroundStyle(Theme.textSecondary)
+                } else {
+                    Text(access.exitVia.isEmpty ? "allowed, any exit node" : "allowed via \(access.exitVia.joined(separator: ", "))")
+                        .font(.system(size: 11, weight: .semibold)).foregroundStyle(Theme.green)
+                    if loaded {
+                        if access.exitNodes.isEmpty {
+                            Text("— but no matching device is an approved exit node")
+                                .font(.system(size: 11)).foregroundStyle(Theme.orange)
+                        } else {
+                            ForEach(access.exitNodes, id: \.self) { Chip(text: $0, color: Theme.pink, icon: "arrow.up.right.circle") }
+                        }
+                    }
+                }
+            }
+            if loaded {
+                HStack(spacing: 6) {
+                    Image(systemName: "point.3.connected.trianglepath.dotted").font(.system(size: 11))
+                        .foregroundStyle(Theme.orange).frame(width: 16)
+                    Text("Subnet routes").font(.system(size: 11.5, weight: .semibold)).foregroundStyle(Theme.textPrimary)
+                    if access.subnets.isEmpty {
+                        Text("none of the approved subnet routes").font(.system(size: 11)).foregroundStyle(Theme.textSecondary)
+                    }
+                    ForEach(access.subnets, id: \.route) { s in
+                        Chip(text: s.routers.isEmpty ? "\(s.route) (no router for its via tag)"
+                             : "\(s.route) via \(s.routers.joined(separator: ", "))",
+                             color: s.routers.isEmpty ? Theme.red : Theme.orange)
+                    }
+                }
+            }
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 8).fill(Theme.panel))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.panelBorder, lineWidth: 1))
     }
 
     private var sourceCard: some View {
