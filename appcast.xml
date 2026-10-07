@@ -3,15 +3,15 @@
   <channel>
     <title>Tailscale ACL</title>
     <item>
-      <title>Version 1.21.0</title>
-      <pubDate>Wed, 07 Oct 2026 16:02:10 +0000</pubDate>
-      <sparkle:version>1.21.0</sparkle:version>
-      <sparkle:shortVersionString>1.21.0</sparkle:shortVersionString>
+      <title>Version 1.22.0</title>
+      <pubDate>Wed, 07 Oct 2026 16:25:33 +0000</pubDate>
+      <sparkle:version>1.22.0</sparkle:version>
+      <sparkle:shortVersionString>1.22.0</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-      <sparkle:releaseNotesLink>https://github.com/steingmo/tailscale-acl-manager/releases/tag/v1.21.0</sparkle:releaseNotesLink>
+      <sparkle:releaseNotesLink>https://github.com/steingmo/tailscale-acl-manager/releases/tag/v1.22.0</sparkle:releaseNotesLink>
       <enclosure
-        url="https://github.com/steingmo/tailscale-acl-manager/releases/download/v1.21.0/TailscaleACL-1.21.0.zip"
-        sparkle:edSignature="X5YgsdxNDvQ/+3fVDcwhHNOuT9Mvq6yW8SqxW3IZb6cFdXHRLT6WdEBZVTbYVriQByQ/dKbaH3BsAtETzI/9Dw==" length="3334651"
+        url="https://github.com/steingmo/tailscale-acl-manager/releases/download/v1.22.0/TailscaleACL-1.22.0.zip"
+        sparkle:edSignature="863i9zvOkYTyNJP8pAs1MhmgQgQDaOb1jUGuPUBLN4ypt6cfO7+Xjd+4RE+2BQVLeeZ8VhlzbV62HGpyi7sOBA==" length="3414576"
         type="application/octet-stream"/>
     </item>
   </channel>
