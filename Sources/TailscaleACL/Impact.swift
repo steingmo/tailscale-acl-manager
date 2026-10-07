@@ -75,9 +75,22 @@ func accessChanges(from old: PolicyModel, to new: PolicyModel,
 func entityAccessDifferences(_ old: PolicyModel, _ new: PolicyModel, limit: Int = 20) -> [String] {
     let ports = portIntervals([old, new])
     // Every name any rule uses as a source, users named directly included.
-    let named = [old, new].flatMap { $0.rules.flatMap(\.src) + $0.grants.flatMap(\.src) }
-    let srcs = ([old, new].flatMap { $0.sourceSpecs + $0.allUsers + $0.tagOrder + $0.hostOrder } + named).uniqued()
-    let dsts = ([old, new].flatMap { $0.destTargets + $0.allUsers } + named.filter { $0.contains("@") }).uniqued()
+    // Built step by step: one long chained expression was slow to type-check.
+    var named: [String] = []
+    var srcList: [String] = []
+    var dstList: [String] = []
+    for m in [old, new] {
+        named += m.rules.flatMap(\.src)
+        named += m.grants.flatMap(\.src)
+        srcList += m.sourceSpecs
+        srcList += m.allUsers
+        srcList += m.tagOrder
+        srcList += m.hostOrder
+        dstList += m.destTargets
+        dstList += m.allUsers
+    }
+    let srcs = (srcList + named).uniqued()
+    let dsts = (dstList + named.filter { $0.contains("@") }).uniqued()
     let before = Evaluator(model: old), after = Evaluator(model: new)
     var out: [String] = []
     for s in srcs {
