@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// Offline policy lint: structure and hygiene issues the admin console
 /// won't tell you about until save time — or ever.
@@ -13,9 +14,15 @@ struct ProblemsScreen: View {
         return ScrollView {
             VStack(alignment: .leading, spacing: 12) {
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("Problems")
-                        .font(.system(size: 16, weight: .bold))
-                        .foregroundStyle(Theme.textPrimary)
+                    HStack {
+                        Text("Problems")
+                            .font(.system(size: 16, weight: .bold))
+                            .foregroundStyle(Theme.textPrimary)
+                        Spacer()
+                        ToolbarButton(label: "Export audit report…", icon: "checklist") { exportAudit() }
+                            .disabled(!store.isValid)
+                            .help("A least-privilege review: security findings, temporary access, people, devices, and rule usage")
+                    }
                     Text("Structure checks: undefined references, ownerless tags, unused entities, shadowed, expiring, and wide-open rules, postures, invalid values")
                         .font(.system(size: 11.5))
                         .foregroundStyle(Theme.textSecondary)
@@ -56,8 +63,18 @@ struct ProblemsScreen: View {
                     Text("\(errors) error\(errors == 1 ? "" : "s"), \(issues.count - errors) warning\(issues.count - errors == 1 ? "" : "s")")
                         .font(.system(size: 11.5))
                         .foregroundStyle(Theme.textSecondary)
-                    ForEach(issues) { issue in
-                        issueCard(issue)
+                    let security = issues.filter(\.security)
+                    let other = issues.filter { !$0.security }
+                    if !security.isEmpty {
+                        sectionHeader("Security review", icon: "lock.shield",
+                                      detail: "Patterns that make the tailnet easier to abuse — worth a look even when everything works.")
+                        ForEach(security) { issueCard($0) }
+                    }
+                    if !other.isEmpty {
+                        if !security.isEmpty {
+                            sectionHeader("Policy problems", icon: "exclamationmark.triangle", detail: nil)
+                        }
+                        ForEach(other) { issueCard($0) }
                     }
                 }
             }
@@ -66,6 +83,33 @@ struct ProblemsScreen: View {
         }
         .background(Theme.background)
         .sheet(isPresented: $converting) { ConvertToGrantsSheet() }
+    }
+
+    private func exportAudit() {
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [UTType(filenameExtension: "md") ?? .plainText]
+        panel.nameFieldStringValue = "\(store.currentWorkspace.name) access audit.md"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        Task {
+            let credential = try? await store.serverClient()?.credentialInfo()
+            let report = auditReport(workspace: store.currentWorkspace.name,
+                                     server: store.serverClient() == nil ? nil : store.serverDisplayName,
+                                     model: store.model, nodes: store.headscaleNodes, traffic: store.traffic,
+                                     serverLogins: store.serverLogins, credential: credential ?? nil)
+            try? report.write(to: url, atomically: true, encoding: .utf8)
+        }
+    }
+
+    private func sectionHeader(_ title: String, icon: String, detail: String?) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Label(title, systemImage: icon)
+                .font(.system(size: 13, weight: .bold))
+                .foregroundStyle(Theme.textPrimary)
+            if let detail {
+                Text(detail).font(.system(size: 10.5)).foregroundStyle(Theme.textSecondary)
+            }
+        }
+        .padding(.top, 6)
     }
 
     private func issueCard(_ issue: LintIssue) -> some View {

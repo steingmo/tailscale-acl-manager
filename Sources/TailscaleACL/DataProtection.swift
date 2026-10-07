@@ -1,5 +1,7 @@
 import Foundation
 import CryptoKit
+import CommonCrypto
+import Security
 
 /// Optional encryption of the app's data files (workspaces with their
 /// policies, push history, snapshots, activity log) with AES-256-GCM. The
@@ -128,4 +130,102 @@ func fileVaultIsOn() -> Bool? {
     let text = String(decoding: out.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
     p.waitUntilExit()
     return text.trimmingCharacters(in: .whitespacesAndNewlines) == "true"
+}
+
+// MARK: - Password-protected backup
+
+/// One file holding every workspace, the push history, snapshots, and the
+/// activity log (not credentials — those stay in the Keychain), encrypted
+/// with a key derived from a password: PBKDF2-SHA256, then AES-256-GCM.
+/// Format: marker, 16-byte salt, 4-byte round count, sealed archive.
+enum Backup {
+    static let marker = Data("TSACL-BACKUP1\n".utf8)
+    static let defaultRounds: UInt32 = 600_000
+
+    struct Archive: Codable {
+        var version = 1
+        var created: Date
+        /// Path inside the data folder → plain contents.
+        var files: [String: Data]
+    }
+
+    static func make(password: String, rounds: UInt32 = defaultRounds) throws -> Data {
+        var files: [String: Data] = [:]
+        for url in DataEncryption.dataFiles {
+            guard let data = DataEncryption.read(url) else {
+                throw CocoaError(.fileReadCorruptFile, userInfo: [NSLocalizedDescriptionKey: "Can't read \(url.lastPathComponent)."])
+            }
+            files[relativePath(url)] = data
+        }
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let archive = try encoder.encode(Archive(created: Date(), files: files))
+        var salt = Data(count: 16)
+        _ = salt.withUnsafeMutableBytes { SecRandomCopyBytes(kSecRandomDefault, 16, $0.baseAddress!) }
+        let sealed = try AES.GCM.seal(archive, using: key(password, salt: salt, rounds: rounds))
+        var roundsBE = rounds.bigEndian
+        return marker + salt + Data(bytes: &roundsBE, count: 4) + (sealed.combined ?? Data())
+    }
+
+    static func open(_ data: Data, password: String) throws -> Archive {
+        let bad = CocoaError(.fileReadCorruptFile, userInfo: [NSLocalizedDescriptionKey: "Wrong password, or not a Tailscale ACL backup."])
+        guard data.starts(with: marker), data.count > marker.count + 20 else { throw bad }
+        let body = data.dropFirst(marker.count)
+        let salt = Data(body.prefix(16))
+        let rounds = body.dropFirst(16).prefix(4).reduce(UInt32(0)) { $0 << 8 | UInt32($1) }
+        guard (1_000...10_000_000).contains(rounds),
+              let box = try? AES.GCM.SealedBox(combined: body.dropFirst(20)),
+              let plain = try? AES.GCM.open(box, using: key(password, salt: salt, rounds: rounds)) else { throw bad }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let archive = try decoder.decode(Archive.self, from: plain)
+        // Only the app's own file names: a crafted backup can't write elsewhere.
+        guard archive.files.keys.allSatisfy(isAllowedPath) else { throw bad }
+        return archive
+    }
+
+    /// Replace the app's data with the backup. The current files are first
+    /// copied, as they are (encrypted or not), to before-restore-<time>/.
+    /// Restored files follow the current encryption setting.
+    static func restore(_ archive: Archive, now: Date = Date()) throws -> URL {
+        let stamp = DateFormatter()
+        stamp.dateFormat = "yyyyMMdd-HHmmss"
+        stamp.locale = Locale(identifier: "en_US_POSIX")
+        let aside = appDataDirectory.appendingPathComponent("before-restore-\(stamp.string(from: now))", isDirectory: true)
+        let fm = FileManager.default
+        for url in DataEncryption.dataFiles {
+            let target = aside.appendingPathComponent(relativePath(url))
+            try fm.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try fm.copyItem(at: url, to: target)
+        }
+        for url in DataEncryption.dataFiles { try fm.removeItem(at: url) }
+        for (path, contents) in archive.files {
+            try DataEncryption.write(contents, to: appDataDirectory.appendingPathComponent(path))
+        }
+        return aside
+    }
+
+    static func relativePath(_ url: URL) -> String {
+        let base = appDataDirectory.standardizedFileURL.path
+        let full = url.standardizedFileURL.path
+        return full.hasPrefix(base + "/") ? String(full.dropFirst(base.count + 1)) : url.lastPathComponent
+    }
+
+    static func isAllowedPath(_ path: String) -> Bool {
+        if ["workspaces.json", "push-history.json", "activity.jsonl"].contains(path) { return true }
+        let parts = path.split(separator: "/")
+        return parts.count == 2 && parts[0] == "snapshots" && parts[1].hasSuffix(".json")
+            && UUID(uuidString: String(parts[1].dropLast(5))) != nil
+    }
+
+    private static func key(_ password: String, salt: Data, rounds: UInt32) -> SymmetricKey {
+        var out = [UInt8](repeating: 0, count: 32)
+        let passwordBytes = Array(password.utf8)
+        salt.withUnsafeBytes { s in
+            _ = CCKeyDerivationPBKDF(CCPBKDFAlgorithm(kCCPBKDF2), password, passwordBytes.count,
+                                     s.bindMemory(to: UInt8.self).baseAddress, salt.count,
+                                     CCPseudoRandomAlgorithm(kCCPRFHmacAlgSHA256), rounds, &out, out.count)
+        }
+        return SymmetricKey(data: out)
+    }
 }

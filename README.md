@@ -131,6 +131,17 @@ Use `-` to read the policy from standard input.
   password to open the app (it locks again on sleep, screen lock, or ⌃⌘L,
   unloading everything from memory), and encrypt the saved policies,
   history, snapshots, and activity log with AES-256 and a Keychain key.
+- **Security review** — Problems flags tag owners who gain access by
+  tagging their own devices, broad auto-approvers, root SSH without check
+  mode, SSH/RDP/database ports open to everyone, servers that can reach
+  people's devices, `autogroup:danger-all`, and sensitive access with no
+  deny test — with one-click fixes where the fix is clear.
+- **Narrow to used ports** — on Traffic ▸ Rule usage, rewrite a broad rule
+  to the ports real traffic used, then confirm with the push review's replay.
+- **Encrypted backups** — export and restore a password-protected file with
+  every workspace and its history (Settings).
+- **Audit report** — a least-privilege review to export from Problems.
+- **Getting started** — a checklist of setup steps (Help menu).
 - **Who changed it** — for Tailscale, the configuration audit log shows who
   changed the policy and when (needs the `logs:configuration:read` scope).
 

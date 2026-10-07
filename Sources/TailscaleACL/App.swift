@@ -99,6 +99,10 @@ struct RootView: View {
         .onChange(of: undoManager) { store.undoManager = undoManager }
         .onChange(of: store.editorLineRequest) { if store.editorLineRequest != nil { screen = .policyEditor } }
         .onChange(of: store.trafficFilterRequest) { if store.trafficFilterRequest != nil { screen = .traffic } }
+        .sheet(isPresented: $store.showGettingStarted) { GettingStartedSheet(screen: $screen) }
+        .onAppear {
+            if !UserDefaults.standard.bool(forKey: "gettingStartedDone") { store.showGettingStarted = true }
+        }
         .sheet(item: $workspaceSheet) { WorkspaceSheet(mode: $0) }
         .sheet(item: $overlay) { item in
             switch item {
@@ -385,6 +389,10 @@ struct TailscaleACLApp: App {
                 .disabled(!updater.canCheckForUpdates)
                 Button("Lock Tailscale ACL") { session.lock(manual: true) }
                     .keyboardShortcut("l", modifiers: [.control, .command])
+                    .disabled(session.store == nil)
+            }
+            CommandGroup(replacing: .help) {
+                Button("Getting Started") { session.store?.showGettingStarted = true }
                     .disabled(session.store == nil)
             }
         }

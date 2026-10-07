@@ -178,3 +178,83 @@ func pushReviewMarkdown(_ r: PushReview, date: Date = Date()) -> String {
     }
     return out.joined(separator: "\n") + "\n"
 }
+
+/// A least-privilege audit for periodic reviews: security findings,
+/// temporary access, users who left, stale devices and keys, rule usage
+/// from real traffic (when loaded), and the credential's reach.
+func auditReport(workspace: String, server: String?, model m: PolicyModel, nodes: [HeadscaleNode],
+                 traffic: TrafficSummary?, serverLogins: Set<String>?, credential: CredentialInfo?,
+                 date: Date = Date()) -> String {
+    var out = ["# Access audit — \(workspace)", ""]
+    out.append("Prepared \(date.formatted(date: .long, time: .shortened))" + (server.map { " · \($0)" } ?? "") + ".")
+
+    let security = lintSecurity(m)
+    let problems = lintPolicy(m, now: date).filter { !$0.security }
+    let left = lintUsers(m, logins: serverLogins)
+    let stale = nodes.filter { $0.isStale(now: date) }
+    let keys = nodes.filter { ($0.keyDaysLeft(now: date) ?? .max) <= 14 }
+    var dated: [(String, String, Int)] = []
+    for (section, index, expires) in m.rules.map({ ("acls", $0.index, $0.expires) }) + m.grants.map({ ("grants", $0.index, $0.expires) })
+        + m.sshRules.map({ ("ssh", $0.index, $0.expires) }) {
+        if let expires, let days = RuleExpiry.daysLeft(expires, now: date) { dated.append(("\(section)[\(index)]", expires, days)) }
+    }
+
+    out += ["", "## Summary", ""]
+    out.append("- \(security.count) security finding\(security.count == 1 ? "" : "s")")
+    out.append("- \(dated.filter { $0.2 < 0 }.count) expired and \(dated.filter { (0...14).contains($0.2) }.count) soon-expiring temporary rules")
+    if serverLogins != nil { out.append("- \(left.count) policy reference\(left.count == 1 ? "" : "s") to people who aren't users on the server") }
+    if !nodes.isEmpty { out.append("- \(stale.count) device\(stale.count == 1 ? "" : "s") not seen in 30 days, \(keys.count) with keys expired or expiring within 14 days") }
+    out.append("- \(problems.filter { $0.severity == .error }.count) policy errors, \(problems.filter { $0.severity == .warning }.count) warnings")
+
+    out += ["", "## Security review", ""]
+    out += security.isEmpty ? ["No findings."] : security.map { "- **\($0.title)** — \($0.detail)" }
+
+    out += ["", "## Temporary access", ""]
+    out += dated.isEmpty ? ["No rules carry an expiry date."] : dated.sorted { $0.2 < $1.2 }.map { rule, expires, days in
+        "- \(rule): \(days < 0 ? "**expired** \(expires) and still grants access" : "expires \(expires) (in \(days) day\(days == 1 ? "" : "s"))")"
+    }
+
+    out += ["", "## People", ""]
+    if serverLogins == nil {
+        out.append("Not checked: connect the server (with permission to list users) to compare the policy with real users.")
+    } else {
+        out += left.isEmpty ? ["Everyone the policy names is a user on the server."] : left.map { "- \($0.detail)" }
+    }
+
+    out += ["", "## Devices", ""]
+    if nodes.isEmpty {
+        out.append("Not checked: load devices from the server.")
+    } else {
+        out += stale.isEmpty ? ["No device has been offline for 30 days."] : stale.map { "- \($0.displayName): \($0.statusText)" }
+        out += keys.map { n in
+            let d = n.keyDaysLeft(now: date) ?? 0
+            return "- \(n.displayName): key \(d < 0 ? "expired" : "expires in \(d) day\(d == 1 ? "" : "s")")"
+        }
+    }
+
+    out += ["", "## Rule usage", ""]
+    if let traffic {
+        let usage = ruleUsage(traffic.connections, m, nodes: nodes)
+        let rules = ruleSummaries(m, sourceIDs: nil).filter { $0.kind != .ssh }
+        let key = { (r: RuleSummary) in "\(r.kind == .grant ? RuleMatch.Kind.grant : .acl)-\(r.index)" }
+        out.append("From flow logs \(traffic.start.formatted(date: .abbreviated, time: .omitted)) – \(traffic.end.formatted(date: .abbreviated, time: .omitted)); only successful connections are logged.")
+        let unused = rules.filter { usage[key($0)] == nil }
+        out += ["", "No traffic in the period (candidates for removal):"]
+        out += unused.isEmpty ? ["- none"] : unused.map { "- \($0.section)[\($0.index)] \($0.name)" }
+        let broad = rules.compactMap { r -> String? in
+            guard let u = usage[key(r)], r.badge == "All" || r.badge.contains("-"), u.ports.count <= 6 else { return nil }
+            return "- \(r.section)[\(r.index)] \(r.name): allows \(r.badge == "All" ? "every port" : r.badge), used only \(u.ports.keys.sorted().joined(separator: ", "))"
+        }
+        out += ["", "Broad rules where only a few ports were used:"]
+        out += broad.isEmpty ? ["- none"] : broad
+    } else {
+        out.append("Not checked: load traffic on the Traffic screen (Tailscale) to see which rules real connections use.")
+    }
+
+    if let credential {
+        out += ["", "## Credential", ""]
+        out.append("- \(credential.kind)" + (credential.isFullAccess ? ", full access" : credential.scopes.map { ", scopes: \($0.joined(separator: ", "))" } ?? ""))
+        if let expires = credential.expires { out.append("- Expires \(expires.formatted(date: .long, time: .omitted))") }
+    }
+    return out.joined(separator: "\n") + "\n"
+}

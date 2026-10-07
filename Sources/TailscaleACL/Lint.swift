@@ -12,6 +12,8 @@ struct LintIssue: Identifiable {
     var path: String?
     /// A line given directly (parse errors), when there is no path.
     var line: Int?
+    /// A finding of the security review, shown in its own section.
+    var security = false
 
     var id: String { "\(severity)-\(title)-\(detail)" }
 }
@@ -23,6 +25,8 @@ struct LintFix: Identifiable {
         case deleteEntity(String)         // definition + every reference
         case deleteRule(section: String, index: Int)
         case removeGroupMember(group: String, member: String)
+        case setSSHCheck(index: Int)
+        case setTagOwners(tag: String, owners: [String])
     }
 
     var label: String
@@ -306,10 +310,134 @@ func lintPolicy(_ m: PolicyModel, now: Date = Date()) -> [LintIssue] {
         }
     }
 
+    issues += lintSecurity(m)
     return issues.sorted { a, b in
         if a.severity != b.severity { return a.severity == .error }
         return a.title < b.title
     }
+}
+
+// MARK: - Security review
+
+/// Ports worth singling out when they're open to everyone.
+let sensitivePorts: [(port: Int, name: String)] = [
+    (22, "SSH"), (23, "Telnet"), (3389, "RDP"), (445, "SMB"), (5985, "WinRM"), (5986, "WinRM"),
+    (1433, "SQL Server"), (3306, "MySQL"), (5432, "PostgreSQL"), (6379, "Redis"), (27017, "MongoDB"),
+]
+
+/// Risky patterns in a policy: tag owners who gain access by tagging, broad
+/// auto-approvers, root SSH without check mode, sensitive ports open to
+/// everyone, servers reaching people's devices, danger-all, and sensitive
+/// access without a deny test.
+func lintSecurity(_ m: PolicyModel) -> [LintIssue] {
+    var issues: [LintIssue] = []
+    func add(_ title: String, _ detail: String, path: String?, fixes: [LintFix] = []) {
+        var issue = LintIssue(severity: .warning, title: title, detail: detail, fixes: fixes, path: path)
+        issue.security = true
+        issues.append(issue)
+    }
+    let everyone: Set<String> = ["*", "autogroup:member", "autogroup:members", "autogroup:danger-all"]
+    let ev = Evaluator(model: m)
+    func reach(_ ids: [String]) -> Set<String> {
+        Set(ruleSummaries(m, sourceIDs: ids).filter { $0.kind != .ssh }.flatMap(\.destinations))
+    }
+
+    // Tag owners: whoever can apply a tag gets the tag's access.
+    for tag in m.tagOrder {
+        let owners = m.tagOwners[tag] ?? []
+        let fix = [LintFix(label: "Only admins may apply \(tag)", action: .setTagOwners(tag: tag, owners: ["autogroup:admin"]))]
+        if owners.contains(where: everyone.contains) {
+            add("Anyone can apply \(tag)", "Every user may tag their own device \(tag) and so gain everything \(tag) can reach.",
+                path: "tagOwners[\(tag)]", fixes: fix)
+            continue
+        }
+        let tagReach = reach([tag])
+        for owner in owners where owner.hasPrefix("group:") || owner.contains("@") {
+            let ids = [owner] + (m.groups[owner] ?? [])
+            // Covered when the owner already reaches it, directly or through
+            // something broader ("*", a CIDR or IP set containing it, …).
+            let ownerReach = reach(ids)
+            let gained = tagReach.subtracting([tag]).filter { d in
+                !ownerReach.contains { $0 == "*" || $0 == d || ev.targetMatches(target: $0, destID: d) }
+            }.sorted()
+            guard !gained.isEmpty else { continue }
+            add("Tag owners gain access through \(tag)",
+                "\(owner) can tag one of their own devices \(tag) and so reach \(gained.prefix(4).joined(separator: ", "))\(gained.count > 4 ? ", …" : "") — access they don't have themselves.",
+                path: "tagOwners[\(tag)]", fixes: fix)
+        }
+    }
+
+    // Auto-approvers: anyone listed can advertise routes that get approved.
+    for (route, approvers) in m.routeApprovers where approvers.contains(where: everyone.contains) {
+        add("Anyone can get \(route) approved", "Any user's device can advertise \(route) and have it approved automatically, pulling that traffic through their device.",
+            path: "autoApprovers.routes[\(route)]")
+    }
+    if m.exitNodeApprovers.contains(where: everyone.contains) {
+        add("Anyone can become an exit node", "Any user's device can offer itself as an approved exit node and see other people's internet traffic.",
+            path: "autoApprovers.exitNode")
+    }
+
+    // Root SSH for people without re-authentication.
+    for r in m.sshRules where r.action == "accept" && r.users.contains("root") && r.src.contains(where: { !$0.hasPrefix("tag:") }) {
+        add("SSH as root without check mode", "ssh[\(r.index)] lets \(r.src.joined(separator: ", ")) log in as root without re-authenticating. Check mode asks them to confirm recently.",
+            path: "ssh[\(r.index)]", fixes: [LintFix(label: "Use check mode", action: .setSSHCheck(index: r.index))])
+    }
+
+    // Sensitive ports open to everyone; remember what's reached on them.
+    var sensitiveTargets = Set<String>()
+    var firstReach: [String: String] = [:]  // target → the first rule reaching it on a sensitive port
+    func services(_ open: (Int) -> Bool) -> [String] { sensitivePorts.filter { open($0.port) }.map(\.name).uniqued() }
+    for r in m.rules where r.action == "accept" {
+        for d in r.dst.map(DestSpec.init) {
+            let found = services { ev.portMatches(spec: d.ports, port: $0) }
+            if !found.isEmpty, d.target != "*" {
+                sensitiveTargets.insert(d.target)
+                firstReach[d.target] = firstReach[d.target] ?? "acls[\(r.index)]"
+            }
+            if r.src.contains(where: everyone.contains), !found.isEmpty, !(d.target == "*" && d.ports == "*") {
+                add("\(found.joined(separator: ", ")) open to everyone", "acls[\(r.index)] lets every user reach \(d.target) on \(found.joined(separator: ", ")).",
+                    path: "acls[\(r.index)]")
+            }
+        }
+    }
+    for g in m.grants where !g.ip.isEmpty {
+        let found = services { port in g.ip.contains { ev.ipSpecMatches(spec: $0, port: port) } }
+        guard !found.isEmpty else { continue }
+        for t in g.dst where t != "*" {
+            sensitiveTargets.insert(t)
+            firstReach[t] = firstReach[t] ?? "grants[\(g.index)]"
+        }
+        if g.src.contains(where: everyone.contains), !(g.dst.contains("*") && g.ip.contains("*")) {
+            add("\(found.joined(separator: ", ")) open to everyone", "grants[\(g.index)] lets every user reach \(g.dst.joined(separator: ", ")) on \(found.joined(separator: ", ")).",
+                path: "grants[\(g.index)]")
+        }
+    }
+
+    // Servers that can reach people's devices (lateral movement from a breached server).
+    let people = { (t: String) in t == "*" || t == "autogroup:member" || t == "autogroup:members" || t.contains("@") || t.hasPrefix("group:") }
+    for r in ruleSummaries(m, sourceIDs: nil) where r.kind != .ssh {
+        let tags = r.sources.filter { $0.hasPrefix("tag:") }
+        let reached = r.destinations.filter(people)
+        guard !tags.isEmpty, !reached.isEmpty else { continue }
+        add("Servers can reach people's devices", "\(r.name): \(tags.joined(separator: ", ")) can reach \(reached.joined(separator: ", ")). If such a device is breached, so are users' laptops.",
+            path: "\(r.section)[\(r.index)]")
+    }
+
+    for r in ruleSummaries(m, sourceIDs: nil) where r.sources.contains("autogroup:danger-all") {
+        add("autogroup:danger-all in use", "\(r.name) admits every device, including ones shared from outside the tailnet.",
+            path: "\(r.section)[\(r.index)]")
+    }
+
+    // Sensitive access nobody pins with a deny test.
+    let denied = Set(m.tests.flatMap(\.deny).map { DestSpec($0).target })
+    // Autogroups can't be a test's destination, so they're left out.
+    let unpinned = sensitiveTargets.subtracting(denied).filter { !$0.hasPrefix("autogroup:") }.sorted()
+    if !unpinned.isEmpty {
+        add("Sensitive access without deny tests",
+            "\(unpinned.prefix(6).joined(separator: ", "))\(unpinned.count > 6 ? ", …" : "") \(unpinned.count == 1 ? "is" : "are") reached on SSH, RDP, or database ports, but no test says who must not reach \(unpinned.count == 1 ? "it" : "them"). Add one with Pin as test in the Simulator.",
+            path: m.tests.isEmpty ? firstReach[unpinned[0]] : "tests")
+    }
+    return issues
 }
 
 // MARK: - Token validation

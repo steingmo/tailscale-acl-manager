@@ -8,6 +8,7 @@ struct TrafficScreen: View {
     @State private var tab = Tab.connections
     @State private var filter = ""
     @State private var error: String?
+    @State private var narrowed: String?
 
     enum Tab: String, CaseIterable { case connections = "Connections", usage = "Rule usage" }
 
@@ -194,6 +195,12 @@ struct TrafficScreen: View {
         let unused = rules.filter { used["\($0.kind == .grant ? RuleMatch.Kind.grant : .acl)-\($0.index)"] == nil }
         let period = store.traffic.map { Int(($0.end.timeIntervalSince($0.start) / 86_400).rounded()) } ?? days
         return VStack(alignment: .leading, spacing: 10) {
+            if let narrowed {
+                Label(narrowed, systemImage: "scissors")
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(Theme.green)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             Text(verbatim: unused.isEmpty ? "Every rule carried traffic in the last \(period) day\(period == 1 ? "" : "s")."
                  : "\(unused.count) rule\(unused.count == 1 ? "" : "s") carried no traffic in the last \(period) day\(period == 1 ? "" : "s")")
                 .font(.system(size: 13, weight: .bold))
@@ -216,10 +223,18 @@ struct TrafficScreen: View {
                     ruleLine(r, detail: "\(u.connections) connections · " + ports.prefix(8).map { "\($0.key) (\($0.value))" }.joined(separator: ", ")
                              + (ports.count > 8 ? ", …" : ""))
                     if broad(r), ports.count <= 6 {
-                        Text(verbatim: "Allows \(r.badge.lowercased() == "all" ? "every port" : r.badge) but only used \(ports.map(\.key).sorted().joined(separator: ", ")) — narrow its ip to those?")
-                            .font(.system(size: 10.5, weight: .semibold))
-                            .foregroundStyle(Theme.orange)
-                            .padding(.leading, 12)
+                        HStack(spacing: 8) {
+                            Text(verbatim: "Allows \(r.badge.lowercased() == "all" ? "every port" : r.badge) but only used \(ports.map(\.key).sorted().joined(separator: ", ")).")
+                                .font(.system(size: 10.5, weight: .semibold))
+                                .foregroundStyle(Theme.orange)
+                            Button("Narrow to these ports") {
+                                store.narrowRule(section: r.section, index: r.index, to: ports.map(\.key))
+                                narrowed = "Narrowed \u{201C}\(r.name)\u{201D} in the editor (⌘Z undoes). Review & push replays recent traffic against it before anything goes live."
+                            }
+                            .font(.system(size: 10.5))
+                            .help("Rewrites the rule's ports to only those used — check the push review's traffic replay before pushing")
+                        }
+                        .padding(.leading, 12)
                     }
                 }
             }

@@ -1,5 +1,27 @@
 import Foundation
 
+/// Limit a grant's or ACL's ports to those real traffic used: a grant's
+/// `ip` becomes the specs ("tcp:443", "udp:88"); an ACL's destinations keep
+/// their targets with the used port numbers. Returns false if not found.
+@discardableResult
+func narrowRulePorts(_ tree: inout JSON, section: String, index: Int, to specs: [String]) -> Bool {
+    guard !specs.isEmpty, var list = tree[section]?.elements, list.indices.contains(index) else { return false }
+    let parsed = specs.compactMap { spec -> (proto: String, port: Int)? in
+        let parts = spec.split(separator: ":")
+        guard parts.count == 2, let port = Int(parts[1]) else { return nil }
+        return (String(parts[0]), port)
+    }.sorted { ($0.port, $0.proto) < ($1.port, $1.proto) }
+    if section == "grants" {
+        list[index].value["ip"] = stringArrayJSON(parsed.map { "\($0.proto):\($0.port)" })
+    } else {
+        let ports = parsed.map(\.port).uniqued().map(String.init).joined(separator: ",")
+        let dst = (list[index].value["dst"]?.stringArray ?? []).map { DestSpec(target: DestSpec($0).target, ports: ports).spec }
+        list[index].value["dst"] = stringArrayJSON(dst.uniqued())
+    }
+    tree[section] = .array(list)
+    return true
+}
+
 /// Rewrite "acls" as equivalent "grants", Tailscale's recommended syntax.
 /// An ACL becomes one grant per distinct port list among its destinations
 /// ("tag:a:22", "tag:b:443" → two grants); "proto" moves into "ip"

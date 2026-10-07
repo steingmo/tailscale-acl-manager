@@ -100,7 +100,7 @@ final class NodeTests: XCTestCase {
 
 final class LintTests: XCTestCase {
     func testSamplePolicyIsClean() {
-        XCTAssertEqual(lintPolicy(model(SamplePolicy.text)).map(\.title), [])
+        XCTAssertEqual(lintPolicy(model(SamplePolicy.text)).filter { !$0.security }.map(\.title), [])
     }
 
     func testDetectsStructuralProblems() {

@@ -63,6 +63,8 @@ final class PolicyStore: ObservableObject {
         lintPolicy(model) + lintNodes(model, nodes: headscaleNodes) + lintUsers(model, logins: serverLogins)
     }
 
+    /// Shows the Getting Started checklist (first launch, Help menu).
+    @Published var showGettingStarted = false
     /// Set (e.g. from Problems) to show the Policy Editor at a 1-based line;
     /// the editor clears it once revealed.
     @Published var editorLineRequest: Int?
@@ -341,6 +343,11 @@ final class PolicyStore: ObservableObject {
                 tree[section] = .object(list)
             }
         }
+    }
+
+    /// Narrow a rule to the ports real traffic used (one undoable step).
+    func narrowRule(section: String, index: Int, to specs: [String]) {
+        mutate { narrowRulePorts(&$0, section: section, index: index, to: specs) }
     }
 
     /// Rewrite ACL rules as grants in one undoable step.
@@ -775,6 +782,14 @@ final class PolicyStore: ObservableObject {
             deleteEntity(name)
         case .deleteRule(let section, let index):
             deleteRule(section: section, index: index)
+        case .setSSHCheck(let index):
+            mutate { tree in
+                guard var rules = tree["ssh"]?.elements, rules.indices.contains(index) else { return }
+                rules[index].value["action"] = .string("check")
+                tree["ssh"] = .array(rules)
+            }
+        case .setTagOwners(let tag, let owners):
+            mutate { tree in tree["tagOwners"]?[tag] = stringArrayJSON(owners) }
         case .removeGroupMember(let group, let member):
             mutate { tree in
                 guard var members = tree["groups"]?[group]?.elements else { return }

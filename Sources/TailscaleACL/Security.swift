@@ -267,6 +267,7 @@ struct SettingsView: View {
     @AppStorage(DataEncryption.settingKey) private var encrypted = false
     @State private var encryptionError: String?
     @State private var fileVault: Bool?
+    @State private var backupMode: BackupSheet.Mode?
 
     var body: some View {
         Form {
@@ -296,6 +297,15 @@ struct SettingsView: View {
                         .foregroundStyle(fileVault == false ? .red : .secondary)
                 }
             }
+            Section("Backup") {
+                Text("A password-protected file with every workspace and its history — for a new Mac, or if the Keychain key is ever lost.")
+                    .font(.caption).foregroundStyle(.secondary)
+                HStack {
+                    Button("Export Backup…") { backupMode = .export }
+                    Button("Restore from Backup…") { backupMode = .restore }
+                }
+                .disabled(session.store == nil)
+            }
             Section("Security") {
                 Toggle("Require Touch ID or your password before changing a server", isOn: $requireAuth)
                 Text("Covers pushes, device and user changes, route approvals, auth keys, and invites. One confirmation lasts two minutes.")
@@ -313,6 +323,14 @@ struct SettingsView: View {
         .formStyle(.grouped)
         .frame(width: 520)
         .onAppear { fileVault = fileVaultIsOn() }
+        .sheet(item: Binding(get: { backupMode.map(IdentifiedMode.init) }, set: { backupMode = $0?.mode })) {
+            BackupSheet(mode: $0.mode).environmentObject(session)
+        }
         .padding(.vertical, 8)
     }
+}
+
+private struct IdentifiedMode: Identifiable {
+    var mode: BackupSheet.Mode
+    var id: String { mode == .export ? "export" : "restore" }
 }

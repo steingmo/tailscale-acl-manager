@@ -115,6 +115,15 @@ Swift Package (no Xcode project). All source in `Sources/TailscaleACL/`:
   is never overwritten with plain text, and an undecryptable
   workspaces.json stops the app from starting rather than starting empty.
   New data files must use `DataEncryption` and be listed in `dataFiles`.
+- Security review: `lintSecurity` (Lint.swift, `LintIssue.security`),
+  included in `lintPolicy`; Problems shows it first. Fixes `.setSSHCheck`,
+  `.setTagOwners`. Tag-owner escalation compares what the tag reaches with
+  what the owners already reach (via `targetMatches`, so `*`/CIDRs cover).
+- `narrowRulePorts` (Templates.swift) backs Traffic's "Narrow to these
+  ports". `Backup` (DataProtection.swift): PBKDF2-SHA256 + AES-GCM archive
+  of the data files; restore copies current files to before-restore-<time>/
+  and only accepts the app's own file names. `auditReport` (Report.swift).
+  `GettingStartedSheet` (Help ▸ Getting Started; `gettingStartedDone`).
 - `ipLookup` (SharedSheets.swift) backs ⌘K IP search; `pushReviewMarkdown`
   (Report.swift) exports the push review.
 - `convertACLsToGrants` (Templates.swift) rewrites ACLs as grants; the sheet
