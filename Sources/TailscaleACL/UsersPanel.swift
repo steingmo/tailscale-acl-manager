@@ -40,7 +40,13 @@ struct UsersPanel: View {
                     .fixedSize(horizontal: false, vertical: true)
                     .textSelection(.enabled)
             }
-            if store.serverAccounts.isEmpty {
+            if let error = store.serverUsersError {
+                Text(verbatim: "Couldn't load users: \(Self.explain(error, kind: kind))")
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(Theme.red)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+            } else if store.serverAccounts.isEmpty {
                 Text(kind == .tailscale
                      ? "No users loaded. Listing users needs the users:read scope; changing them needs users."
                      : "No users loaded.")

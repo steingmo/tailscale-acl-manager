@@ -72,8 +72,11 @@ extension PolicyStore {
         let workspace = currentWorkspaceID
         let nodes = try await client.listNodes()
         if workspace == currentWorkspaceID { headscaleNodes = nodes }
-        let users = try? await client.serverUsers()
+        var users: ServerUsers?
+        var usersError: Error?
+        do { users = try await client.serverUsers() } catch { usersError = error }
         if workspace == currentWorkspaceID {
+            serverUsersError = usersError
             serverAccounts = users?.accounts ?? []
             serverLogins = users?.logins
             serverUserAutogroups = users?.autogroups ?? [:]

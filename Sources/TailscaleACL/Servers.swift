@@ -390,7 +390,7 @@ final class TailscaleClient: PolicyServer {
         var query = URLComponents()
         query.queryItems = [URLQueryItem(name: "start", value: iso.string(from: from)),
                             URLQueryItem(name: "end", value: iso.string(from: to))]
-        let (data, _) = try await request("GET", "\(tailnetPath)/logging/network?\(query.percentEncodedQuery ?? "")")
+        let (data, _) = try await request("GET", "\(tailnetPath)/logging/network?\(query.percentEncodedQuery ?? "")", timeout: 60)
         struct Log: Decodable {
             var end: String?
             var logged: String?
@@ -438,7 +438,8 @@ final class TailscaleClient: PolicyServer {
             URLQueryItem(name: "end", value: iso.string(from: end)),
             URLQueryItem(name: "event", value: "TAILNET.UPDATE.ACL"),
         ]
-        let (data, _) = try await request("GET", "\(tailnetPath)/logging/configuration?\(query.percentEncodedQuery ?? "")")
+        // Tailscale can take a while to search a month of logs.
+        let (data, _) = try await request("GET", "\(tailnetPath)/logging/configuration?\(query.percentEncodedQuery ?? "")", timeout: 60)
         let fractional = ISO8601DateFormatter()
         fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         let logs = (try JSONSerialization.jsonObject(with: data) as? [String: Any])?["logs"] as? [[String: Any]] ?? []
@@ -512,14 +513,14 @@ final class TailscaleClient: PolicyServer {
     }
 
     private func request(_ method: String, _ path: String, body: Data? = nil,
-                         headers: [String: String] = [:], accept: String = "application/json")
-        async throws -> (Data, HTTPURLResponse) {
+                         headers: [String: String] = [:], accept: String = "application/json",
+                         timeout: TimeInterval = 20) async throws -> (Data, HTTPURLResponse) {
         guard let url = URL(string: Self.base + path) else {
             throw ServerError(status: 0, message: "Invalid tailnet name.")
         }
         var req = URLRequest(url: url)
         req.httpMethod = method
-        req.timeoutInterval = 20
+        req.timeoutInterval = timeout
         req.setValue("Bearer \(try await bearerToken())", forHTTPHeaderField: "Authorization")
         req.setValue(accept, forHTTPHeaderField: "Accept")
         for (k, v) in headers { req.setValue(v, forHTTPHeaderField: k) }

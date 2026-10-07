@@ -34,6 +34,8 @@ final class PolicyStore: ObservableObject {
 
     /// The server's users (empty when unknown).
     @Published var serverAccounts: [ServerAccount] = []
+    /// Why the users couldn't be loaded, if they couldn't.
+    @Published var serverUsersError: Error?
     /// Role autogroups of the server's users; re-evaluates the policy when set.
     @Published var serverUserAutogroups: [String: Set<String>] = [:] {
         didSet { if serverUserAutogroups != oldValue { reparseNow() } }
@@ -103,6 +105,7 @@ final class PolicyStore: ObservableObject {
         serverLogins = nil
         serverUserAutogroups = [:]
         serverAccounts = []
+        serverUsersError = nil
         traffic = nil
         serverDrift = nil
         linkedFileContents = nil
@@ -272,6 +275,7 @@ final class PolicyStore: ObservableObject {
         serverLogins = nil
         serverUserAutogroups = [:]
         serverAccounts = []
+        serverUsersError = nil
         traffic = nil
         saveWorkspaces()
     }
