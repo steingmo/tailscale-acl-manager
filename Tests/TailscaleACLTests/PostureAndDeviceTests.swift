@@ -275,9 +275,12 @@ final class DeviceMaintenanceTests: XCTestCase {
         try await c.expireNode(nodeID: "n1")
         try await c.renameNode(nodeID: "n1", name: "nas")
         try await c.deleteNode(nodeID: "n1")
+        try await c.setKeyExpiry(nodeID: "n1", disabled: false)
         XCTAssertEqual(StubProtocol.requests.map { "\($0.request.httpMethod!) \($0.request.url!.path)" }, [
             "POST /api/v2/device/n1/expire", "POST /api/v2/device/n1/name", "DELETE /api/v2/device/n1",
+            "POST /api/v2/device/n1/key",
         ])
+        XCTAssertEqual(try JSONSerialization.jsonObject(with: StubProtocol.requests[3].body) as? [String: Bool], ["keyExpiryDisabled": false])
         XCTAssertEqual(try JSONSerialization.jsonObject(with: StubProtocol.requests[1].body) as? [String: String], ["name": "nas"])
 
         StubProtocol.handler = { _, _ in .init(body: Data("""

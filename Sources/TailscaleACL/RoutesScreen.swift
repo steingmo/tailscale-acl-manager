@@ -34,7 +34,7 @@ struct RoutesScreen: View {
                     Text("Routes")
                         .font(.system(size: 16, weight: .bold))
                         .foregroundStyle(Theme.textPrimary)
-                    Text("Auto-approved subnet routes and exit nodes, node attributes, and the routes your devices advertise")
+                    Text("Auto-approved subnet routes and exit nodes, node attributes, relay servers, and the routes your devices advertise")
                         .font(.system(size: 11.5))
                         .foregroundStyle(Theme.textSecondary)
                 }
@@ -42,6 +42,7 @@ struct RoutesScreen: View {
                     approversPanel
                     if store.model.grants.contains(where: { !$0.via.isEmpty }) { viaPanel }
                     attrsPanel
+                    if !store.model.derpRegions.isEmpty { DERPPanel(regions: store.model.derpRegions) }
                     devicesPanel
                 } else {
                     Label("Fix the policy in the editor to manage routes.", systemImage: "exclamationmark.triangle.fill")

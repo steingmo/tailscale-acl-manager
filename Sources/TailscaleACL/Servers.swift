@@ -27,6 +27,8 @@ protocol PolicyServer: AnyObject {
     func setApprovedRoutes(nodeID: String, routes: [String]) async throws
     /// Expire the device's key now: it must log in again to reconnect.
     func expireNode(nodeID: String) async throws
+    /// Turn the device's key expiry off or back on (Tailscale only).
+    func setKeyExpiry(nodeID: String, disabled: Bool) async throws
     /// Remove the device from the tailnet.
     func deleteNode(nodeID: String) async throws
     func renameNode(nodeID: String, name: String) async throws
@@ -118,6 +120,7 @@ extension PolicyServer {
     func suspendUser(id: String) async throws { throw unsupported("suspending users") }
     func restoreUser(id: String) async throws { throw unsupported("suspending users") }
     func flowRecords(from: Date, to: Date) async throws -> [FlowRecord]? { nil }
+    func setKeyExpiry(nodeID: String, disabled: Bool) async throws { throw unsupported("turning key expiry off") }
     func credentialInfo() async throws -> CredentialInfo? { nil }
 }
 
@@ -320,6 +323,13 @@ final class TailscaleClient: PolicyServer {
 
     func expireNode(nodeID: String) async throws {
         _ = try await request("POST", "device/\(nodeID)/expire")
+    }
+
+    /// Turning expiry back on restores the original expiry time, which may have passed.
+    func setKeyExpiry(nodeID: String, disabled: Bool) async throws {
+        _ = try await request("POST", "device/\(nodeID)/key",
+                              body: try JSONSerialization.data(withJSONObject: ["keyExpiryDisabled": disabled]),
+                              headers: ["Content-Type": "application/json"])
     }
 
     /// Needs the users:read scope. Roles map to autogroup:owner, :admin,

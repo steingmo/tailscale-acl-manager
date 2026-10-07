@@ -156,7 +156,16 @@ Swift Package (no Xcode project). All source in `Sources/TailscaleACL/`:
 - `Lint.swift` — pure `lintPolicy(model)`: undefined references, ownerless
   tags, unused entities, empty groups, invalid addresses/port specs,
   same-kind shadowed rules, postures, `via`, expiring and wide-open rules.
-  Cached on `PolicyStore` per parse.
+  Cached on `PolicyStore` per parse. `lintPersonalRules`: rules whose
+  sources are only people; same-access rules merge via `.moveToGroup`
+  (`suggestedGroupName`). `includesInternet` sees autogroup:internet inside
+  IP sets (exit-node access in `routeAccess`).
+- `DERP.swift`: `parseDERPMap` (keys case-insensitive, like Tailscale),
+  `lintDERP`, and `checkDERPNode` (DNS, HTTPS `/derp/probe`, STUN) for
+  `DERPPanel` on Routes. DERP servers only answer STUN requests with
+  SOFTWARE "tailnode" and a FINGERPRINT, like Tailscale's own.
+- Devices panel: stale days (`staleDeviceDays`), "Key never expires"
+  (untagged, no expiry), `PolicyServer.setKeyExpiry` (Tailscale only).
 - `RuleConditions.swift`: posture condition grammar/evaluation and the
   `// expires: YYYY-MM-DD` rule comment (parsed out of `comments` into
   `expires`). `Evaluator(sourceAttributes:attributesComplete:)`: nil

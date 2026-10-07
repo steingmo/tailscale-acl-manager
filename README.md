@@ -139,6 +139,14 @@ Use `-` to read the policy from standard input.
 - **Encrypted backups** — export and restore a password-protected file with
   every workspace and its history (Settings).
 - **Audit report** — a least-privilege review to export from Problems.
+- **People in groups** — Problems flags rules that give access to people one
+  by one and moves them into a new group in one click, merging rules that
+  give the same access.
+- **Relay servers (DERP)** — Problems checks the policy's `derpMap`, and
+  Routes checks each relay live: DNS, HTTPS with its certificate, and STUN.
+- **Device keys** — filter devices by stale (30–180 days), expiring keys, or
+  people's devices whose key never expires; for Tailscale, turn key expiry
+  off or back on, one device or all at once.
 - **Getting started** — a checklist of setup steps (Help menu).
 - **Who changed it** — for Tailscale, the configuration audit log shows who
   changed the policy and when (needs the `logs:configuration:read` scope).

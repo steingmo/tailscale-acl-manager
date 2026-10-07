@@ -27,6 +27,8 @@ struct LintFix: Identifiable {
         case removeGroupMember(group: String, member: String)
         case setSSHCheck(index: Int)
         case setTagOwners(tag: String, owners: [String])
+        /// New group with `members`; the first rule's src becomes the group, the others are deleted.
+        case moveToGroup(section: String, indices: [Int], group: String, members: [String])
     }
 
     var label: String
@@ -310,11 +312,70 @@ func lintPolicy(_ m: PolicyModel, now: Date = Date()) -> [LintIssue] {
         }
     }
 
+    issues += lintDERP(m.derpRegions)
+    issues += lintPersonalRules(m)
     issues += lintSecurity(m)
     return issues.sorted { a, b in
         if a.severity != b.severity { return a.severity == .error }
         return a.title < b.title
     }
+}
+
+// MARK: - Access given to people one by one
+
+/// Rules whose sources are only people (no group, tag, or autogroup).
+/// Rules giving the same access are merged into one rule with a new group.
+/// Temporary rules (with an expires comment) are left alone.
+func lintPersonalRules(_ m: PolicyModel) -> [LintIssue] {
+    func isPerson(_ s: String) -> Bool {
+        s.contains("@") && !["group:", "tag:", "autogroup:"].contains { s.hasPrefix($0) }
+    }
+    // Same access = same section, destinations, ports/protocols, via, and postures.
+    var buckets: [String: (section: String, indices: [Int], dst: [String], people: [String])] = [:]
+    var order: [String] = []
+    func add(_ section: String, _ index: Int, _ src: [String], _ dst: [String], _ rest: [String]) {
+        guard !src.isEmpty, src.allSatisfy(isPerson) else { return }
+        let key = ([section] + dst.sorted() + ["|"] + rest).joined(separator: "\u{1}")
+        if buckets[key] == nil { order.append(key); buckets[key] = (section, [], dst, []) }
+        buckets[key]!.indices.append(index)
+        buckets[key]!.people = (buckets[key]!.people + src).uniqued()
+    }
+    for r in m.rules where r.action == "accept" && r.expires == nil {
+        add("acls", r.index, r.src, r.dst, [r.proto ?? ""] + r.srcPosture.sorted())
+    }
+    for g in m.grants where g.expires == nil && !g.hasApp {
+        add("grants", g.index, g.src, g.dst, g.ip.sorted() + ["|"] + g.via.sorted() + ["|"] + g.srcPosture.sorted())
+    }
+    return order.compactMap { buckets[$0] }.map { b in
+        let rules = b.indices.map { "\(b.section)[\($0)]" }
+        let group = suggestedGroupName(b.dst, m)
+        let people = b.people.joined(separator: ", ")
+        let single = b.indices.count == 1 && b.people.count == 1
+        return LintIssue(
+            severity: .warning,
+            title: single ? "Access given to one person" : "Access given to people one by one",
+            detail: single
+                ? "\(rules[0]) gives \(people) access directly. With a group the access is easy to review, and it ends when they leave the group."
+                : "\(rules.joined(separator: ", ")) give\(rules.count == 1 ? "s" : "") the same access to \(people). One rule with a group does the same and is easier to review.",
+            fixes: [.init(label: "Move to new \(group)",
+                          action: .moveToGroup(section: b.section, indices: b.indices, group: group, members: b.people))],
+            path: "\(rules[0]).src")
+    }
+}
+
+/// "ipset:windmill" → "group:windmill-users"; IPs use their host name if
+/// there is one. Never an existing group.
+func suggestedGroupName(_ dst: [String], _ m: PolicyModel) -> String {
+    var base = dst.first.map { DestSpec($0).target } ?? "access"
+    for p in ["ipset:", "tag:", "host:", "group:", "autogroup:"] where base.hasPrefix(p) { base = String(base.dropFirst(p.count)) }
+    if isAddressLike(base) || base == "*" {
+        base = m.hosts.first { $0.value == base }?.key ?? (base == "*" ? "all" : "access-" + base)
+    }
+    base = base.replacingOccurrences(of: "[^A-Za-z0-9-]+", with: "-", options: .regularExpression)
+        .trimmingCharacters(in: CharacterSet(charactersIn: "-"))
+    var name = "group:\(base)-users", n = 2
+    while m.groups[name] != nil { name = "group:\(base)-users-\(n)"; n += 1 }
+    return name
 }
 
 // MARK: - Security review

@@ -289,6 +289,16 @@ extension PolicyStore {
             }
         case .setTagOwners(let tag, let owners):
             mutate { tree in tree["tagOwners"]?[tag] = stringArrayJSON(owners) }
+        case .moveToGroup(let section, let indices, let group, let members):
+            mutate { tree in
+                guard var rules = tree[section]?.elements, let first = indices.min(),
+                      indices.allSatisfy(rules.indices.contains) else { return }
+                if tree["groups"] == nil { tree["groups"] = .object([]) }
+                tree["groups"]?[group] = stringArrayJSON(members)
+                rules[first].value["src"] = stringArrayJSON([group])
+                for i in indices.sorted(by: >) where i != first { rules.remove(at: i) }
+                tree[section]?.elements = rules
+            }
         case .removeGroupMember(let group, let member):
             mutate { tree in
                 guard var members = tree["groups"]?[group]?.elements else { return }

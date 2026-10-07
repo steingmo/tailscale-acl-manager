@@ -225,6 +225,11 @@ final class GuardedServer: PolicyServer {
     func expireNode(nodeID: String) async throws {
         try await change("Expire a device key", "device \(nodeID)") { try await inner.expireNode(nodeID: nodeID) }
     }
+    func setKeyExpiry(nodeID: String, disabled: Bool) async throws {
+        try await change(disabled ? "Turn off key expiry" : "Turn on key expiry", "device \(nodeID)") {
+            try await inner.setKeyExpiry(nodeID: nodeID, disabled: disabled)
+        }
+    }
     func deleteNode(nodeID: String) async throws {
         try await change("Delete a device", "device \(nodeID)") { try await inner.deleteNode(nodeID: nodeID) }
     }

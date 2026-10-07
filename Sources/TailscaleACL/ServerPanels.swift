@@ -241,24 +241,34 @@ struct DevicesPanel: View {
     @State private var nodeAction: NodeAction?
     @State private var renaming: HeadscaleNode?
     @State private var newName = ""
+    @AppStorage("staleDeviceDays") private var staleDays = 30
 
-    enum DeviceFilter: String, CaseIterable {
-        case all = "All"
-        case stale = "Not seen in 30 days"
-        case expiring = "Key expiring"
+    enum DeviceFilter: CaseIterable {
+        case all, stale, expiring, noExpiry
 
-        func includes(_ n: HeadscaleNode) -> Bool {
+        func label(staleDays: Int) -> String {
+            switch self {
+            case .all: return "All"
+            case .stale: return "Not seen in \(staleDays) days"
+            case .expiring: return "Key expiring"
+            case .noExpiry: return "Key never expires"
+            }
+        }
+
+        func includes(_ n: HeadscaleNode, staleDays: Int) -> Bool {
             switch self {
             case .all: return true
-            case .stale: return n.isStale()
+            case .stale: return n.isStale(days: staleDays)
             case .expiring: return (n.keyDaysLeft() ?? .max) <= 14
+            // Tagged devices don't expire by default; a person's device should.
+            case .noExpiry: return n.allTags.isEmpty && n.expiryDate == nil
             }
         }
     }
 
     /// A confirmed change to live devices.
     struct NodeAction: Identifiable {
-        enum Kind { case expire, delete }
+        enum Kind { case expire, delete, expiryOn, expiryOff }
         let id = UUID()
         var kind: Kind
         var nodes: [HeadscaleNode]
@@ -276,14 +286,12 @@ struct DevicesPanel: View {
             .confirmationDialog(nodeActionTitle, isPresented: Binding(get: { nodeAction != nil },
                                                                       set: { if !$0 { nodeAction = nil } })) {
                 if let action = nodeAction {
-                    Button(action.kind == .delete ? "Delete from \(serverName)" : "Expire key", role: .destructive) {
+                    Button(confirmLabel(action.kind), role: action.kind == .expiryOff ? nil : .destructive) {
                         perform(action)
                     }
                 }
             } message: {
-                Text(nodeAction?.kind == .delete
-                     ? "The devices are removed from the tailnet right away and must be set up again to rejoin."
-                     : "The device is disconnected right away and must log in again to reconnect.")
+                Text(confirmMessage(nodeAction?.kind))
             }
             .alert("Rename \(renaming?.displayName ?? "device")", isPresented: Binding(get: { renaming != nil },
                                                                                      set: { if !$0 { renaming = nil } })) {
@@ -296,7 +304,8 @@ struct DevicesPanel: View {
     }
 
     private var nodesPanel: some View {
-        let shown = store.headscaleNodes.filter(deviceFilter.includes)
+        let shown = store.headscaleNodes.filter { deviceFilter.includes($0, staleDays: staleDays) }
+        let tailscale = store.currentWorkspace.kind == .tailscale
         return panel {
             HStack {
                 Text("Devices (\(store.headscaleNodes.count))")
@@ -304,14 +313,28 @@ struct DevicesPanel: View {
                     .foregroundStyle(Theme.textPrimary)
                 Picker("", selection: $deviceFilter) {
                     ForEach(DeviceFilter.allCases, id: \.self) { f in
-                        Text(f == .all ? f.rawValue : "\(f.rawValue) (\(store.headscaleNodes.filter(f.includes).count))").tag(f)
+                        let label = f.label(staleDays: staleDays)
+                        Text(f == .all ? label : "\(label) (\(store.headscaleNodes.filter { f.includes($0, staleDays: staleDays) }.count))").tag(f)
                     }
                 }
                 .labelsHidden()
-                .frame(width: 190)
+                .frame(width: 200)
+                if deviceFilter == .stale {
+                    Picker("", selection: $staleDays) {
+                        ForEach([30, 60, 90, 180], id: \.self) { Text(verbatim: "\($0) days").tag($0) }
+                    }
+                    .labelsHidden()
+                    .frame(width: 90)
+                    .help("How long a device must be offline to count as stale")
+                }
                 Spacer()
                 if deviceFilter == .stale, !shown.isEmpty {
                     Button("Delete \(shown.count) stale…") { nodeAction = NodeAction(kind: .delete, nodes: shown) }
+                        .font(.system(size: 11))
+                        .disabled(client == nil || busy)
+                }
+                if deviceFilter == .noExpiry, tailscale, !shown.isEmpty {
+                    Button("Turn on expiry for \(shown.count)…") { nodeAction = NodeAction(kind: .expiryOn, nodes: shown) }
                         .font(.system(size: 11))
                         .disabled(client == nil || busy)
                 }
@@ -328,6 +351,13 @@ struct DevicesPanel: View {
             }
             if shown.isEmpty {
                 Text("No devices match.").font(.system(size: 11.5)).foregroundStyle(Theme.textSecondary)
+            } else if deviceFilter == .noExpiry {
+                Text(tailscale
+                     ? "People's devices that never have to log in again. If one is lost, it keeps its access until you remove it."
+                     : "People's devices that never have to log in again. Headscale can't turn expiry back on; expire the key to make the device log in again.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Theme.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             ForEach(shown) { node in
                 HStack(spacing: 8) {
@@ -348,6 +378,11 @@ struct DevicesPanel: View {
                             .foregroundStyle(Theme.textSecondary)
                     }
                     Spacer()
+                    if node.allTags.isEmpty, node.expiryDate == nil {
+                        Text("no key expiry")
+                            .font(.system(size: 10.5))
+                            .foregroundStyle(Theme.textSecondary)
+                    }
                     if let days = node.keyDaysLeft(), days <= 14 {
                         Text(days < 0 ? "key expired" : days == 0 ? "key expires today" : "key expires in \(days)d")
                             .font(.system(size: 10.5, weight: .semibold))
@@ -365,6 +400,13 @@ struct DevicesPanel: View {
                         Button("Rename…") { newName = node.displayName; renaming = node }
                         Divider()
                         Button("Expire Key…") { nodeAction = NodeAction(kind: .expire, nodes: [node]) }
+                        if tailscale {
+                            if node.expiryDate == nil {
+                                Button("Turn On Key Expiry…") { nodeAction = NodeAction(kind: .expiryOn, nodes: [node]) }
+                            } else {
+                                Button("Turn Off Key Expiry…") { nodeAction = NodeAction(kind: .expiryOff, nodes: [node]) }
+                            }
+                        }
                         Button("Delete…") { nodeAction = NodeAction(kind: .delete, nodes: [node]) }
                     } label: {
                         Image(systemName: "ellipsis.circle")
@@ -402,7 +444,30 @@ struct DevicesPanel: View {
     private var nodeActionTitle: String {
         guard let a = nodeAction else { return "" }
         let what = a.nodes.count == 1 ? a.nodes[0].displayName : "\(a.nodes.count) devices"
-        return a.kind == .delete ? "Delete \(what)?" : "Expire the key of \(what)?"
+        switch a.kind {
+        case .delete: return "Delete \(what)?"
+        case .expire: return "Expire the key of \(what)?"
+        case .expiryOn: return "Turn on key expiry for \(what)?"
+        case .expiryOff: return "Turn off key expiry for \(what)?"
+        }
+    }
+
+    private func confirmLabel(_ kind: NodeAction.Kind) -> String {
+        switch kind {
+        case .delete: return "Delete from \(serverName)"
+        case .expire: return "Expire key"
+        case .expiryOn: return "Turn on expiry"
+        case .expiryOff: return "Turn off expiry"
+        }
+    }
+
+    private func confirmMessage(_ kind: NodeAction.Kind?) -> String {
+        switch kind {
+        case .delete: return "The devices are removed from the tailnet right away and must be set up again to rejoin."
+        case .expiryOn: return "The key expires at its original time. If that has passed, the device is disconnected now and must log in again."
+        case .expiryOff: return "The device never has to log in again. If it's lost, it keeps its access until you remove it."
+        default: return "The device is disconnected right away and must log in again to reconnect."
+        }
     }
 
     private func perform(_ action: NodeAction) {
@@ -411,10 +476,11 @@ struct DevicesPanel: View {
             defer { Task { try? await store.refreshNodes() } }
             for node in action.nodes {
                 do {
-                    if action.kind == .delete {
-                        try await client.deleteNode(nodeID: node.id)
-                    } else {
-                        try await client.expireNode(nodeID: node.id)
+                    switch action.kind {
+                    case .delete: try await client.deleteNode(nodeID: node.id)
+                    case .expire: try await client.expireNode(nodeID: node.id)
+                    case .expiryOn: try await client.setKeyExpiry(nodeID: node.id, disabled: false)
+                    case .expiryOff: try await client.setKeyExpiry(nodeID: node.id, disabled: true)
                     }
                     done += 1
                 } catch {
@@ -423,7 +489,12 @@ struct DevicesPanel: View {
                 }
             }
             let what = done == 1 ? action.nodes[0].displayName : "\(done) devices"
-            return action.kind == .delete ? "Deleted \(what)." : "Expired the key of \(what)."
+            switch action.kind {
+            case .delete: return "Deleted \(what)."
+            case .expire: return "Expired the key of \(what)."
+            case .expiryOn: return "Turned on key expiry for \(what)."
+            case .expiryOff: return "Turned off key expiry for \(what)."
+            }
         }
     }
 

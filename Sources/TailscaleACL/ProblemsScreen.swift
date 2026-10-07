@@ -23,7 +23,7 @@ struct ProblemsScreen: View {
                             .disabled(!store.isValid)
                             .help("A least-privilege review: security findings, temporary access, people, devices, and rule usage")
                     }
-                    Text("Structure checks: undefined references, ownerless tags, unused entities, shadowed, expiring, and wide-open rules, postures, invalid values")
+                    Text("Structure checks: undefined references, ownerless tags, unused entities, shadowed, expiring, wide-open, and one-person rules, postures, relay servers, invalid values")
                         .font(.system(size: 11.5))
                         .foregroundStyle(Theme.textSecondary)
                     Text(store.headscaleNodes.isEmpty

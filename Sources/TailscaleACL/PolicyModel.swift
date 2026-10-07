@@ -100,6 +100,8 @@ struct PolicyModel {
     var nodeAttrs: [NodeAttrRule] = []
     var tests: [ACLTest] = []
     var sshTests: [SSHTest] = []
+    /// Custom relay servers ("derpMap").
+    var derpRegions: [DERPRegion] = []
     /// Not from the policy: role autogroups of real users (lowercased login →
     /// e.g. ["autogroup:admin"]), filled in from the server's user list.
     var userAutogroups: [String: Set<String>] = [:]
@@ -107,6 +109,7 @@ struct PolicyModel {
     init() {}
 
     init(tree: JSON) {
+        derpRegions = parseDERPMap(tree)
         if let members = tree["groups"]?.members {
             for m in members {
                 groups[m.key] = m.value.stringArray
