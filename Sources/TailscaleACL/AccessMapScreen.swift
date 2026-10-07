@@ -17,6 +17,11 @@ struct AccessMapScreen: View {
     @State private var editingTags: HeadscaleNode?
     @State private var showingTemplates = false
     @State private var showAllSubnets = false
+    @AppStorage("accessMapZoom") private var zoom = 1.0
+    @AppStorage("accessMapSummaryCollapsed") private var summaryCollapsed = false
+    /// Zoom when a pinch began, so the gesture scales from there.
+    @State private var pinchBase: Double?
+    private static let zoomRange = 0.3...2.0
 
     enum Kind: Hashable { case device, user, group, tag, host, ipset }
     enum Direction: Hashable { case reaches, reachedBy }
@@ -111,7 +116,25 @@ struct AccessMapScreen: View {
                        ? "Connect a Headscale or Tailscale server on the Server screen to map your devices."
                        : "The policy has no \(kindName)s. Use Templates to add common setups.")
             } else {
-                ScrollView([.horizontal, .vertical]) { map }
+                GeometryReader { viewport in
+                    let size = mapSize
+                    ScrollView([.horizontal, .vertical]) {
+                        map
+                            .scaleEffect(zoom, anchor: .topLeading)
+                            .frame(width: size.width * zoom, height: size.height * zoom, alignment: .topLeading)
+                    }
+                    .gesture(MagnifyGesture()
+                        .onChanged { value in
+                            let base = pinchBase ?? zoom
+                            pinchBase = base
+                            zoom = (base * value.magnification).clamped(to: Self.zoomRange)
+                        }
+                        .onEnded { _ in pinchBase = nil })
+                    .overlay(alignment: .bottomTrailing) {
+                        zoomControls(fit: min(viewport.size.width / size.width, viewport.size.height / size.height, 1))
+                            .padding(12)
+                    }
+                }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -233,11 +256,22 @@ struct AccessMapScreen: View {
 
     // MARK: - Map
 
+    /// The map's unscaled size, padding included.
+    private var mapSize: CGSize {
+        let pills = self.pills
+        let dests = pills.flatMap(endpoints).uniqued()
+        return CGSize(width: canvasWidth + 32, height: mapHeight(pills.count, dests.count) + 16)
+    }
+
+    private func mapHeight(_ pills: Int, _ dests: Int) -> CGFloat {
+        max(CGFloat(pills) * pillRow, CGFloat(dests) * destRow, 140) + 40 + 28
+    }
+
     private var map: some View {
         let pills = self.pills
         let dests = pills.flatMap(endpoints).uniqued()
         let top: CGFloat = 28 // room for the column labels
-        let height = max(CGFloat(pills.count) * pillRow, CGFloat(dests.count) * destRow, 140) + 40 + top
+        let height = mapHeight(pills.count, dests.count)
         let mid = top + (height - top) / 2
         let cardCenter = CGPoint(x: 24 + cardSize.width / 2, y: mid)
         func pillY(_ i: Int) -> CGFloat {
@@ -300,11 +334,81 @@ struct AccessMapScreen: View {
         .padding(.bottom, 16)
     }
 
-    /// Exit-node use and subnet routes for the focused entity.
+    /// −, zoom level, +, and Fit, with ⌘−, ⌘0, ⌘= shortcuts.
+    private func zoomControls(fit: Double) -> some View {
+        HStack(spacing: 2) {
+            Button { zoom = (zoom - 0.1).clamped(to: Self.zoomRange) } label: { Image(systemName: "minus") }
+                .keyboardShortcut("-", modifiers: .command)
+                .help("Zoom out (⌘−)")
+            Button { zoom = 1 } label: {
+                Text(verbatim: "\(Int((zoom * 100).rounded()))%").font(.system(size: 11, design: .monospaced)).frame(width: 40)
+            }
+            .keyboardShortcut("0", modifiers: .command)
+            .help("Actual size (⌘0)")
+            Button { zoom = (zoom + 0.1).clamped(to: Self.zoomRange) } label: { Image(systemName: "plus") }
+                .keyboardShortcut("=", modifiers: .command)
+                .help("Zoom in (⌘+)")
+            Divider().frame(height: 14).padding(.horizontal, 4)
+            Button("Fit") { zoom = max(fit, Self.zoomRange.lowerBound) }
+                .font(.system(size: 11))
+                .help("Fit the whole map in the window")
+        }
+        .buttonStyle(.borderless)
+        .foregroundStyle(Theme.textPrimary)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 5)
+        .background(Capsule().fill(Theme.panel))
+        .overlay(Capsule().stroke(Theme.panelBorder, lineWidth: 1))
+    }
+
+    /// Exit-node use and subnet routes for the focused entity; collapses to
+    /// one line.
     private var routeSummary: some View {
         let access = routeAccess(store.model, sourceIDs: focusIDs, nodes: store.headscaleNodes)
         let loaded = !store.headscaleNodes.isEmpty
-        return VStack(alignment: .leading, spacing: 6) {
+        return Group {
+            if summaryCollapsed {
+                HStack(spacing: 6) {
+                    Image(systemName: "globe").font(.system(size: 11)).foregroundStyle(Theme.pink)
+                    Text(verbatim: !access.exitNode ? "No exit nodes"
+                         : (access.exitVia.isEmpty ? "Exit nodes: any" : "Exit nodes via \(access.exitVia.joined(separator: ", "))")
+                            + (loaded ? " (\(access.exitNodes.count))" : ""))
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(access.exitNode ? Theme.green : Theme.textSecondary)
+                    if loaded {
+                        Text("·").foregroundStyle(Theme.textSecondary)
+                        Image(systemName: "point.3.connected.trianglepath.dotted").font(.system(size: 11)).foregroundStyle(Theme.orange)
+                        Text(verbatim: "\(access.subnets.count) subnet route\(access.subnets.count == 1 ? "" : "s")")
+                            .font(.system(size: 11.5)).foregroundStyle(Theme.textPrimary)
+                    }
+                    Spacer()
+                    collapseButton
+                }
+                .lineLimit(1)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(RoundedRectangle(cornerRadius: 8).fill(Theme.panel))
+                .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.panelBorder, lineWidth: 1))
+            } else {
+                expandedSummary(access, loaded: loaded)
+            }
+        }
+    }
+
+    private var collapseButton: some View {
+        Button { withAnimation(.easeInOut(duration: 0.15)) { summaryCollapsed.toggle() } } label: {
+            Image(systemName: summaryCollapsed ? "chevron.down" : "chevron.up")
+                .font(.system(size: 10.5, weight: .semibold))
+                .foregroundStyle(Theme.textSecondary)
+                .frame(width: 20, height: 18)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(summaryCollapsed ? "Show exit nodes and subnet routes" : "Collapse to one line")
+    }
+
+    private func expandedSummary(_ access: RouteAccess, loaded: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
             FlowLayout {
                 Image(systemName: "globe").font(.system(size: 11)).foregroundStyle(Theme.pink).frame(width: 16)
                 Text("Exit nodes").font(.system(size: 11.5, weight: .semibold)).foregroundStyle(Theme.textPrimary)
@@ -326,8 +430,10 @@ struct AccessMapScreen: View {
             }
             if loaded { subnetSummary(access.subnets) }
         }
+        .padding(.trailing, 22)  // room for the collapse button
         .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)
+        .overlay(alignment: .topTrailing) { collapseButton.padding(6) }
         .background(RoundedRectangle(cornerRadius: 8).fill(Theme.panel))
         .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.panelBorder, lineWidth: 1))
     }
