@@ -277,7 +277,13 @@ func routeAccess(_ m: PolicyModel, sourceIDs: [String], nodes: [HeadscaleNode]) 
     for n in nodes {
         for r in n.approvedRoutes ?? [] where r != "0.0.0.0/0" && r != "::/0" { routers[r, default: []].append(n) }
     }
-    for route in routers.keys.sorted() {
+    // Numeric address order (10.114.2.0 before 10.114.10.0), IPv4 before IPv6.
+    func order(_ a: String, _ b: String) -> Bool {
+        guard let x = parseCIDR(a), let y = parseCIDR(b) else { return a < b }
+        if x.bytes.count != y.bytes.count { return x.bytes.count < y.bytes.count }
+        return x.bytes == y.bytes ? x.bits < y.bits : x.bytes.lexicographicallyPrecedes(y.bytes)
+    }
+    for route in routers.keys.sorted(by: order) {
         var via: [String]? = nil  // nil: not reached; []: any router
         for rule in rules {
             // autogroup:internet is public addresses only, so it reaches no subnet route.

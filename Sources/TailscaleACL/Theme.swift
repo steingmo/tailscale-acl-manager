@@ -51,6 +51,50 @@ enum Theme {
 }
 
 /// Colored pill chip used for entities, ports, and assertions.
+/// Lays children out left to right, wrapping onto new lines — for chip lists
+/// whose length depends on the policy.
+struct FlowLayout: Layout {
+    var spacing: CGFloat = 6
+    var lineSpacing: CGFloat = 6
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let rows = arrange(proposal.width ?? .infinity, subviews)
+        let width = rows.map { $0.width }.max() ?? 0
+        let height = rows.map(\.height).reduce(0, +) + lineSpacing * CGFloat(max(rows.count - 1, 0))
+        return CGSize(width: min(width, proposal.width ?? width), height: height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        var y = bounds.minY
+        for row in arrange(bounds.width, subviews) {
+            var x = bounds.minX
+            for i in row.items {
+                let size = subviews[i].sizeThatFits(.unspecified)
+                subviews[i].place(at: CGPoint(x: x, y: y + (row.height - size.height) / 2), proposal: .unspecified)
+                x += size.width + spacing
+            }
+            y += row.height + lineSpacing
+        }
+    }
+
+    private func arrange(_ maxWidth: CGFloat, _ subviews: Subviews) -> [(items: [Int], width: CGFloat, height: CGFloat)] {
+        var rows: [(items: [Int], width: CGFloat, height: CGFloat)] = []
+        var current: (items: [Int], width: CGFloat, height: CGFloat) = ([], 0, 0)
+        for i in subviews.indices {
+            let size = subviews[i].sizeThatFits(.unspecified)
+            let needed = current.items.isEmpty ? size.width : current.width + spacing + size.width
+            if needed > maxWidth, !current.items.isEmpty {
+                rows.append(current)
+                current = ([i], size.width, size.height)
+            } else {
+                current = (current.items + [i], needed, max(current.height, size.height))
+            }
+        }
+        if !current.items.isEmpty { rows.append(current) }
+        return rows
+    }
+}
+
 struct Chip: View {
     var text: String
     var color: Color
@@ -64,7 +108,9 @@ struct Chip: View {
             }
             Text(text)
                 .font(.system(size: 11, weight: .medium, design: .monospaced))
+                .lineLimit(1)
         }
+        .fixedSize()  // never squeeze into a column of letters
         .foregroundStyle(color)
         .padding(.horizontal, 6)
         .padding(.vertical, 3)

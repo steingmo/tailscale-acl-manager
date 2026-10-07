@@ -35,6 +35,12 @@ final class RouteAccessTests: XCTestCase {
         XCTAssertEqual(a.subnets.map(\.route), ["10.114.32.0/24", "10.187.0.0/16"])
     }
 
+    func testSubnetsInNumericOrder() {
+        let r = HeadscaleNode(id: "9", name: "r", approvedRoutes: ["10.114.10.0/24", "10.114.2.0/24", "fd00::/64", "9.0.0.0/8"])
+        let a = routeAccess(model(policy), sourceIDs: ["bob@x.com"], nodes: [r])
+        XCTAssertEqual(a.subnets.map(\.route), ["9.0.0.0/8", "10.114.2.0/24", "10.114.10.0/24", "fd00::/64"])
+    }
+
     func testNoInternetRule() {
         let a = routeAccess(model(policy), sourceIDs: ["eve@x.com"], nodes: [exitA, router])
         XCTAssertFalse(a.exitNode)

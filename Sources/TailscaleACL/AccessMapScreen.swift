@@ -16,6 +16,7 @@ struct AccessMapScreen: View {
     @State private var direction: Direction = .reaches
     @State private var editingTags: HeadscaleNode?
     @State private var showingTemplates = false
+    @State private var showAllSubnets = false
 
     enum Kind: Hashable { case device, user, group, tag, host, ipset }
     enum Direction: Hashable { case reaches, reachedBy }
@@ -304,7 +305,7 @@ struct AccessMapScreen: View {
         let access = routeAccess(store.model, sourceIDs: focusIDs, nodes: store.headscaleNodes)
         let loaded = !store.headscaleNodes.isEmpty
         return VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 6) {
+            FlowLayout {
                 Image(systemName: "globe").font(.system(size: 11)).foregroundStyle(Theme.pink).frame(width: 16)
                 Text("Exit nodes").font(.system(size: 11.5, weight: .semibold)).foregroundStyle(Theme.textPrimary)
                 if !access.exitNode {
@@ -323,26 +324,52 @@ struct AccessMapScreen: View {
                     }
                 }
             }
-            if loaded {
-                HStack(spacing: 6) {
-                    Image(systemName: "point.3.connected.trianglepath.dotted").font(.system(size: 11))
-                        .foregroundStyle(Theme.orange).frame(width: 16)
-                    Text("Subnet routes").font(.system(size: 11.5, weight: .semibold)).foregroundStyle(Theme.textPrimary)
-                    if access.subnets.isEmpty {
-                        Text("none of the approved subnet routes").font(.system(size: 11)).foregroundStyle(Theme.textSecondary)
-                    }
-                    ForEach(access.subnets, id: \.route) { s in
-                        Chip(text: s.routers.isEmpty ? "\(s.route) (no router for its via tag)"
-                             : "\(s.route) via \(s.routers.joined(separator: ", "))",
-                             color: s.routers.isEmpty ? Theme.red : Theme.orange)
-                    }
-                }
-            }
+            if loaded { subnetSummary(access.subnets) }
         }
         .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(RoundedRectangle(cornerRadius: 8).fill(Theme.panel))
         .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.panelBorder, lineWidth: 1))
+    }
+
+    /// Subnet routes grouped by the routers that serve them, wrapped, and
+    /// shortened to a dozen until expanded — a user can reach dozens.
+    private func subnetSummary(_ subnets: [(route: String, routers: [String])]) -> some View {
+        let groups = Dictionary(grouping: subnets, by: { $0.routers }).sorted { $0.value.count > $1.value.count }
+        let limit = 12
+        return VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 6) {
+                Image(systemName: "point.3.connected.trianglepath.dotted").font(.system(size: 11))
+                    .foregroundStyle(Theme.orange).frame(width: 16)
+                Text("Subnet routes").font(.system(size: 11.5, weight: .semibold)).foregroundStyle(Theme.textPrimary)
+                Text(verbatim: subnets.isEmpty ? "none of the approved subnet routes"
+                     : "\(subnets.count) route\(subnets.count == 1 ? "" : "s")")
+                    .font(.system(size: 11)).foregroundStyle(Theme.textSecondary)
+                if subnets.count > limit {
+                    Button(showAllSubnets ? "Show fewer" : "Show all") { showAllSubnets.toggle() }
+                        .buttonStyle(.link)
+                        .font(.system(size: 11))
+                }
+            }
+            ForEach(groups, id: \.key) { routers, routes in
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(verbatim: routers.isEmpty ? "No device carries the via tag — no path:"
+                         : "via \(routers.joined(separator: ", ")) (\(routes.count)):")
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(routers.isEmpty ? Theme.red : Theme.textSecondary)
+                    FlowLayout(spacing: 5, lineSpacing: 5) {
+                        ForEach(routes.prefix(showAllSubnets ? routes.count : limit), id: \.route) {
+                            Chip(text: $0.route, color: routers.isEmpty ? Theme.red : Theme.orange)
+                        }
+                        if !showAllSubnets, routes.count > limit {
+                            Text(verbatim: "+\(routes.count - limit) more")
+                                .font(.system(size: 10.5)).foregroundStyle(Theme.textSecondary)
+                        }
+                    }
+                }
+                .padding(.leading, 22)
+            }
+        }
     }
 
     private var sourceCard: some View {
