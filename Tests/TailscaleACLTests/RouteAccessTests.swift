@@ -54,3 +54,11 @@ final class RouteAccessTests: XCTestCase {
         XCTAssertTrue(a.subnets.isEmpty)
     }
 }
+
+final class SidebarTests: XCTestCase {
+    func testEveryScreenIsInExactlyOneSidebarGroup() {
+        let listed = Screen.groups.flatMap(\.screens)
+        XCTAssertEqual(listed.count, Set(listed).count, "no duplicates")
+        XCTAssertEqual(Set(listed), Set(Screen.allCases), "nothing missing from the sidebar")
+    }
+}

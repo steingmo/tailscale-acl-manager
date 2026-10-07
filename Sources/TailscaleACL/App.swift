@@ -24,7 +24,6 @@ final class UpdaterViewModel: ObservableObject {
 enum Screen: String, CaseIterable, Identifiable {
     case accessMap = "Access Map"
     case policyEditor = "Policy Editor"
-    case accessMatrix = "Access Matrix"
     case visualBuilder = "Visual Builder"
     case accessSimulator = "Access Simulator"
     case ssh = "SSH"
@@ -32,15 +31,22 @@ enum Screen: String, CaseIterable, Identifiable {
     case routes = "Routes"
     case traffic = "Traffic"
     case problems = "Problems"
-    case headscale = "Server"
+    case server = "Server"
 
     var id: String { rawValue }
+
+    /// The sidebar, in groups.
+    static let groups: [(title: String, screens: [Screen])] = [
+        ("See", [.accessMap, .accessSimulator, .ssh, .traffic]),
+        ("Edit", [.policyEditor, .visualBuilder, .routes]),
+        ("Check", [.tests, .problems]),
+        ("Connect", [.server]),
+    ]
 
     var icon: String {
         switch self {
         case .accessMap: return "circle.hexagongrid"
         case .policyEditor: return "doc.text"
-        case .accessMatrix: return "tablecells"
         case .visualBuilder: return "point.3.connected.trianglepath.dotted"
         case .accessSimulator: return "play"
         case .ssh: return "terminal"
@@ -48,7 +54,7 @@ enum Screen: String, CaseIterable, Identifiable {
         case .routes: return "arrow.triangle.branch"
         case .traffic: return "chart.bar.xaxis"
         case .problems: return "exclamationmark.triangle"
-        case .headscale: return "network"
+        case .server: return "network"
         }
     }
 }
@@ -282,8 +288,17 @@ struct RootView: View {
             .padding(.bottom, 8)
 
             VStack(spacing: 2) {
-                ForEach(Screen.allCases) { s in
-                    sidebarItem(s)
+                ForEach(Screen.groups, id: \.title) { group in
+                    Text(group.title.uppercased())
+                        .font(.system(size: 9.5, weight: .semibold))
+                        .foregroundStyle(Theme.textSecondary.opacity(0.7))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 10)
+                        .padding(.top, group.title == Screen.groups.first?.title ? 2 : 10)
+                        .padding(.bottom, 2)
+                    ForEach(group.screens) { s in
+                        sidebarItem(s)
+                    }
                 }
             }
             .padding(.horizontal, 8)
@@ -340,7 +355,6 @@ struct RootView: View {
         switch screen {
         case .accessMap: AccessMapScreen()
         case .policyEditor: PolicyEditorScreen()
-        case .accessMatrix: AccessMatrixScreen()
         case .visualBuilder: VisualBuilderScreen()
         case .accessSimulator: SimulatorScreen()
         case .ssh: SSHScreen()
@@ -348,7 +362,7 @@ struct RootView: View {
         case .routes: RoutesScreen()
         case .traffic: TrafficScreen()
         case .problems: ProblemsScreen()
-        case .headscale: HeadscaleScreen()
+        case .server: ServerScreen()
         }
     }
 }

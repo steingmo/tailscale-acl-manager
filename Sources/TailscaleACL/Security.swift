@@ -130,6 +130,8 @@ struct ActivityEntry: Codable, Identifiable {
 
 enum ActivityLog {
     static var fileURL: URL { appDataDirectory.appendingPathComponent("activity.jsonl") }
+    /// Posted (on the main queue) after each entry is written.
+    static let changed = Notification.Name("ActivityLogChanged")
 
     static func record(_ entry: ActivityEntry) {
         let encoder = JSONEncoder()
@@ -139,6 +141,7 @@ enum ActivityLog {
         // ponytail: rewrites the whole (small) file per entry so it can be
         // encrypted as one; cap it if the log ever gets long.
         try? DataEncryption.write((DataEncryption.read(fileURL) ?? Data()) + line, to: fileURL)
+        DispatchQueue.main.async { NotificationCenter.default.post(name: changed, object: nil) }
     }
 
     /// Newest first.

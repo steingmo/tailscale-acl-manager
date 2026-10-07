@@ -237,18 +237,6 @@ struct Evaluator {
         return false
     }
 
-    /// Does `spec` (a src spec) cover the entity `row` (a group/tag/autogroup/*)?
-    /// Used by the access matrix, where rows are entities rather than identities.
-    func sourceSpecCovers(spec: String, row: String) -> Bool {
-        if spec == row { return true }
-        if spec == "*" || spec == "autogroup:danger-all" { return true }
-        if spec == "autogroup:tagged" { return row.hasPrefix("tag:") }
-        if spec == "autogroup:members" || spec == "autogroup:member" {
-            return row.hasPrefix("group:") || row.contains("@")
-        }
-        return false
-    }
-
 }
 
 // MARK: - Test running

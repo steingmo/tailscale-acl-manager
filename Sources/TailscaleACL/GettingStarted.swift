@@ -28,10 +28,10 @@ struct GettingStartedSheet: View {
         var list = [
             Step(title: "Connect your Headscale server or Tailscale tailnet",
                  detail: "On the Server screen. For Tailscale, an OAuth client is safest: give it only the scopes you use (policy_file, devices:core, …) — the Server screen shows what it can do.",
-                 done: connected, go: .headscale),
+                 done: connected, go: .server),
             Step(title: "Load your devices",
                  detail: "Devices make the Access Map, Simulator, push review, and Problems use your real machines.",
-                 done: !store.headscaleNodes.isEmpty, go: .headscale),
+                 done: !store.headscaleNodes.isEmpty, go: .server),
             Step(title: "Protect the app and its data",
                  detail: "In Settings: require Touch ID to open the app, encrypt saved policies, and export a password-protected backup.",
                  done: lockApp && encrypted, settings: true),
@@ -46,7 +46,7 @@ struct GettingStartedSheet: View {
         if tailscale {
             list.append(Step(title: "Manage the policy in Git (optional)",
                              detail: "Set up Git… on the Server screen: changes go out as reviewed pull requests, and Tailscale's action applies them.",
-                             done: store.isGitOps, go: .headscale))
+                             done: store.isGitOps, go: .server))
         }
         return list
     }

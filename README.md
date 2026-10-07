@@ -58,8 +58,6 @@ Use `-` to read the policy from standard input.
 - **Policy Editor** — HuJSON (JSON + comments + trailing commas) editor with
   syntax highlighting, line numbers, and live validation. Import, Copy,
   Export, and Reset-to-sample.
-- **Access Matrix** — grid of every source × destination pair showing exactly
-  which ports are open between them.
 - **Visual Builder** — draggable diagram of groups, tags, hosts, and IP sets.
   Drag from a source dot to a destination box to grant access (protocol picker
   plus quick-select ports: SSH, DNS, HTTP, HTTPS, RDP, MySQL, PostgreSQL,

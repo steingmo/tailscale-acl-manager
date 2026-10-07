@@ -10,8 +10,9 @@ concrete client. Tailscale specifics: HuJSON via `Accept: application/hujson`,
 ETag/If-Match on push (412 → refused), `acl/validate` shown in the review,
 OAuth client secrets (tskey-client-<id>-…) exchanged at `oauth/token`, device
 ids are `nodeId`. Headscale pushes need `policy.mode: database`.
-`HeadscaleScreen.swift` is the Server screen (pull, reviewed push, push
-history/rollback, devices); `Impact.swift` diffs node-to-node access before a
+`ServerScreen.swift` is the Server screen (connection, pull, push history,
+activity), with `ServerPanels.swift` (auth keys, recent policy changes,
+devices) and `PushReviewSheet.swift` (the reviewed push); `Impact.swift` diffs node-to-node access before a
 push; `History.swift` writes push history *before* each push. Credentials
 live in the Keychain per workspace (`HeadscaleKeychain`). ATS allows plain
 HTTP only to local networks (`NSAllowsLocalNetworking`). Client tests stub
@@ -41,15 +42,21 @@ Swift Package (no Xcode project). All source in `Sources/TailscaleACL/`:
   containment (`parseCIDR`/`cidrContains` in Lint.swift), test runner.
   IPv6 ACL destinations with ports are bracketed: `[fd7a::1]:22`.
 - `PolicyStore.swift` — `@MainActor ObservableObject`; owns the text, the
-  tree, and all mutations (rules, grants, tests, entities, rename cascade).
+  tree, workspaces, and the linked file. Policy edits (rules, grants,
+  tests, entities, rename cascade, fixes) are in `PolicyStore+Editing.swift`
+  and go through `mutate`; the server client, devices, drift check, and
+  traffic are in `PolicyStore+Server.swift`.
   Typing reparses on a 120 ms debounce; programmatic mutations reparse
   immediately.
 - `CodeEditor.swift` — NSTextView-based editor. **Deliberately TextKit 1**
   and **deliberately no NSRulerView**: the ruler corrupts NSScrollView
   tiling inside SwiftUI on recent macOS and blanks the text. Line numbers
   are a sibling `GutterView` synced via bounds-change notifications.
-- `*Screen.swift` — the screens (access map, editor, matrix, visual
-  builder, simulator, ssh, tests, problems, headscale). `AccessMapScreen`
+- `*Screen.swift` — the screens (access map, editor, visual builder,
+  simulator, ssh, tests, routes, traffic, problems, server). The sidebar
+  lists them in groups (`Screen.groups`: See, Edit, Check, Connect); a test
+  checks every screen is listed once. Each sheet has its own file
+  (`RuleSheet.swift`, `QuickSearchSheet.swift`, …). `AccessMapScreen`
   is a NetBird-style focused view: one device/user/group/tag → the rules
   that apply to it → destinations. Maps use `DotGrid` and dashed
   `ConnectionCurve`s; `PillTabs` is the shared segmented tab bar. The map
@@ -58,7 +65,7 @@ Swift Package (no Xcode project). All source in `Sources/TailscaleACL/`:
   `RoutesScreen` edits `autoApprovers`/`nodeAttrs` and shows device routes
   (`Evaluator.autoApproves`). `DeviceTagsSheet` sets device tags via
   `POST /api/v1/node/{id}/tags` (Headscale requires ≥1 tag).
-- Port comparisons (push review, device matrix) use `portIntervals`: every
+- Port comparisons (push review) use `portIntervals`: every
   named port range cut into atomic intervals, one probe each, so changes
   inside ranges are exact. `generateTests` pins current access as tests;
   `explainFailure` says why a test assertion fails.
@@ -124,7 +131,7 @@ Swift Package (no Xcode project). All source in `Sources/TailscaleACL/`:
   of the data files; restore copies current files to before-restore-<time>/
   and only accepts the app's own file names. `auditReport` (Report.swift).
   `GettingStartedSheet` (Help ▸ Getting Started; `gettingStartedDone`).
-- `ipLookup` (SharedSheets.swift) backs ⌘K IP search; `pushReviewMarkdown`
+- `ipLookup` (QuickSearchSheet.swift) backs ⌘K IP search; `pushReviewMarkdown`
   (Report.swift) exports the push review.
 - `convertACLsToGrants` (Templates.swift) rewrites ACLs as grants; the sheet
   proves equivalence with `entityAccessDifferences` (+ `accessChanges` on
@@ -143,9 +150,9 @@ Swift Package (no Xcode project). All source in `Sources/TailscaleACL/`:
 - Routes: `HeadscaleClient.setApprovedRoutes` replaces a device's whole
   approved list; exit-node routes are approved as a 0.0.0.0/0 + ::/0 pair.
 - `AccessMapScreen(focus:_:direction:)` renders just the map; `renderPNG`
-  turns it into an image (map export, per-group/tag images in reports). Visual builder draws ACL connections
-  blue, grants green. Matrix cells are clickable (add/edit/remove access
-  via the shared `ConnectionSheet` in `SharedSheets.swift`).
+  turns it into an image (map export, per-group/tag images in reports).
+  Visual builder draws ACL connections blue, grants green, and edits them
+  with `ConnectionSheet`.
 - `Lint.swift` — pure `lintPolicy(model)`: undefined references, ownerless
   tags, unused entities, empty groups, invalid addresses/port specs,
   same-kind shadowed rules, postures, `via`, expiring and wide-open rules.
