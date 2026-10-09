@@ -115,26 +115,24 @@ extension PolicyStore {
     /// Tailscale has one request per device for posture attributes (Huntress,
     /// custom:…), so a few run at a time. Without the scope, devices keep
     /// no attributes and posture-gated rules stay conditional.
-    private func loadPostureAttributes(_ client: PolicyServer, nodes: [HeadscaleNode], workspace: UUID) async {
+    func loadPostureAttributes(_ client: PolicyServer, nodes: [HeadscaleNode], workspace: UUID) async {
         var loaded: [String: [String: String]] = [:]
         var failure: Error?
         await withTaskGroup(of: (String, Result<[String: String]?, Error>).self) { group in
-            var next = 0
-            func start() {
-                guard next < nodes.count, failure == nil else { return }
-                let id = nodes[next].id
-                next += 1
-                group.addTask {
-                    do { return (id, .success(try await client.postureAttributes(nodeID: id))) } catch { return (id, .failure(error)) }
-                }
+            // The plain next()/addTask loop: an earlier version added tasks from a
+            // nested function while iterating with for-await, and release builds
+            // aborted when a request outlived the group (1.26.0–1.26.1).
+            var pending = nodes.map(\.id).makeIterator()
+            func request(_ id: String) -> @Sendable () async -> (String, Result<[String: String]?, Error>) {
+                { do { return (id, .success(try await client.postureAttributes(nodeID: id))) } catch { return (id, .failure(error)) } }
             }
-            for _ in 0..<6 { start() }
-            for await (id, result) in group {
+            for _ in 0..<6 { if let id = pending.next() { group.addTask(operation: request(id)) } }
+            while let (id, result) = await group.next() {
                 switch result {
                 case .success(let attrs): loaded[id] = attrs
                 case .failure(let error): failure = failure ?? error
                 }
-                start()
+                if failure == nil, let next = pending.next() { group.addTask(operation: request(next)) }
             }
         }
         guard workspace == currentWorkspaceID else { return }

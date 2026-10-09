@@ -209,6 +209,11 @@ Swift Package (no Xcode project). All source in `Sources/TailscaleACL/`:
   an SSH rule and network access on port 22); the simulator has an SSH mode
   and the push review diffs SSH logins.
 
+Gotcha: task groups use the plain `while let x = await group.next()` +
+`group.addTask` loop. Adding tasks from a nested function while iterating
+with `for await` aborted release builds (1.26.0–1.26.1); debug tests don't
+show it — `swift test -c release -Xswiftc -enable-testing` does.
+
 Gotcha: interpolating `Int` directly into SwiftUI `Text` applies
 locale-aware grouping separators ("3.389") — use `Text(verbatim:)` or
 `String()` for ports and other identifiers.
