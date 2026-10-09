@@ -211,4 +211,25 @@ let policyTemplates: [PolicyTemplate] = [
             ("users", strings([v["login"] ?? "root"])),
         ])
     },
+    PolicyTemplate(
+        id: "huntress", title: "Require Huntress protection",
+        detail: "A posture: the device is in Huntress, its firewall is on, and Defender protects it (Macs and Linux report Defender as Incompatible and still pass). Grants from the given sources then require it. Check the push review to see who would lose access.",
+        fields: [.init(key: "posture", label: "Posture name", defaultValue: "posture:huntress-protected"),
+                 .init(key: "sources", label: "Require it for grants from (comma-separated, e.g. group:mgmt-vpn)", defaultValue: "")]
+    ) { tree, v in
+        let posture = v["posture"].flatMap { $0.isEmpty ? nil : $0 } ?? "posture:huntress-protected"
+        ensure(&tree, "postures", posture, strings([
+            "huntress:firewallStatus == 'Enabled'",
+            "huntress:defenderStatus IN ['Protected', 'Incompatible']",
+        ]))
+        // Grants that already require a posture keep theirs: srcPosture is any-of,
+        // so adding one would loosen them.
+        let sources = Set(list(v["sources"]))
+        guard !sources.isEmpty, var grants = tree["grants"]?.elements else { return }
+        for i in grants.indices where grants[i].value["srcPosture"] == nil
+            && !sources.isDisjoint(with: grants[i].value["src"]?.stringArray ?? []) {
+            grants[i].value["srcPosture"] = strings([posture])
+        }
+        tree["grants"] = .array(grants)
+    },
 ]

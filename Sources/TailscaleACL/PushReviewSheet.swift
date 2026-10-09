@@ -31,6 +31,8 @@ struct PushReviewSheet: View {
     @State private var changes: [AccessChange] = []
     @State private var deviceCount = 0
     @State private var previewNote: String?
+    /// Devices whose posture couldn't be checked, when the policy uses postures.
+    @State private var postureUnknown = 0
     @State private var candidateErrors: [LintIssue] = []
     /// Tailscale's own verdict: nil not checked, "" passed, otherwise the failure.
     @State private var serverVerdict: String?
@@ -93,6 +95,13 @@ struct PushReviewSheet: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 summary
+                if postureUnknown > 0 {
+                    Label("\(postureUnknown) device\(postureUnknown == 1 ? " has" : "s have") no posture attributes loaded, so rules requiring a posture count as allowing \(postureUnknown == 1 ? "it" : "them"). Access lost to a posture isn't shown for \(postureUnknown == 1 ? "it" : "them").",
+                          systemImage: "questionmark.diamond")
+                        .font(.system(size: 11))
+                        .foregroundStyle(Theme.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
                 if !changes.isEmpty { changeList }
                 if let serverText, serverText != candidate.text {
                     Button("Show text changes…") {
@@ -357,6 +366,9 @@ struct PushReviewSheet: View {
                 var oldModel = PolicyModel(tree: oldTree)
                 oldModel.userAutogroups = newModel.userAutogroups
                 changes = accessChanges(from: oldModel, to: newModel, nodes: nodes)
+                if [oldModel, newModel].contains(where: \.usesPostures) {
+                    postureUnknown = nodes.filter { $0.attributes == nil }.count
+                }
                 models = (oldModel, newModel)
                 // Traffic already loaded (Traffic screen): check right away.
                 if let traffic = store.traffic {

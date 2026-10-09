@@ -71,6 +71,23 @@ struct PostureCondition: Equatable {
     }
 }
 
+/// Attributes Tailscale's posture integrations write, with every value they
+/// report (tailscale.com/docs/integrations/huntress). Comparisons are exact.
+let knownPostureAttributes: [String: [String]] = [
+    "huntress:defenderStatus": ["Protected", "Unhealthy", "Unmanaged", "Incompatible"],
+    "huntress:defenderPolicyStatus": ["Compliant", "Non Compliant", "Pending", "Gpo Conflict", "Unknown"],
+    "huntress:firewallStatus": ["Enabled", "Disabled", "Pending Isolation", "Isolated", "Pending Release"],
+]
+
+/// The value a mistyped one most likely meant: same letters in another case,
+/// or "Healthy" (from Tailscale's own example) for Defender's "Protected".
+func likelyPostureValue(_ value: String, allowed: [String]) -> String? {
+    if let same = allowed.first(where: { $0.caseInsensitiveCompare(value) == .orderedSame }) { return same }
+    if value.lowercased() == "healthy", allowed.contains("Protected") { return "Protected" }
+    let squeezed = value.lowercased().filter(\.isLetter)
+    return allowed.first { $0.lowercased().filter(\.isLetter) == squeezed }
+}
+
 /// Numeric, dot-separated comparison ("1.62.1" > "1.9"); missing parts are 0.
 func compareVersions(_ a: String, _ b: String) -> Int {
     let pa = a.split(separator: ".").map { Double($0) ?? 0 }

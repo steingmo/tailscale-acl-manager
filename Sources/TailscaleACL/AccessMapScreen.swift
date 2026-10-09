@@ -16,6 +16,7 @@ struct AccessMapScreen: View {
     @State private var direction: Direction = .reaches
     @State private var editingTags: HeadscaleNode?
     @State private var showingTemplates = false
+    @State private var whoCanReach: String?
     @State private var showAllSubnets = false
     @AppStorage("accessMapZoom") private var zoom = 1.0
     @AppStorage("accessMapSummaryCollapsed") private var summaryCollapsed = false
@@ -79,6 +80,10 @@ struct AccessMapScreen: View {
                         }
                         .help("Real connections for \(node?.displayName ?? selection) from Tailscale's flow logs")
                     }
+                    ToolbarButton(label: "Who can reach…", icon: "person.3") {
+                        whoCanReach = direction == .reachedBy ? (node?.displayName ?? selection) : ""
+                    }
+                    .help("Everyone who can reach a server, IP, IP set, or tag, as a list to search and export")
                     ToolbarButton(label: "Templates", icon: "square.grid.2x2") { showingTemplates = true }
                 }
                 if store.isValid && !items.isEmpty {
@@ -153,6 +158,9 @@ struct AccessMapScreen: View {
         }
         .sheet(item: $editingTags) { DeviceTagsSheet(node: $0) }
         .sheet(isPresented: $showingTemplates) { TemplatesSheet() }
+        .sheet(isPresented: Binding(get: { whoCanReach != nil }, set: { if !$0 { whoCanReach = nil } })) {
+            WhoCanReachSheet(target: whoCanReach ?? "")
+        }
     }
 
     private var tabs: [(value: Kind, label: String, icon: String)] {

@@ -144,6 +144,21 @@ Use `-` to read the policy from standard input.
   give the same access.
 - **Relay servers (DERP)** — Problems checks the policy's `derpMap`, and
   Routes checks each relay live: DNS, HTTPS with its certificate, and STUN.
+- **Device posture (Huntress)** — Problems catches posture checks no
+  device can meet (Tailscale's own Huntress example uses `'Healthy'`, which
+  Huntress never reports) with one-click fixes; for Tailscale, devices load
+  their posture attributes (`devices:posture_attributes:read`), the Devices
+  panel shows pass/fail per posture, and the push review shows exactly who
+  loses access when you add `srcPosture`. A "Require Huntress protection"
+  template adds the posture to the grants you pick.
+- **Works when the server is slow** — the last devices, users, and policy
+  changes show at once (encrypted on disk) while fresh ones load.
+- **Access Review** — sign off every group and rule as still needed or to
+  remove, with who and when; changed items come back for review; export the
+  report for auditors and apply removals in one undoable step.
+- **Who can reach this?** — from the Access Map: everyone who can reach a
+  device, host, IP, IP set, or tag, with the rule, group, ports, and posture
+  of each path; search and export as CSV.
 - **Device keys** — filter devices by stale (30–180 days), expiring keys, or
   people's devices whose key never expires; for Tailscale, turn key expiry
   off or back on, one device or all at once.

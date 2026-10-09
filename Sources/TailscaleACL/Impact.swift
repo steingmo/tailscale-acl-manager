@@ -26,8 +26,6 @@ let otherLoginsLabel = "other users"
 func accessChanges(from old: PolicyModel, to new: PolicyModel,
                    nodes: [HeadscaleNode]) -> [AccessChange] {
     let intervals = portIntervals([old, new])
-    let before = Evaluator(model: old)
-    let after = Evaluator(model: new)
 
     var logins = Set((old.sshRules + new.sshRules).flatMap(\.users).filter { !$0.hasPrefix("autogroup:") })
     logins.insert("root")
@@ -40,6 +38,10 @@ func accessChanges(from old: PolicyModel, to new: PolicyModel,
 
     var changes: [AccessChange] = []
     for s in nodes {
+        // Each source with its own posture attributes, so adding srcPosture
+        // shows exactly who loses access.
+        let before = s.evaluator(old)
+        let after = s.evaluator(new)
         for d in nodes where d.id != s.id {
             var gained: [PortInterval] = []
             var lost: [PortInterval] = []

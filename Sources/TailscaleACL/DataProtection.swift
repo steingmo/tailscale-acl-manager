@@ -58,8 +58,10 @@ enum DataEncryption {
     static var dataFiles: [URL] {
         let dir = appDataDirectory
         var files = ["workspaces.json", "push-history.json", "activity.jsonl"].map { dir.appendingPathComponent($0) }
-        let snapshots = dir.appendingPathComponent("snapshots", isDirectory: true)
-        files += (try? FileManager.default.contentsOfDirectory(at: snapshots, includingPropertiesForKeys: nil)) ?? []
+        for folder in ["snapshots", "server-cache", "reviews"] {
+            let url = dir.appendingPathComponent(folder, isDirectory: true)
+            files += (try? FileManager.default.contentsOfDirectory(at: url, includingPropertiesForKeys: nil)) ?? []
+        }
         return files.filter { FileManager.default.fileExists(atPath: $0.path) }
     }
 
@@ -214,7 +216,7 @@ enum Backup {
     static func isAllowedPath(_ path: String) -> Bool {
         if ["workspaces.json", "push-history.json", "activity.jsonl"].contains(path) { return true }
         let parts = path.split(separator: "/")
-        return parts.count == 2 && parts[0] == "snapshots" && parts[1].hasSuffix(".json")
+        return parts.count == 2 && ["snapshots", "server-cache", "reviews"].contains(parts[0]) && parts[1].hasSuffix(".json")
             && UUID(uuidString: String(parts[1].dropLast(5))) != nil
     }
 

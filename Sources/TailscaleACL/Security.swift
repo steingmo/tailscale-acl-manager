@@ -97,6 +97,7 @@ struct CredentialInfo: Equatable {
         ("route approval", "devices:routes"),
         ("auth keys", "auth_keys"),
         ("listing users and roles", "users:read"),
+        ("device posture (Huntress…)", "devices:posture_attributes:read"),
         ("managing users", "users"),
         ("who changed the policy", "logs:configuration:read"),
         ("traffic (flow logs)", "logs:network:read"),
@@ -204,6 +205,7 @@ final class GuardedServer: PolicyServer {
     func listInvites() async throws -> [PendingInvite] { try await inner.listInvites() }
     func flowRecords(from: Date, to: Date) async throws -> [FlowRecord]? { try await inner.flowRecords(from: from, to: to) }
     func credentialInfo() async throws -> CredentialInfo? { try await inner.credentialInfo() }
+    func postureAttributes(nodeID: String) async throws -> [String: String]? { try await inner.postureAttributes(nodeID: nodeID) }
 
     // Changes
     func setPolicy(_ policy: String) async throws {

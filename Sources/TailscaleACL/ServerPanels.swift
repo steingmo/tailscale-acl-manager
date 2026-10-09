@@ -160,8 +160,8 @@ struct AuthKeysPanel: View {
 struct PolicyChangesPanel: View {
     var client: PolicyServer
     @EnvironmentObject var store: PolicyStore
-    @State private var policyChanges: [PolicyChange] = []
     @State private var policyChangesError: String?
+    private var policyChanges: [PolicyChange] { store.policyChanges ?? [] }
 
     private func panel<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
         ServerPanel(content: content)
@@ -216,7 +216,9 @@ struct PolicyChangesPanel: View {
 
     private func loadPolicyChanges() async {
         do {
-            policyChanges = try await client.policyChanges(days: 30) ?? []
+            store.policyChanges = try await client.policyChanges(days: 30) ?? []
+            // While devices still come from the cache, the next refresh saves them all.
+            if store.serverDataSaved == nil { store.saveServerCache() }
             policyChangesError = nil
         } catch let error as ServerError where error.status == 403 {
             policyChangesError = "Your credential can't read the audit log. Give the OAuth client the logs:configuration:read scope to see who changed the policy."
@@ -244,7 +246,7 @@ struct DevicesPanel: View {
     @AppStorage("staleDeviceDays") private var staleDays = 30
 
     enum DeviceFilter: CaseIterable {
-        case all, stale, expiring, noExpiry
+        case all, stale, expiring, noExpiry, failsPosture
 
         func label(staleDays: Int) -> String {
             switch self {
@@ -252,16 +254,18 @@ struct DevicesPanel: View {
             case .stale: return "Not seen in \(staleDays) days"
             case .expiring: return "Key expiring"
             case .noExpiry: return "Key never expires"
+            case .failsPosture: return "Fails a posture"
             }
         }
 
-        func includes(_ n: HeadscaleNode, staleDays: Int) -> Bool {
+        func includes(_ n: HeadscaleNode, staleDays: Int, postures: [[String]] = []) -> Bool {
             switch self {
             case .all: return true
             case .stale: return n.isStale(days: staleDays)
             case .expiring: return (n.keyDaysLeft() ?? .max) <= 14
             // Tagged devices don't expire by default; a person's device should.
             case .noExpiry: return n.allTags.isEmpty && n.expiryDate == nil
+            case .failsPosture: return postures.contains { n.meets($0) == false }
             }
         }
     }
@@ -304,7 +308,8 @@ struct DevicesPanel: View {
     }
 
     private var nodesPanel: some View {
-        let shown = store.headscaleNodes.filter { deviceFilter.includes($0, staleDays: staleDays) }
+        let postures = store.model.postureOrder.map { (name: $0, conditions: store.model.postures[$0] ?? []) }
+        let shown = store.headscaleNodes.filter { deviceFilter.includes($0, staleDays: staleDays, postures: postures.map(\.conditions)) }
         let tailscale = store.currentWorkspace.kind == .tailscale
         return panel {
             HStack {
@@ -314,7 +319,8 @@ struct DevicesPanel: View {
                 Picker("", selection: $deviceFilter) {
                     ForEach(DeviceFilter.allCases, id: \.self) { f in
                         let label = f.label(staleDays: staleDays)
-                        Text(f == .all ? label : "\(label) (\(store.headscaleNodes.filter { f.includes($0, staleDays: staleDays) }.count))").tag(f)
+                        let count = store.headscaleNodes.filter { f.includes($0, staleDays: staleDays, postures: postures.map(\.conditions)) }.count
+                        Text(f == .all ? label : "\(label) (\(count))").tag(f)
                     }
                 }
                 .labelsHidden()
@@ -349,6 +355,19 @@ struct DevicesPanel: View {
                 .disabled(busy)
                 .help("Refresh")
             }
+            if let saved = store.serverDataSaved {
+                Label {
+                    Text("Saved \(saved.formatted(.relative(presentation: .named))) — waiting for \(serverName) to answer…")
+                } icon: { Image(systemName: "clock.arrow.circlepath") }
+                    .font(.system(size: 11))
+                    .foregroundStyle(Theme.textSecondary)
+            }
+            if let error = store.postureAttributesError, !postures.isEmpty {
+                Label(error, systemImage: "exclamationmark.triangle")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Theme.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             if shown.isEmpty {
                 Text("No devices match.").font(.system(size: 11.5)).foregroundStyle(Theme.textSecondary)
             } else if deviceFilter == .noExpiry {
@@ -378,6 +397,9 @@ struct DevicesPanel: View {
                             .foregroundStyle(Theme.textSecondary)
                     }
                     Spacer()
+                    ForEach(postures, id: \.name) { p in
+                        postureChip(String(p.name.dropFirst("posture:".count)), node.meets(p.conditions))
+                    }
                     if node.allTags.isEmpty, node.expiryDate == nil {
                         Text("no key expiry")
                             .font(.system(size: 10.5))
@@ -416,8 +438,24 @@ struct DevicesPanel: View {
                     .disabled(client == nil || busy)
                 }
                 .padding(.vertical, 2)
+                .help(attributeSummary(node))
             }
         }
+    }
+
+    private func postureChip(_ name: String, _ meets: Bool?) -> some View {
+        let color = meets == true ? Theme.green : meets == false ? Theme.red : Theme.textSecondary
+        return Text(verbatim: name + (meets == true ? " ✓" : meets == false ? " ✗" : " ?"))
+            .font(.system(size: 10, weight: .semibold, design: .monospaced))
+            .foregroundStyle(color)
+            .padding(.horizontal, 5).padding(.vertical, 1.5)
+            .background(RoundedRectangle(cornerRadius: 4).fill(color.opacity(0.12)))
+            .help(meets == nil ? "Unknown: this device's posture attributes aren't loaded" : meets! ? "Meets posture:\(name)" : "Fails posture:\(name)")
+    }
+
+    private func attributeSummary(_ node: HeadscaleNode) -> String {
+        guard node.attributes != nil else { return "" }
+        return node.postureAttributes.sorted { $0.key < $1.key }.map { "\($0.key): \($0.value)" }.joined(separator: "\n")
     }
 
     private func run(_ work: @escaping (PolicyServer) async throws -> String) {

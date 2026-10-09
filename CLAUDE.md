@@ -166,6 +166,20 @@ Swift Package (no Xcode project). All source in `Sources/TailscaleACL/`:
   SOFTWARE "tailnode" and a FINGERPRINT, like Tailscale's own.
 - Devices panel: stale days (`staleDeviceDays`), "Key never expires"
   (untagged, no expiry), `PolicyServer.setKeyExpiry` (Tailscale only).
+- Posture: `knownPostureAttributes` (RuleConditions.swift, Huntress values)
+  backs `lintPostureValues` (fix `.replacePostureCondition`).
+  `PolicyServer.postureAttributes` (Tailscale `device/{id}/attributes`, one
+  request per device, 6 at a time, at most every 5 min) fills
+  `HeadscaleNode.attributes`; with them `node.evaluator(m)` is exact, so
+  `accessChanges` shows posture losses. "huntress" template.
+- `ServerCache.swift`: last devices/users/policy changes per workspace
+  (<data>/server-cache/), loaded on open (`serverDataSaved` until refreshed).
+- `AccessReview.swift` + `AccessReviewScreen`: `reviewItems` (groups + rules,
+  keyed by a content hash), decisions in <data>/reviews/, report,
+  `applyReviewRemovals`. `WhoCanReach.swift`: `whoCanReach` expands sources
+  to people, `reachTargetIDs` adds covered addresses; sheet on Access Map.
+  Data folders snapshots/server-cache/reviews are in `dataFiles` and
+  `Backup.isAllowedPath`.
 - `RuleConditions.swift`: posture condition grammar/evaluation and the
   `// expires: YYYY-MM-DD` rule comment (parsed out of `comments` into
   `expires`). `Evaluator(sourceAttributes:attributesComplete:)`: nil

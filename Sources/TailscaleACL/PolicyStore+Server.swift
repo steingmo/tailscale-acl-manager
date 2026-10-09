@@ -66,11 +66,31 @@ extension PolicyStore {
         return serverName(kind: ws.kind, serverURL: ws.serverURL, tailnet: ws.tailnet ?? "-")
     }
 
+    /// Show what the server returned last time, until a refresh replaces it.
+    func loadServerCache() {
+        guard let cache = ServerCache.load(currentWorkspaceID) else { return }
+        let users = ServerUsers(accounts: cache.accounts)
+        headscaleNodes = cache.nodes
+        serverAccounts = cache.accounts
+        serverLogins = cache.accounts.isEmpty ? nil : users.logins
+        serverUserAutogroups = users.autogroups
+        policyChanges = cache.policyChanges
+        serverDataSaved = cache.saved
+    }
+
+    func saveServerCache() {
+        ServerCache(saved: Date(), nodes: headscaleNodes, accounts: serverAccounts, policyChanges: policyChanges)
+            .save(currentWorkspaceID)
+    }
+
     /// Reload devices from the current workspace's server, if one is configured.
     func refreshNodes() async throws {
         guard let client = serverClient() else { return }
         let workspace = currentWorkspaceID
-        let nodes = try await client.listNodes()
+        var nodes = try await client.listNodes()
+        // Keep the attributes already loaded until fresh ones arrive.
+        let known = Dictionary(headscaleNodes.map { ($0.id, $0.attributes) }, uniquingKeysWith: { a, _ in a })
+        for i in nodes.indices { nodes[i].attributes = known[nodes[i].id] ?? nil }
         if workspace == currentWorkspaceID { headscaleNodes = nodes }
         var users: ServerUsers?
         var usersError: Error?
@@ -80,6 +100,57 @@ extension PolicyStore {
             serverAccounts = users?.accounts ?? []
             serverLogins = users?.logins
             serverUserAutogroups = users?.autogroups ?? [:]
+        }
+        // Fetched at most every 5 minutes, and for devices that are new since.
+        let stale = postureAttributesFetched.map { Date().timeIntervalSince($0) > 300 } ?? true
+        if currentWorkspace.kind == .tailscale,
+           stale || (postureAttributesError == nil && nodes.contains { $0.attributes == nil }) {
+            await loadPostureAttributes(client, nodes: nodes, workspace: workspace)
+        }
+        guard workspace == currentWorkspaceID else { return }
+        serverDataSaved = nil
+        saveServerCache()
+    }
+
+    /// Tailscale has one request per device for posture attributes (Huntress,
+    /// custom:…), so a few run at a time. Without the scope, devices keep
+    /// no attributes and posture-gated rules stay conditional.
+    private func loadPostureAttributes(_ client: PolicyServer, nodes: [HeadscaleNode], workspace: UUID) async {
+        var loaded: [String: [String: String]] = [:]
+        var failure: Error?
+        await withTaskGroup(of: (String, Result<[String: String]?, Error>).self) { group in
+            var next = 0
+            func start() {
+                guard next < nodes.count, failure == nil else { return }
+                let id = nodes[next].id
+                next += 1
+                group.addTask {
+                    do { return (id, .success(try await client.postureAttributes(nodeID: id))) } catch { return (id, .failure(error)) }
+                }
+            }
+            for _ in 0..<6 { start() }
+            for await (id, result) in group {
+                switch result {
+                case .success(let attrs): loaded[id] = attrs
+                case .failure(let error): failure = failure ?? error
+                }
+                start()
+            }
+        }
+        guard workspace == currentWorkspaceID else { return }
+        postureAttributesFetched = Date()
+        if let failure {
+            let denied = (failure as? ServerError).map { $0.status == 403 || $0.status == 401 } ?? false
+            postureAttributesError = denied
+                ? "Device posture isn't loaded: give the OAuth client the devices:posture_attributes:read scope."
+                : "Device posture isn't loaded: \(failure.localizedDescription)"
+            return
+        }
+        postureAttributesError = nil
+        headscaleNodes = headscaleNodes.map { n in
+            var n = n
+            if let attrs = loaded[n.id] { n.attributes = attrs }
+            return n
         }
     }
 }

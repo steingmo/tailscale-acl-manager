@@ -31,6 +31,7 @@ enum Screen: String, CaseIterable, Identifiable {
     case routes = "Routes"
     case traffic = "Traffic"
     case problems = "Problems"
+    case accessReview = "Access Review"
     case server = "Server"
 
     var id: String { rawValue }
@@ -39,7 +40,7 @@ enum Screen: String, CaseIterable, Identifiable {
     static let groups: [(title: String, screens: [Screen])] = [
         ("See", [.accessMap, .accessSimulator, .ssh, .traffic]),
         ("Edit", [.policyEditor, .visualBuilder, .routes]),
-        ("Check", [.tests, .problems]),
+        ("Check", [.tests, .problems, .accessReview]),
         ("Connect", [.server]),
     ]
 
@@ -54,6 +55,7 @@ enum Screen: String, CaseIterable, Identifiable {
         case .routes: return "arrow.triangle.branch"
         case .traffic: return "chart.bar.xaxis"
         case .problems: return "exclamationmark.triangle"
+        case .accessReview: return "checklist.checked"
         case .server: return "network"
         }
     }
@@ -362,6 +364,7 @@ struct RootView: View {
         case .routes: RoutesScreen()
         case .traffic: TrafficScreen()
         case .problems: ProblemsScreen()
+        case .accessReview: AccessReviewScreen()
         case .server: ServerScreen()
         }
     }

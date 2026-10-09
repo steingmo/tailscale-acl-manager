@@ -289,6 +289,12 @@ extension PolicyStore {
             }
         case .setTagOwners(let tag, let owners):
             mutate { tree in tree["tagOwners"]?[tag] = stringArrayJSON(owners) }
+        case .replacePostureCondition(let posture, let index, let text):
+            mutate { tree in
+                guard var conditions = tree["postures"]?[posture]?.elements, conditions.indices.contains(index) else { return }
+                conditions[index].value = .string(text)
+                tree["postures"]?[posture] = .array(conditions)
+            }
         case .moveToGroup(let section, let indices, let group, let members):
             mutate { tree in
                 guard var rules = tree[section]?.elements, let first = indices.min(),

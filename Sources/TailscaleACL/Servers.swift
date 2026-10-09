@@ -27,6 +27,8 @@ protocol PolicyServer: AnyObject {
     func setApprovedRoutes(nodeID: String, routes: [String]) async throws
     /// Expire the device's key now: it must log in again to reconnect.
     func expireNode(nodeID: String) async throws
+    /// The device's posture attributes; nil when the server keeps none (Headscale).
+    func postureAttributes(nodeID: String) async throws -> [String: String]?
     /// Turn the device's key expiry off or back on (Tailscale only).
     func setKeyExpiry(nodeID: String, disabled: Bool) async throws
     /// Remove the device from the tailnet.
@@ -77,7 +79,7 @@ struct ServerUsers {
 }
 
 /// A user on the control server.
-struct ServerAccount: Identifiable, Equatable {
+struct ServerAccount: Identifiable, Equatable, Codable {
     var id: String
     /// How a policy names the user: their email, or "name@" on Headscale.
     var login: String
@@ -121,10 +123,11 @@ extension PolicyServer {
     func restoreUser(id: String) async throws { throw unsupported("suspending users") }
     func flowRecords(from: Date, to: Date) async throws -> [FlowRecord]? { nil }
     func setKeyExpiry(nodeID: String, disabled: Bool) async throws { throw unsupported("turning key expiry off") }
+    func postureAttributes(nodeID: String) async throws -> [String: String]? { nil }
     func credentialInfo() async throws -> CredentialInfo? { nil }
 }
 
-struct PolicyChange: Identifiable {
+struct PolicyChange: Identifiable, Codable {
     var date: Date
     var who: String
     /// How it was changed, e.g. "admin console" or "API".
@@ -323,6 +326,18 @@ final class TailscaleClient: PolicyServer {
 
     func expireNode(nodeID: String) async throws {
         _ = try await request("POST", "device/\(nodeID)/expire")
+    }
+
+    /// Needs the devices:posture_attributes:read scope. Numbers and booleans
+    /// become strings ("80", "true"), as posture conditions compare them.
+    func postureAttributes(nodeID: String) async throws -> [String: String]? {
+        let (data, _) = try await request("GET", "device/\(nodeID)/attributes")
+        let attrs = (try JSONSerialization.jsonObject(with: data) as? [String: Any])?["attributes"] as? [String: Any] ?? [:]
+        return attrs.mapValues { v in
+            if let b = v as? Bool, CFGetTypeID(v as CFTypeRef) == CFBooleanGetTypeID() { return b ? "true" : "false" }
+            if let n = v as? NSNumber { return n.stringValue }
+            return "\(v)"
+        }
     }
 
     /// Turning expiry back on restores the original expiry time, which may have passed.

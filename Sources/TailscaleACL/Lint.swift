@@ -27,6 +27,7 @@ struct LintFix: Identifiable {
         case removeGroupMember(group: String, member: String)
         case setSSHCheck(index: Int)
         case setTagOwners(tag: String, owners: [String])
+        case replacePostureCondition(posture: String, index: Int, with: String)
         /// New group with `members`; the first rule's src becomes the group, the others are deleted.
         case moveToGroup(section: String, indices: [Int], group: String, members: [String])
     }
@@ -222,6 +223,7 @@ func lintPolicy(_ m: PolicyModel, now: Date = Date()) -> [LintIssue] {
             issues.append(.init(severity: .error, title: "Invalid posture condition",
                                 detail: "\(name) has \"\(c)\" — expected e.g. node:os == 'macos', node:tsVersion >= '1.60', or node:os IN ['macos', 'ios'].", path: "postures[\(name)]"))
         }
+        issues += lintPostureValues(name, m.postures[name] ?? [])
         if !postureRefs.contains(where: { $0.name == name }) {
             issues.append(.init(severity: .warning, title: "Unused posture",
                                 detail: "\(name) is defined but no rule or defaultSrcPosture requires it.", path: "postures[\(name)]"))
@@ -319,6 +321,49 @@ func lintPolicy(_ m: PolicyModel, now: Date = Date()) -> [LintIssue] {
         if a.severity != b.severity { return a.severity == .error }
         return a.title < b.title
     }
+}
+
+/// Integration attributes (Huntress) that don't exist, and values they never
+/// report — e.g. Tailscale's own example's huntress:defenderStatus == 'Healthy',
+/// which no device meets.
+func lintPostureValues(_ name: String, _ conditions: [String]) -> [LintIssue] {
+    var issues: [LintIssue] = []
+    for (i, text) in conditions.enumerated() {
+        guard let c = PostureCondition(text) else { continue }
+        let path = "postures[\(name)]"
+        guard let allowed = knownPostureAttributes[c.attribute] else {
+            let namespace = c.attribute.split(separator: ":").first.map(String.init) ?? ""
+            let known = knownPostureAttributes.keys.filter { $0.hasPrefix(namespace + ":") }.sorted()
+            if !known.isEmpty {
+                let fix = known.first { $0.caseInsensitiveCompare(c.attribute) == .orderedSame }
+                issues.append(.init(severity: .error, title: "Unknown \(namespace) attribute",
+                                    detail: "\(name) checks \(c.attribute), which \(namespace) doesn't set, so no device has it. Known: \(known.joined(separator: ", ")).",
+                                    fixes: fix.map { [.init(label: "Use \($0)", action: .replacePostureCondition(posture: name, index: i, with: text.replacingOccurrences(of: c.attribute, with: $0)))] } ?? [],
+                                    path: path))
+            }
+            continue
+        }
+        guard ["==", "!=", "IN", "NOT IN"].contains(c.op) else { continue }
+        let bad = c.values.filter { !allowed.contains($0) }
+        guard !bad.isEmpty else { continue }
+        // == or IN with nothing reachable: no device ever meets the posture.
+        let never = (c.op == "==" || c.op == "IN") && bad.count == c.values.count
+        var fixed = text
+        for b in bad {
+            if let good = likelyPostureValue(b, allowed: allowed) {
+                fixed = fixed.replacingOccurrences(of: "'\(b)'", with: "'\(good)'")
+                    .replacingOccurrences(of: "\"\(b)\"", with: "\"\(good)\"")
+            }
+        }
+        let quoted = bad.map { "'\($0)'" }.joined(separator: ", ")
+        issues.append(.init(severity: never ? .error : .warning,
+                            title: never ? "Posture no device can meet" : "Value never reported",
+                            detail: "\(name): \(c.attribute) is never \(quoted). It's one of \(allowed.joined(separator: ", ")) (case matters)."
+                                + (never ? " As written, every rule requiring \(name) blocks everyone." : ""),
+                            fixes: fixed == text ? [] : [.init(label: "Change to \(fixed)", action: .replacePostureCondition(posture: name, index: i, with: fixed))],
+                            path: path))
+    }
+    return issues
 }
 
 // MARK: - Access given to people one by one

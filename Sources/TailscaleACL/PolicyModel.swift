@@ -108,6 +108,11 @@ struct PolicyModel {
 
     init() {}
 
+    /// Some rule (or defaultSrcPosture) requires a device posture.
+    var usesPostures: Bool {
+        !defaultSrcPosture.isEmpty || rules.contains { !$0.srcPosture.isEmpty } || grants.contains { !$0.srcPosture.isEmpty }
+    }
+
     init(tree: JSON) {
         derpRegions = parseDERPMap(tree)
         if let members = tree["groups"]?.members {

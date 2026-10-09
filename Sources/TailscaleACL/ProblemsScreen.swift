@@ -28,7 +28,8 @@ struct ProblemsScreen: View {
                         .foregroundStyle(Theme.textSecondary)
                     Text(store.headscaleNodes.isEmpty
                          ? "Connect a server to also check the policy against your real devices."
-                         : "Device checks are using \(store.headscaleNodes.count) devices from \(store.serverDisplayName).")
+                         : "Device checks are using \(store.headscaleNodes.count) devices from \(store.serverDisplayName)"
+                            + (store.serverDataSaved.map { ", saved \($0.formatted(.relative(presentation: .named)))." } ?? "."))
                         .font(.system(size: 10.5))
                         .foregroundStyle(Theme.textSecondary.opacity(0.8))
                 }

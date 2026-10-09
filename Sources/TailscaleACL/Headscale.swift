@@ -3,8 +3,8 @@ import Security
 
 /// A node as returned by Headscale's `GET /api/v1/node`. Everything is
 /// optional so older and newer server versions both decode.
-struct HeadscaleNode: Decodable, Identifiable {
-    struct User: Decodable {
+struct HeadscaleNode: Codable, Identifiable {
+    struct User: Codable {
         var name: String?
         var email: String?
     }
@@ -24,6 +24,9 @@ struct HeadscaleNode: Decodable, Identifiable {
     var expiry: String?        // key expiry; nil or year 1 = never
     var os: String?            // Tailscale only
     var clientVersion: String? // Tailscale only, e.g. "1.76.1-t1234abcd"
+    /// Tailscale: every posture attribute (node:, huntress:, custom:…), when
+    /// loaded; then the set is complete and a missing attribute is unset.
+    var attributes: [String: String]? = nil
 
     var displayName: String {
         if let g = givenName, !g.isEmpty { return g }
@@ -54,12 +57,24 @@ struct HeadscaleNode: Decodable, Identifiable {
     /// Posture attributes known from the device list ("node:os",
     /// "node:tsVersion"); others (custom:…, node:osVersion…) stay unknown.
     var postureAttributes: [String: String] {
-        var attrs: [String: String] = [:]
-        if let os, !os.isEmpty { attrs["node:os"] = os.lowercased() }
-        if let v = clientVersion?.split(separator: "-").first, !v.isEmpty {
+        var attrs = attributes ?? [:]
+        if attrs["node:os"] == nil, let os, !os.isEmpty { attrs["node:os"] = os.lowercased() }
+        if attrs["node:tsVersion"] == nil, let v = clientVersion?.split(separator: "-").first, !v.isEmpty {
             attrs["node:tsVersion"] = v.hasPrefix("v") ? String(v.dropFirst()) : String(v)
         }
         return attrs
+    }
+
+    /// An evaluator for this device as the source: exact when its attributes
+    /// were loaded, otherwise posture-gated rules count as conditional.
+    func evaluator(_ m: PolicyModel) -> Evaluator {
+        Evaluator(model: m, sourceAttributes: attributes == nil ? nil : postureAttributes,
+                  attributesComplete: attributes != nil)
+    }
+
+    /// Whether the device meets a posture; nil when that can't be told.
+    func meets(_ conditions: [String]) -> Bool? {
+        postureHolds(conditions, attrs: postureAttributes, complete: attributes != nil)
     }
 
     /// Offline and not seen for `days` days (or never).
