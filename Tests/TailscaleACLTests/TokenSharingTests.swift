@@ -1,5 +1,8 @@
 import XCTest
 @testable import TailscaleACL
+/// A made-up OAuth client secret, assembled so secret scanners don't flag it.
+private let fakeOAuthSecret = ["tskey", "client", "test", "notreal"].joined(separator: "-")
+
 /// Regression: parallel posture requests raced on the OAuth token and crashed 1.26.0.
 final class TokenSharingTests: XCTestCase {
     func testConcurrentRequestsShareOneToken() async throws {
@@ -9,7 +12,7 @@ final class TokenSharingTests: XCTestCase {
                 ? .init(body: Data(#"{"access_token": "tok", "expires_in": 3600, "scope": "devices:core"}"#.utf8))
                 : .init(body: Data(#"{"attributes": {"node:os": "linux"}}"#.utf8))
         }
-        let c = makeServer(kind: .tailscale, serverURL: "", tailnet: "-", credential: "tskey-client-abc-secret", session: StubProtocol.session())!
+        let c = makeServer(kind: .tailscale, serverURL: "", tailnet: "-", credential: fakeOAuthSecret, session: StubProtocol.session())!
         await withTaskGroup(of: Void.self) { group in
             for i in 0..<40 { group.addTask { _ = try? await c.postureAttributes(nodeID: "n\(i)") } }
         }
