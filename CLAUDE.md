@@ -8,7 +8,8 @@ clients implement (`HeadscaleClient` in `Headscale.swift`, `TailscaleClient`
 in `Servers.swift`) — screens only use `PolicyStore.serverClient()`, never a
 concrete client. Tailscale specifics: HuJSON via `Accept: application/hujson`,
 ETag/If-Match on push (412 → refused), `acl/validate` shown in the review,
-OAuth client secrets (tskey-client-<id>-…) exchanged at `oauth/token`, device
+OAuth client secrets (tskey-client-<id>-…) exchanged at `oauth/token` (token
+state behind `tokenLock`, one shared fetch — requests run concurrently), device
 ids are `nodeId`. Headscale pushes need `policy.mode: database`.
 `ServerScreen.swift` is the Server screen (connection, pull, push history,
 activity), with `ServerPanels.swift` (auth keys, recent policy changes,

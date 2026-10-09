@@ -223,7 +223,11 @@ final class TailscaleClient: PolicyServer {
     let tailnet: String
     private let credential: String
     private let session: URLSession
+    // Requests run concurrently (posture attributes, 6 at a time), so the
+    // token state is behind a lock and parallel requests share one fetch.
+    private let tokenLock = NSLock()
     private var accessToken: (value: String, expires: Date)?
+    private var tokenFetch: Task<String, Error>?
     /// Scopes Tailscale granted the OAuth client's token.
     private var grantedScopes: [String]?
     /// ETag of the policy last read. Sent as If-Match on the next write, so
@@ -391,7 +395,7 @@ final class TailscaleClient: PolicyServer {
     func credentialInfo() async throws -> CredentialInfo? {
         if oauthClientID != nil {
             _ = try await bearerToken()
-            return CredentialInfo(kind: "OAuth client", scopes: grantedScopes, expires: nil)
+            return CredentialInfo(kind: "OAuth client", scopes: tokenLock.withLock { grantedScopes }, expires: nil)
         }
         var info = CredentialInfo(kind: "Personal API access token", scopes: ["all"], expires: nil)
         if credential.hasPrefix("tskey-api-"), let id = credential.dropFirst("tskey-api-".count).split(separator: "-").first {
@@ -515,7 +519,22 @@ final class TailscaleClient: PolicyServer {
 
     private func bearerToken() async throws -> String {
         guard let clientID = oauthClientID else { return credential }
-        if let token = accessToken, token.expires > Date().addingTimeInterval(60) { return token.value }
+        let fetch: Task<String, Error> = tokenLock.withLock {
+            if let token = accessToken, token.expires > Date().addingTimeInterval(60) { return Task { token.value } }
+            if let running = tokenFetch { return running }
+            let task = Task { try await self.fetchToken(clientID) }
+            tokenFetch = task
+            return task
+        }
+        do {
+            return try await fetch.value
+        } catch {
+            tokenLock.withLock { tokenFetch = nil }   // the next request tries again
+            throw error
+        }
+    }
+
+    private func fetchToken(_ clientID: String) async throws -> String {
         var req = URLRequest(url: URL(string: Self.base + "oauth/token")!)
         req.httpMethod = "POST"
         req.timeoutInterval = 15
@@ -532,8 +551,11 @@ final class TailscaleClient: PolicyServer {
             var scope: String?
         }
         let token = try JSONDecoder().decode(Token.self, from: data)
-        accessToken = (token.access_token, Date().addingTimeInterval(token.expires_in ?? 3600))
-        grantedScopes = token.scope.map { $0.split(separator: " ").map(String.init) }
+        tokenLock.withLock {
+            accessToken = (token.access_token, Date().addingTimeInterval(token.expires_in ?? 3600))
+            grantedScopes = token.scope.map { $0.split(separator: " ").map(String.init) }
+            tokenFetch = nil
+        }
         return token.access_token
     }
 
