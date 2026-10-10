@@ -45,6 +45,9 @@ fi
 # --- Tests -------------------------------------------------------------------
 # Built outside the project folder: iCloud-synced folders break test bundle signing.
 swift test --scratch-path "$HOME/Library/Caches/tailscale-acl-test-build"
+# Again optimized, like the shipped app: 1.26.0's launch crash only happened
+# in release builds.
+swift test -c release -Xswiftc -enable-testing --scratch-path "$HOME/Library/Caches/tailscale-acl-release-test"
 
 # --- Bump version + build ----------------------------------------------------
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" Info.plist
@@ -54,6 +57,28 @@ swift test --scratch-path "$HOME/Library/Caches/tailscale-acl-test-build"
 
 ZIP="dist/TailscaleACL-$VERSION.zip"
 [[ -f "$ZIP" ]] || { echo "error: expected $ZIP was not produced." >&2; exit 1; }
+
+# --- Smoke test: the built app must start and stay up ------------------------
+# Throwaway data (one workspace, no server) and launch-only defaults, so it
+# never touches real workspaces, the Keychain migration, Touch ID, or the
+# network. Its window shows for a few seconds.
+SMOKE_DIR="$(mktemp -d)"
+cat > "$SMOKE_DIR/workspaces.json" <<'JSON'
+[{"id": "5A0CE000-0000-4000-8000-000000000001", "name": "Smoke test", "serverURL": "",
+  "policy": "{\"groups\": {\"group:eng\": [\"amy@example.com\"]}, \"ipsets\": {\"ipset:a\": [\"add 10.0.0.0/8\", \"remove 10.1.0.0/16\"]}, \"grants\": [{\"src\": [\"group:eng\"], \"dst\": [\"ipset:a\"], \"ip\": [\"tcp:443\"]}]}"}]
+JSON
+TAILSCALE_ACL_DATA_DIR="$SMOKE_DIR" "Tailscale ACL.app/Contents/MacOS/TailscaleACL" \
+  -lockApp NO -encryptData NO -gettingStartedDone YES -SUEnableAutomaticChecks NO >/dev/null 2>&1 &
+SMOKE_PID=$!
+sleep 10
+if ! kill -0 $SMOKE_PID 2>/dev/null; then
+  rm -rf "$SMOKE_DIR"
+  echo "error: the built app quit or crashed within 10 s of launch (see Console ▸ Crash Reports)." >&2
+  exit 1
+fi
+kill $SMOKE_PID; wait $SMOKE_PID 2>/dev/null || true
+rm -rf "$SMOKE_DIR"
+echo "smoke test: the app started and stayed up."
 SHA256="$(shasum -a 256 "$ZIP" | awk '{print $1}')"
 echo "sha256: $SHA256"
 

@@ -184,3 +184,56 @@ final class CacheAndReviewStoreTests: XCTestCase {
         XCTAssertEqual(store.model.grants.map(\.src), [["group:eng"]], "eve's rule is deleted, and so is the rule left without sources")
     }
 }
+
+final class PostureReportTests: XCTestCase {
+    let m = model("""
+    {"groups": {"group:mgmt": ["amy@x.com", "bob@x.com"]},
+     "postures": {"posture:huntress": ["huntress:firewallStatus == 'Enabled'", "huntress:defenderStatus IN ['Protected', 'Incompatible']"]},
+     "grants": [{"src": ["group:mgmt"], "dst": ["10.0.0.0/8"], "ip": ["*"], "srcPosture": ["posture:huntress"]}]}
+    """)
+
+    func device(_ id: String, _ user: String?, _ attrs: [String: String]?, tags: [String]? = nil) -> HeadscaleNode {
+        var n = HeadscaleNode(id: id, name: "dev-\(id)", ipAddresses: ["100.64.0.\(id)"], tags: tags)
+        if let user { n.user = .init(name: user, email: user) }
+        n.attributes = attrs
+        return n
+    }
+
+    func testScopeReasonsAndNotes() {
+        let nodes = [
+            device("1", "amy@x.com", ["huntress:firewallStatus": "Enabled", "huntress:defenderStatus": "Protected"]),
+            device("2", "amy@x.com", ["huntress:firewallStatus": "Disabled", "huntress:defenderStatus": "Unhealthy"]),
+            device("3", "bob@x.com", ["node:os": "macos"]),               // not in Huntress
+            device("4", "bob@x.com", nil),                                // not loaded
+            device("5", "eve@x.com", ["huntress:firewallStatus": "Disabled"]),  // not in group:mgmt
+            device("6", nil, [:], tags: ["tag:server"]),
+        ]
+        XCTAssertEqual(postureScope(m, posture: "posture:huntress", nodes: nodes)?.map(\.id), ["1", "2", "3", "4"])
+        let checks = postureReport(m, posture: "posture:huntress", nodes: nodes)
+        XCTAssertEqual(checks.map(\.id), ["2", "3", "4", "1"], "fails first, then unknown, then passes")
+        XCTAssertEqual(checks[0].reasons, [
+            "Turn on the firewall. (huntress:firewallStatus is Disabled, needs == Enabled)",
+            "Open Windows Security and fix Microsoft Defender. (huntress:defenderStatus is Unhealthy, needs IN Protected, Incompatible)",
+        ])
+        XCTAssertEqual(checks[1].reasons.count, 1, "one reason for every missing Huntress attribute")
+        XCTAssertTrue(checks[1].reasons[0].hasPrefix("Install or repair the Huntress agent"))
+        XCTAssertTrue(checks[1].reasons[0].hasSuffix("(huntress:firewallStatus, huntress:defenderStatus aren't set)"))
+        XCTAssertEqual(checks[2].status, .unknown)
+
+        let everyone = postureReport(m, posture: "posture:huntress", nodes: nodes, allPeople: true)
+        XCTAssertEqual(everyone.count, 5, "every person's device; tagged devices are left out")
+
+        let notes = postureNotes(checks, posture: "posture:huntress")
+        XCTAssertTrue(notes.contains("## amy@x.com"))
+        XCTAssertTrue(notes.contains("- **dev-2**: Turn on the firewall."))
+        XCTAssertFalse(notes.contains("dev-1"), "passing devices aren't mentioned")
+        XCTAssertTrue(postureReportCSV(checks).hasPrefix("device,owner,os,status,reasons\n\"dev-2\",\"amy@x.com\""))
+    }
+
+    func testUnusedPostureChecksEveryPersonsDevice() {
+        let unused = model(#"{"postures": {"posture:p": ["huntress:firewallStatus == 'Enabled'"]}}"#)
+        let nodes = [device("1", "a@x.com", ["huntress:firewallStatus": "Enabled"]), device("2", nil, [:], tags: ["tag:s"])]
+        XCTAssertNil(postureScope(unused, posture: "posture:p", nodes: nodes))
+        XCTAssertEqual(postureReport(unused, posture: "posture:p", nodes: nodes).map(\.status), [.passes])
+    }
+}

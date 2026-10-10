@@ -244,6 +244,7 @@ struct DevicesPanel: View {
     @State private var renaming: HeadscaleNode?
     @State private var newName = ""
     @AppStorage("staleDeviceDays") private var staleDays = 30
+    @State private var postureReport: String?
 
     enum DeviceFilter: CaseIterable {
         case all, stale, expiring, noExpiry, failsPosture
@@ -287,6 +288,9 @@ struct DevicesPanel: View {
     var body: some View {
         nodesPanel
             .sheet(item: $editingTags) { DeviceTagsSheet(node: $0) }
+            .sheet(isPresented: Binding(get: { postureReport != nil }, set: { if !$0 { postureReport = nil } })) {
+                PostureReportSheet(posture: postureReport ?? "")
+            }
             .confirmationDialog(nodeActionTitle, isPresented: Binding(get: { nodeAction != nil },
                                                                       set: { if !$0 { nodeAction = nil } })) {
                 if let action = nodeAction {
@@ -338,6 +342,11 @@ struct DevicesPanel: View {
                     Button("Delete \(shown.count) stale…") { nodeAction = NodeAction(kind: .delete, nodes: shown) }
                         .font(.system(size: 11))
                         .disabled(client == nil || busy)
+                }
+                if let first = postures.first?.name {
+                    Button("Posture report…") { postureReport = first }
+                        .font(.system(size: 11))
+                        .help("Who fails a posture, why, and what they can do — before you enforce it")
                 }
                 if deviceFilter == .noExpiry, tailscale, !shown.isEmpty {
                     Button("Turn on expiry for \(shown.count)…") { nodeAction = NodeAction(kind: .expiryOn, nodes: shown) }

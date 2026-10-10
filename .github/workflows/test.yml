@@ -12,7 +12,7 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       - name: Run tests
         run: swift test
-      # Release builds run the optimizer, which can fail where debug builds
-      # don't (a Swift 6.4 crash only surfaced in release.sh).
-      - name: Release build
-        run: swift build -c release
+      # Again optimized, like the shipped app: the optimizer can break builds
+      # (a Swift 6.4 crash) and behavior (1.26.0's launch crash) that debug hides.
+      - name: Release tests
+        run: swift test -c release -Xswiftc -enable-testing

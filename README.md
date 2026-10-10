@@ -150,7 +150,8 @@ Use `-` to read the policy from standard input.
   their posture attributes (`devices:posture_attributes:read`), the Devices
   panel shows pass/fail per posture, and the push review shows exactly who
   loses access when you add `srcPosture`. A "Require Huntress protection"
-  template adds the posture to the grants you pick.
+  template adds the posture to the grants you pick. Devices ▸ Posture report
+  lists who fails it, why, and what to do — export CSV or a note per person.
 - **Works when the server is slow** — the last devices, users, and policy
   changes show at once (encrypted on disk) while fresh ones load.
 - **Access Review** — sign off every group and rule as still needed or to

@@ -173,6 +173,8 @@ Swift Package (no Xcode project). All source in `Sources/TailscaleACL/`:
   request per device, 6 at a time, at most every 5 min) fills
   `HeadscaleNode.attributes`; with them `node.evaluator(m)` is exact, so
   `accessChanges` shows posture losses. "huntress" template.
+  `PostureReport.swift`: `postureScope` (sources of rules requiring the
+  posture), `postureReport` (reasons + hints), CSV and per-person notes.
 - `ServerCache.swift`: last devices/users/policy changes per workspace
   (<data>/server-cache/), loaded on open (`serverDataSaved` until refreshed).
 - `AccessReview.swift` + `AccessReviewScreen`: `reviewItems` (groups + rules,
@@ -255,7 +257,9 @@ swift test --scratch-path "$HOME/Library/Caches/tailscale-acl-test-build"
 The scratch path must be outside the project: iCloud-synced folders stamp
 xattrs that make codesign reject the test bundle. Don't use `$TMPDIR` either:
 macOS purges old files there, which corrupts the cached Sparkle artifact. `release.sh` runs the suite
-first and stops on failure; GitHub Actions (`.github/workflows/test.yml`) runs
+(debug, then release with `-enable-testing`) and launches the built app for
+10 s with a throwaway data folder (`-lockApp NO …` argument defaults, so
+real settings stay untouched), stopping on any failure; GitHub Actions (`.github/workflows/test.yml`) runs
 it on every push to main. Store tests set `TAILSCALE_ACL_DATA_DIR` to a temp
 folder and pre-seed `workspaces.json`, so they never touch real app data or
 the Keychain migration — keep it that way for new store tests.
