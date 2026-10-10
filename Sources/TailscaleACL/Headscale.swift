@@ -117,12 +117,12 @@ struct HeadscaleNode: Codable, Identifiable {
 /// Client for the Headscale REST API (`/api/v1`, Bearer API key).
 final class HeadscaleClient: PolicyServer {
     let baseURL: URL
-    private let apiKey: String
+    private let apiKey: Credential
     private let session: URLSession
 
     init(baseURL: URL, apiKey: String, session: URLSession = .shared) {
         self.baseURL = baseURL
-        self.apiKey = apiKey
+        self.apiKey = Credential(stored: apiKey)
         self.session = session
     }
 
@@ -228,14 +228,16 @@ final class HeadscaleClient: PolicyServer {
     /// The API key's expiry, found by its prefix ("hskey-api-<prefix>-…", or
     /// "<prefix>.…" for keys made by older Headscale versions).
     func credentialInfo() async throws -> CredentialInfo? {
-        let prefix = apiKey.hasPrefix("hskey-api-")
-            ? String(apiKey.dropFirst("hskey-api-".count).prefix(12))
-            : String(apiKey.split(separator: ".").first ?? "")
+        let key = try await apiKey.value()
+        let prefix = key.hasPrefix("hskey-api-")
+            ? String(key.dropFirst("hskey-api-".count).prefix(12))
+            : String(key.split(separator: ".").first ?? "")
         let data = try await send("GET", "apikey")
         let keys = (try JSONSerialization.jsonObject(with: data) as? [String: Any])?["apiKeys"] as? [[String: Any]] ?? []
         let mine = keys.first { ($0["prefix"] as? String) == prefix }
         return CredentialInfo(kind: "Headscale API key", scopes: nil,
-                              expires: (mine?["expiration"] as? String).flatMap { TailscaleClient.date($0) })
+                              expires: (mine?["expiration"] as? String).flatMap { TailscaleClient.date($0) },
+                              reference: apiKey.isReference ? apiKey.stored : nil)
     }
 
     /// Headscale keeps no audit log.
@@ -257,7 +259,7 @@ final class HeadscaleClient: PolicyServer {
         var req = URLRequest(url: baseURL.appendingPathComponent("api/v1/\(path)"))
         req.httpMethod = method
         req.timeoutInterval = 15
-        req.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        req.setValue("Bearer \(try await apiKey.value())", forHTTPHeaderField: "Authorization")
         if let body {
             req.httpBody = try JSONSerialization.data(withJSONObject: body)
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")

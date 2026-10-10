@@ -15,7 +15,11 @@ ids are `nodeId`. Headscale pushes need `policy.mode: database`.
 activity), with `ServerPanels.swift` (auth keys, recent policy changes,
 devices) and `PushReviewSheet.swift` (the reviewed push); `Impact.swift` diffs node-to-node access before a
 push; `History.swift` writes push history *before* each push. Credentials
-live in the Keychain per workspace (`HeadscaleKeychain`). ATS allows plain
+live in the Keychain per workspace (`HeadscaleKeychain`) — or only a 1Password
+secret reference does (`OnePassword.swift`: clients hold a `Credential` and
+call `value()`, which runs `op read` once per reference, caches in memory,
+`forget()` on app lock; `op` must be AgileBits-signed; secrets go to `op` on
+stdin only). ATS allows plain
 HTTP only to local networks (`NSAllowsLocalNetworking`). Client tests stub
 the network with `StubProtocol` (URLProtocol), so they run in CI.
 Unofficial community tool, MIT licensed, distributed via GitHub Releases

@@ -253,6 +253,7 @@ func auditReport(workspace: String, server: String?, model m: PolicyModel, nodes
 
     if let credential {
         out += ["", "## Credential", ""]
+        out.append("- Stored " + (credential.reference.map { "in 1Password: \($0)" } ?? "in the Keychain of the Mac running the app"))
         out.append("- \(credential.kind)" + (credential.isFullAccess ? ", full access" : credential.scopes.map { ", scopes: \($0.joined(separator: ", "))" } ?? ""))
         if let expires = credential.expires { out.append("- Expires \(expires.formatted(date: .long, time: .omitted))") }
     }

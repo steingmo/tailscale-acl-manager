@@ -87,6 +87,8 @@ struct CredentialInfo: Equatable {
     /// Granted OAuth scopes; nil when the server doesn't say. "all" = full access.
     var scopes: [String]?
     var expires: Date?
+    /// The 1Password secret reference it's read from; nil when it's in the Keychain.
+    var reference: String? = nil
 
     var isFullAccess: Bool { scopes?.contains("all") == true }
 

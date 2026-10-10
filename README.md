@@ -152,6 +152,11 @@ Use `-` to read the policy from standard input.
   loses access when you add `srcPosture`. A "Require Huntress protection"
   template adds the posture to the grants you pick. Devices ▸ Posture report
   lists who fails it, why, and what to do — export CSV or a note per person.
+- **Keys in 1Password** — paste a 1Password secret reference (`op://vault/item/field`)
+  instead of the key: only the reference is stored, and the app reads the key
+  with the 1Password CLI (approved with Touch ID in 1Password) when it needs it,
+  keeping it in memory until the app locks. "Move to 1Password…" moves an
+  existing key in one step. The CLI must be 1Password's own signed binary.
 - **Works when the server is slow** — the last devices, users, and policy
   changes show at once (encrypted on disk) while fresh ones load.
 - **Access Review** — sign off every group and rule as still needed or to

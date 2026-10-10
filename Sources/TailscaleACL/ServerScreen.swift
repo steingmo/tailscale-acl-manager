@@ -19,6 +19,7 @@ struct ServerScreen: View {
     @State private var history = PushHistory.load()
     @State private var openingRecord: PushRecord?
     @State private var comparing: DiffPresentation?
+    @State private var movingToOnePassword = false
 
     private var serverURL: Binding<String> {
         Binding(get: { store.currentWorkspace.serverURL }, set: { store.setServerURL($0) })
@@ -146,10 +147,8 @@ struct ServerScreen: View {
                         .foregroundStyle(Theme.red)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                field("API key", hint: "Create one on the server: headscale apikeys create — stored in your Keychain") {
-                    SecureField("API key", text: $apiKey)
-                        .textFieldStyle(.roundedBorder)
-                        .font(.system(size: 12, design: .monospaced))
+                field("API key", hint: "Create one on the server: headscale apikeys create. Stored in your Keychain — or paste a 1Password secret reference (op://…) and only the reference is stored.") {
+                    keyField("API key or op://vault/item/field")
                 }
             } else {
                 field("Tailnet", hint: "\"-\" means the tailnet the key belongs to. Otherwise the tailnet ID from the admin console's General settings.") {
@@ -158,10 +157,8 @@ struct ServerScreen: View {
                         .font(.system(size: 12, design: .monospaced))
                 }
                 field("API access token or OAuth client secret",
-                      hint: "An OAuth client (tskey-client-…) never expires — give it the policy_file and devices scopes. Access tokens (tskey-api-…) expire after at most 90 days. Create either under Settings ▸ Keys or Trust credentials in the admin console. Stored in your Keychain.") {
-                    SecureField("tskey-client-… or tskey-api-…", text: $apiKey)
-                        .textFieldStyle(.roundedBorder)
-                        .font(.system(size: 12, design: .monospaced))
+                      hint: "An OAuth client (tskey-client-…) never expires — give it the policy_file and devices scopes. Access tokens (tskey-api-…) expire after at most 90 days. Create either under Settings ▸ Keys or Trust credentials in the admin console. Stored in your Keychain — or paste a 1Password secret reference (op://…) and only the reference is stored.") {
+                    keyField("tskey-client-…, tskey-api-…, or op://vault/item/field")
                 }
             }
             HStack(spacing: 10) {
@@ -178,6 +175,10 @@ struct ServerScreen: View {
                 } message: {
                     Text("\(store.currentWorkspace.serverURL) uses http://. Anyone on the network path can read the API key and take over the server's policy. Use https:// if you can.")
                 }
+                if !apiKey.isEmpty, !OnePassword.isReference(apiKey), OnePassword.cliPath != nil {
+                    Button("Move to 1Password…") { movingToOnePassword = true }
+                        .help("Save the key in 1Password and keep only its secret reference here")
+                }
                 if busy { ProgressView().controlSize(.small) }
                 if let status {
                     Label(status.text, systemImage: status.ok ? "checkmark.circle.fill" : "xmark.octagon.fill")
@@ -189,6 +190,28 @@ struct ServerScreen: View {
             if let credential { credentialLine(credential) }
         }
         .task(id: "\(store.currentWorkspaceID)\(kind)") { await loadCredentialInfo() }
+        .sheet(isPresented: $movingToOnePassword) {
+            MoveToOnePasswordSheet(secret: apiKey, title: "Tailscale ACL – \(store.currentWorkspace.name)") { reference in
+                apiKey = reference
+                HeadscaleKeychain.save(reference, account: store.currentWorkspaceID.uuidString)
+                status = (true, "Moved to 1Password. Only the reference is stored on this Mac now.")
+                Task { await loadCredentialInfo() }
+            }
+        }
+    }
+
+    /// A 1Password reference isn't secret, so it's shown; a key is hidden.
+    @ViewBuilder
+    private func keyField(_ placeholder: String) -> some View {
+        if OnePassword.isReference(apiKey) {
+            TextField(placeholder, text: $apiKey)
+                .textFieldStyle(.roundedBorder)
+                .font(.system(size: 12, design: .monospaced))
+        } else {
+            SecureField(placeholder, text: $apiKey)
+                .textFieldStyle(.roundedBorder)
+                .font(.system(size: 12, design: .monospaced))
+        }
     }
 
     private func saveAndTest() {
@@ -207,6 +230,10 @@ struct ServerScreen: View {
     private func credentialLine(_ c: CredentialInfo) -> some View {
         let days = c.expires.map { Int(($0.timeIntervalSinceNow / 86_400).rounded(.down)) }
         return VStack(alignment: .leading, spacing: 3) {
+            Text(verbatim: c.reference.map { "Stored in 1Password (\($0)); read with Touch ID, kept in memory until the app locks." }
+                 ?? "Stored in this Mac's Keychain.")
+                .font(.system(size: 10.5))
+                .foregroundStyle(Theme.textSecondary)
             HStack(spacing: 6) {
                 Image(systemName: "key.fill").font(.system(size: 10.5)).foregroundStyle(Theme.textSecondary)
                 Text(verbatim: c.kind).font(.system(size: 11, weight: .semibold)).foregroundStyle(Theme.textPrimary)

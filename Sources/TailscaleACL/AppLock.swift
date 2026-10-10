@@ -82,6 +82,7 @@ final class AppSession: ObservableObject {
         guard store != nil, manual || lockEnabled else { return }
         store = nil
         DataEncryption.key = nil
+        OnePassword.forget()
         promptAutomatically = false
     }
 }

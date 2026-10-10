@@ -221,7 +221,7 @@ final class TailscaleClient: PolicyServer {
     static let base = "https://api.tailscale.com/api/v2/"
 
     let tailnet: String
-    private let credential: String
+    private let credential: Credential
     private let session: URLSession
     // Requests run concurrently (posture attributes, 6 at a time), so the
     // token state is behind a lock and parallel requests share one fetch.
@@ -237,7 +237,7 @@ final class TailscaleClient: PolicyServer {
     init(tailnet: String, credential: String, session: URLSession = .shared) {
         let t = tailnet.trimmingCharacters(in: .whitespaces)
         self.tailnet = t.isEmpty ? "-" : t
-        self.credential = credential
+        self.credential = Credential(stored: credential)
         self.session = session
     }
 
@@ -393,12 +393,14 @@ final class TailscaleClient: PolicyServer {
     /// OAuth clients: the scopes in their token (they don't expire). Access
     /// tokens: full access, with the expiry from the keys API.
     func credentialInfo() async throws -> CredentialInfo? {
-        if oauthClientID != nil {
+        let secret = try await credential.value()
+        let reference = credential.isReference ? credential.stored : nil
+        if Self.oauthClientID(secret) != nil {
             _ = try await bearerToken()
-            return CredentialInfo(kind: "OAuth client", scopes: tokenLock.withLock { grantedScopes }, expires: nil)
+            return CredentialInfo(kind: "OAuth client", scopes: tokenLock.withLock { grantedScopes }, expires: nil, reference: reference)
         }
-        var info = CredentialInfo(kind: "Personal API access token", scopes: ["all"], expires: nil)
-        if credential.hasPrefix("tskey-api-"), let id = credential.dropFirst("tskey-api-".count).split(separator: "-").first {
+        var info = CredentialInfo(kind: "Personal API access token", scopes: ["all"], expires: nil, reference: reference)
+        if secret.hasPrefix("tskey-api-"), let id = secret.dropFirst("tskey-api-".count).split(separator: "-").first {
             let (data, _) = try await request("GET", "\(tailnetPath)/keys/\(id)")
             let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
             info.expires = (json?["expires"] as? String).flatMap { Self.date($0) }
@@ -512,17 +514,18 @@ final class TailscaleClient: PolicyServer {
     // MARK: Auth + transport
 
     /// OAuth client secrets look like tskey-client-<client id>-<secret>.
-    private var oauthClientID: String? {
-        guard credential.hasPrefix("tskey-client-") else { return nil }
-        return credential.dropFirst("tskey-client-".count).split(separator: "-").first.map(String.init)
+    private static func oauthClientID(_ secret: String) -> String? {
+        guard secret.hasPrefix("tskey-client-") else { return nil }
+        return secret.dropFirst("tskey-client-".count).split(separator: "-").first.map(String.init)
     }
 
     private func bearerToken() async throws -> String {
-        guard let clientID = oauthClientID else { return credential }
+        let secret = try await credential.value()
+        guard let clientID = Self.oauthClientID(secret) else { return secret }
         let fetch: Task<String, Error> = tokenLock.withLock {
             if let token = accessToken, token.expires > Date().addingTimeInterval(60) { return Task { token.value } }
             if let running = tokenFetch { return running }
-            let task = Task { try await self.fetchToken(clientID) }
+            let task = Task { try await self.fetchToken(clientID, secret: secret) }
             tokenFetch = task
             return task
         }
@@ -534,14 +537,14 @@ final class TailscaleClient: PolicyServer {
         }
     }
 
-    private func fetchToken(_ clientID: String) async throws -> String {
+    private func fetchToken(_ clientID: String, secret: String) async throws -> String {
         var req = URLRequest(url: URL(string: Self.base + "oauth/token")!)
         req.httpMethod = "POST"
         req.timeoutInterval = 15
         req.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
         var form = URLComponents()
         form.queryItems = [URLQueryItem(name: "client_id", value: clientID),
-                           URLQueryItem(name: "client_secret", value: credential)]
+                           URLQueryItem(name: "client_secret", value: secret)]
         req.httpBody = Data((form.percentEncodedQuery ?? "").utf8)
         let (data, response) = try await session.data(for: req)
         _ = try checkResponse(data, response)
