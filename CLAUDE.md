@@ -166,8 +166,10 @@ Swift Package (no Xcode project). All source in `Sources/TailscaleACL/`:
   turns it into an image (map export, per-group/tag images in reports).
   Visual builder draws ACL connections blue, grants green, and edits them
   with `ConnectionSheet`; it filters (text, All/Grants/ACLs picker with
-  counts, a clicked box = focus), hides boxes no visible line touches
-  unless "Show" (`showUnused`; Add box turns it on), dims what the hovered box doesn't touch, and orders sources by
+  counts, a clicked box = focus). Boxes come from the ends of the drawn
+  lines (`builderBoxNames`), so people/addresses named only in rules get
+  boxes too; defined-but-unused entities only on "Show" (`showUnused`;
+  Add box turns it on), dims what the hovered box doesn't touch, and orders sources by
   their destinations and destinations by their sources (unconnected last).
   All of that is computed once into `layout` when the policy/filter/focus
   change — never per redraw (1.31.0 did it per line and box: minutes with

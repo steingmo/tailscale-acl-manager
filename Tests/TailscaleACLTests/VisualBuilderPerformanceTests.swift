@@ -34,3 +34,20 @@ final class VisualBuilderPerformanceTests: XCTestCase {
         XCTAssertLessThan(Date().timeIntervalSince(start), 5, "drawing 400 lines must not take minutes")
     }
 }
+
+final class BuilderBoxTests: XCTestCase {
+    func testEveryLineHasBothBoxes() {
+        // People and addresses named only in rules aren't "defined" entities, but still get boxes.
+        let hidden = builderBoxNames(usedSources: ["group:rds", "hjdj@x.com", "group:rds"], usedDests: ["ipset:db", "10.0.0.5"],
+                                     definedSources: ["*", "group:rds", "group:unused"], definedDests: ["*", "ipset:db", "tag:unused"],
+                                     includeDefined: false)
+        XCTAssertEqual(hidden.sources, ["group:rds", "hjdj@x.com"])
+        XCTAssertEqual(hidden.dests, ["ipset:db", "10.0.0.5"])
+        XCTAssertEqual(hidden.hidden, 4)
+        let shown = builderBoxNames(usedSources: ["hjdj@x.com"], usedDests: ["10.0.0.5"],
+                                    definedSources: ["*", "group:unused"], definedDests: ["tag:unused"], includeDefined: true)
+        XCTAssertEqual(shown.sources, ["hjdj@x.com", "*", "group:unused"])
+        XCTAssertEqual(shown.dests, ["10.0.0.5", "tag:unused"])
+        XCTAssertEqual(shown.hidden, 0)
+    }
+}

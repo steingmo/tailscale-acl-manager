@@ -94,23 +94,31 @@ struct VisualBuilderScreen: View {
     private func rebuildLayout() {
         let all = connections
         let visible = narrowed ? filtered(all) : all
-        var sources = makeSourceNodes(visible)
-        var dests = makeDestNodes(visible, sources)
-        // A policy without rules keeps its boxes, so there's something to drag from.
-        var hidden = 0
-        if !showUnused, !all.isEmpty {
-            let usedSources = Set(visible.map(\.src)), usedDests = Set(visible.map(\.dstTarget))
-            let focused = focus.map { String($0.dropFirst(2)) }
-            let keptSources = sources.filter { usedSources.contains($0.name) || $0.name == focused }
-            let keptDests = dests.filter { usedDests.contains($0.name) || $0.name == focused }
-            hidden = sources.count - keptSources.count + dests.count - keptDests.count
-            (sources, dests) = (keptSources, keptDests)
+        // Boxes come from the lines themselves, so every line has both ends
+        // (people and addresses named only in rules included). Defined but
+        // unused groups, tags, hosts, and IP sets are added only on "Show",
+        // or when there are no rules yet.
+        let definedSources = ["*", "autogroup:members"] + store.model.sourceSpecs
+        let definedDests = ["*"] + store.model.destTargets
+        let names = builderBoxNames(usedSources: visible.map(\.src), usedDests: visible.map(\.dstTarget),
+                                    definedSources: narrowed ? [] : definedSources,
+                                    definedDests: narrowed ? [] : definedDests,
+                                    includeDefined: showUnused || all.isEmpty)
+        var sourceNames = ordered(names.sources, visible)
+        var destNames = names.dests
+        if let focus {
+            let name = String(focus.dropFirst(2))
+            if focus.hasPrefix("S|"), !sourceNames.contains(name) { sourceNames.insert(name, at: 0) }
+            if focus.hasPrefix("D|"), !destNames.contains(name) { destNames.insert(name, at: 0) }
         }
+        let sources = sourceNames.map { Node(side: .source, name: $0) }
+        let dests = orderedDests(destNames, visible, sources)
         var row: [String: Int] = [:]
         for (i, n) in sources.enumerated() { row[n.id] = i }
         for (i, n) in dests.enumerated() { row[n.id] = i }
         let grants = all.filter { $0.kind == .grant }.count
-        layout = BuilderLayout(all: all.count, grants: grants, acls: all.count - grants, hiddenUnused: hidden,
+        layout = BuilderLayout(all: all.count, grants: grants, acls: all.count - grants,
+                               hiddenUnused: narrowed ? 0 : names.hidden,
                                visible: visible, sources: sources, dests: dests, row: row)
     }
 
@@ -121,21 +129,6 @@ struct VisualBuilderScreen: View {
     /// Filtering or focusing: only boxes with visible connections are drawn.
     private var narrowed: Bool { focus != nil || !filter.trimmingCharacters(in: .whitespaces).isEmpty || kinds != .all }
 
-    private func makeSourceNodes(_ visible: [Connection]) -> [Node] {
-        if narrowed {
-            var names = ordered(visible.map(\.src).uniqued(), visible)
-            if let focus, focus.hasPrefix("S|"), !names.contains(String(focus.dropFirst(2))) { names.insert(String(focus.dropFirst(2)), at: 0) }
-            return names.map { Node(side: .source, name: $0) }
-        }
-        var names = store.model.sourceSpecs
-        let used = Set(store.model.rules.flatMap(\.src))
-        if !names.contains("*") && used.contains("*") { names.insert("*", at: 0) }
-        if !names.contains("*") { names.insert("*", at: 0) }
-        if !names.contains("autogroup:members") {
-            names.insert("autogroup:members", at: 1)
-        }
-        return ordered(names.uniqued(), visible).map { Node(side: .source, name: $0) }
-    }
 
     /// Sources sorted by the average position of the destinations they reach
     /// (in policy order), unconnected ones last; destNodes then sorts by
@@ -153,10 +146,7 @@ struct VisualBuilderScreen: View {
 
     /// Destinations sorted by where their sources sit (the average row of
     /// the sources reaching them), so lines cross as little as possible.
-    private func makeDestNodes(_ visible: [Connection], _ sourceNodes: [Node]) -> [Node] {
-        var names = narrowed ? visible.map(\.dstTarget).uniqued() : store.model.destTargets
-        if !narrowed, !names.contains("*") { names.insert("*", at: 0) }
-        if let focus, focus.hasPrefix("D|"), !names.contains(String(focus.dropFirst(2))) { names.insert(String(focus.dropFirst(2)), at: 0) }
+    private func orderedDests(_ names: [String], _ visible: [Connection], _ sourceNodes: [Node]) -> [Node] {
         let row = Dictionary(sourceNodes.enumerated().map { ($1.name, Double($0)) }, uniquingKeysWith: { a, _ in a })
         var rows: [String: [Double]] = [:]
         for c in visible { if let r = row[c.src] { rows[c.dstTarget, default: []].append(r) } }
@@ -164,7 +154,7 @@ struct VisualBuilderScreen: View {
         func weight(_ n: String) -> Double {
             rows[n].map { $0.reduce(0, +) / Double($0.count) } ?? Double(sourceNodes.count + (order[n] ?? 0))
         }
-        return names.uniqued().sorted { (weight($0), order[$0] ?? 0) < (weight($1), order[$1] ?? 0) }
+        return names.sorted { (weight($0), order[$0] ?? 0) < (weight($1), order[$1] ?? 0) }
             .map { Node(side: .dest, name: $0) }
     }
 
@@ -941,4 +931,16 @@ private struct EditEntitySheet: View {
         }
         dismiss()
     }
+}
+
+/// The Visual Builder's boxes: every end of a drawn line, plus the defined
+/// entities when `includeDefined`. `hidden` counts defined ones left out.
+func builderBoxNames(usedSources: [String], usedDests: [String], definedSources: [String], definedDests: [String],
+                     includeDefined: Bool) -> (sources: [String], dests: [String], hidden: Int) {
+    let sources = usedSources.uniqued(), dests = usedDests.uniqued()
+    let sourceSet = Set(sources), destSet = Set(dests)
+    let extraSources = definedSources.uniqued().filter { !sourceSet.contains($0) }
+    let extraDests = definedDests.uniqued().filter { !destSet.contains($0) }
+    return includeDefined ? (sources + extraSources, dests + extraDests, 0)
+                          : (sources, dests, extraSources.count + extraDests.count)
 }
