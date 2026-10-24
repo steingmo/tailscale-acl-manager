@@ -11,6 +11,11 @@ struct TrafficScreen: View {
     @State private var loading: Task<Void, Never>?
     @State private var partial: String?
     @State private var narrowed: String?
+    @State private var show = Show.all
+    /// Connection ids no rule allows, worked out once per traffic and policy.
+    @State private var notAllowed: Set<String>?
+
+    enum Show: String, CaseIterable { case all = "All", notAllowed = "No rule allows" }
 
     enum Tab: String, CaseIterable { case connections = "Connections", usage = "Rule usage" }
 
@@ -135,6 +140,7 @@ struct TrafficScreen: View {
         // semantics; anything else matches names, addresses, and ports as text.
         let isSelector = raw.contains(":") || raw.contains("@") || isAddressLike(raw)
         let rows = traffic.connections.filter { c in
+            if show == .notAllowed, notAllowed?.contains(c.id) != true { return false }
             if q.isEmpty { return true }
             let ids = trafficIdentities(c.client, nodes: byIP) + trafficIdentities(c.server, nodes: byIP)
             if isSelector, ids.contains(where: { ev.sourceMatches(spec: raw, sourceID: $0) || ev.targetMatches(target: raw, destID: $0) }) {
@@ -144,9 +150,25 @@ struct TrafficScreen: View {
                 .contains { $0.lowercased().contains(q) }
         }
         return VStack(alignment: .leading, spacing: 6) {
-            TextField("Filter by device, user, tag, IP, or port", text: $filter)
-                .textFieldStyle(.roundedBorder)
-                .frame(maxWidth: 360)
+            HStack(spacing: 10) {
+                TextField("Filter: device, user, group:, tag:, ipset:, IP, CIDR, or port", text: $filter)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(maxWidth: 400)
+                Picker("", selection: $show) {
+                    ForEach(Show.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .frame(width: 220)
+                .help("No rule allows: connections the policy in the editor would block (Tailscale's own exit-node DNS left out)")
+                if show == .notAllowed, notAllowed == nil { ProgressView().controlSize(.small) }
+            }
+            .task(id: "\(traffic.end.timeIntervalSince1970)-\(store.text.hashValue)-\(store.headscaleNodes.count)-\(show)") {
+                guard show == .notAllowed else { return }
+                notAllowed = nil
+                let m = store.model, nodes = store.headscaleNodes, connections = traffic.connections
+                notAllowed = await Task.detached { trafficNotAllowed(connections, m, nodes: nodes) }.value
+            }
             Text(verbatim: rows.count > Self.rowLimit ? "Showing the busiest \(Self.rowLimit) of \(rows.count)." : "\(rows.count) shown.")
                 .font(.system(size: 10.5))
                 .foregroundStyle(Theme.textSecondary)
@@ -170,6 +192,11 @@ struct TrafficScreen: View {
             Spacer()
             if !c.isPortTraffic {
                 EmptyView()
+            } else if rules.isEmpty, isExitNodeDNS(c, store.model, nodes: byIP, allNodes: store.headscaleNodes) {
+                Text("Tailscale: exit-node DNS")
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(Theme.textSecondary)
+                    .help("This device uses \(trafficName(c.server, nodes: byIP)) as its exit node and sends DNS to it through Tailscale's built-in peer API on this port. Tailscale allows that to everyone the internet rule lets use the exit node, so no rule needs to name the port.")
             } else if rules.isEmpty {
                 Text("no rule in the editor allows this")
                     .font(.system(size: 10.5, weight: .semibold))

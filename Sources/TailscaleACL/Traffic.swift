@@ -122,6 +122,26 @@ func rulesAllowing(_ c: TrafficConnection, _ m: PolicyModel, nodes: [String: Hea
                                         destIDs: trafficIdentities(c.server, nodes: nodes), port: c.port).matches
 }
 
+/// Tailscale's own traffic that no rule names: a device using an exit node
+/// asks that node for DNS through Tailscale's peer API (a high TCP port on
+/// the node's Tailscale address). Tailscale allows it to whoever may use the
+/// exit node — the internet rule — so it isn't a gap in the policy.
+func isExitNodeDNS(_ c: TrafficConnection, _ m: PolicyModel, nodes: [String: HeadscaleNode], allNodes: [HeadscaleNode]) -> Bool {
+    guard c.kind == .virtual, c.proto == 6, c.port >= 1024,
+          let server = nodes[c.server], let client = nodes[c.client],
+          (server.approvedRoutes ?? []).contains(where: { $0 == "0.0.0.0/0" || $0 == "::/0" }) else { return false }
+    let access = routeAccess(m, sourceIDs: client.identities, nodes: allNodes)
+    return access.exitNode && access.exitNodes.contains(server.displayName)
+}
+
+/// Port traffic that no rule allows, leaving out Tailscale's own (exit-node DNS).
+func trafficNotAllowed(_ traffic: [TrafficConnection], _ m: PolicyModel, nodes: [HeadscaleNode]) -> Set<String> {
+    let byIP = nodesByAddress(nodes)
+    return Set(traffic.filter { c in
+        c.isPortTraffic && rulesAllowing(c, m, nodes: byIP).isEmpty && !isExitNodeDNS(c, m, nodes: byIP, allNodes: nodes)
+    }.map(\.id))
+}
+
 /// Per rule: how much traffic it carried and on which ports.
 struct RuleUsage: Identifiable {
     var kind: RuleMatch.Kind

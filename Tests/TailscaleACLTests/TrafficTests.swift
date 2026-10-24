@@ -172,3 +172,28 @@ final class TrafficLoadingTests: XCTestCase {
         XCTAssertNil(store.trafficProgress)
     }
 }
+
+final class ExitNodeDNSTrafficTests: XCTestCase {
+    func testPeerAPIDNSToTheExitNodeIsTailscalesOwn() {
+        let m = model("""
+        {"groups": {"group:mgmt": ["sos@x.com"]},
+         "tagOwners": {"tag:client-vpn": []},
+         "grants": [{"src": ["group:mgmt"], "dst": ["autogroup:internet"], "ip": ["*"], "via": ["tag:client-vpn"]}]}
+        """)
+        let exit = HeadscaleNode(id: "1", name: "tailscale-client-01", ipAddresses: ["100.64.0.1"],
+                                 approvedRoutes: ["0.0.0.0/0", "::/0"], tags: ["tag:client-vpn"])
+        let sos = HeadscaleNode(id: "2", name: "sos-mac", ipAddresses: ["100.64.0.2"], user: .init(name: "sos@x.com", email: "sos@x.com"))
+        let eve = HeadscaleNode(id: "3", name: "eve-mac", ipAddresses: ["100.64.0.3"], user: .init(name: "eve@x.com", email: "eve@x.com"))
+        let nodes = [exit, sos, eve]
+        let byIP = nodesByAddress(nodes)
+        let dns = TrafficConnection(client: "100.64.0.2", server: "100.64.0.1", port: 44863, proto: 6, kind: .virtual)
+        let eveDNS = TrafficConnection(client: "100.64.0.3", server: "100.64.0.1", port: 44863, proto: 6, kind: .virtual)
+        let ssh = TrafficConnection(client: "100.64.0.2", server: "100.64.0.1", port: 22, proto: 6, kind: .virtual)
+        let udp = TrafficConnection(client: "100.64.0.2", server: "100.64.0.1", port: 44863, proto: 17, kind: .virtual)
+        XCTAssertTrue(isExitNodeDNS(dns, m, nodes: byIP, allNodes: nodes))
+        XCTAssertFalse(isExitNodeDNS(eveDNS, m, nodes: byIP, allNodes: nodes), "eve may not use the exit node")
+        XCTAssertFalse(isExitNodeDNS(ssh, m, nodes: byIP, allNodes: nodes), "well-known ports are real services")
+        XCTAssertFalse(isExitNodeDNS(udp, m, nodes: byIP, allNodes: nodes))
+        XCTAssertEqual(trafficNotAllowed([dns, eveDNS, ssh], m, nodes: nodes), [eveDNS.id, ssh.id])
+    }
+}
