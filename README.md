@@ -161,7 +161,10 @@ Use `-` to read the policy from standard input.
   to Claude Code (`claude mcp add tailscale-acl -- tailscale-acl mcp`) or
   Claude Desktop. The AI can read the policy, problems, tests, devices, and
   loaded traffic, simulate access with the app's engine, and propose
-  changes — which only edit the editor, with a banner to review or undo.
+  changes or apply Problems fixes — which only edit the editor, with a
+  banner to review or undo. Also posture reports, the access review, and
+  history, plus ready-made prompts: Security review, Offboard a person, and
+  Find unused access.
   It can't push or change the server. Only this app's signed binary can
   connect, over a local socket.
 - **Data on this Mac** (Settings) — what's stored where, the data folder,

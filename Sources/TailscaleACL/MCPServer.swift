@@ -58,7 +58,7 @@ struct MCPTools {
                          "valid": store.isValid, "policy": store.text])
         case "list_problems":
             return json(store.lintIssues.map { i -> [String: Any] in
-                ["severity": i.severity == .error ? "error" : "warning", "security": i.security, "title": i.title,
+                ["id": i.id, "severity": i.severity == .error ? "error" : "warning", "security": i.security, "title": i.title,
                  "detail": i.detail, "line": store.line(of: i) as Any, "fixes": i.fixes.map(\.label)]
             })
         case "run_tests":
@@ -147,6 +147,64 @@ struct MCPTools {
                 return ["rule": r.name, "path": "\(r.section)[\(r.index)]", "connections": u?.connections ?? 0,
                         "ports_used": u?.ports ?? [:]]
             })
+        case "posture_report":
+            guard !m.postureOrder.isEmpty else { return ("The policy defines no postures.", true) }
+            let names = string("posture").map { [$0] } ?? m.postureOrder
+            guard names.allSatisfy({ m.postures[$0] != nil }) else { return ("No posture named \(names[0]). Postures: \(m.postureOrder.joined(separator: ", ")).", true) }
+            let everyone = args["all_people"] as? Bool ?? false
+            return json(names.map { name -> [String: Any] in
+                let checks = postureReport(m, posture: name, nodes: store.headscaleNodes, allPeople: everyone)
+                return ["posture": name, "conditions": m.postures[name] ?? [],
+                        "required_by_rules": postureScope(m, posture: name, nodes: store.headscaleNodes) != nil,
+                        "fails": checks.filter { $0.status == .fails }.count, "unknown": checks.filter { $0.status == .unknown }.count,
+                        "passes": checks.filter { $0.status == .passes }.count,
+                        "devices": checks.filter { $0.status != .passes }.map {
+                            ["device": $0.device.displayName, "owner": $0.owner, "status": "\($0.status)", "reasons": $0.reasons] as [String: Any]
+                        }]
+            })
+        case "access_review_status":
+            let items = reviewItems(m)
+            let review = store.review
+            guard let started = review.started else { return json(["started": false, "items": items.count]) }
+            func entry(_ item: ReviewItem) -> [String: Any] {
+                var e: [String: Any] = ["item": item.title, "detail": item.detail, "path": item.path]
+                if let d = review.decisions[item.key] { e["by"] = d.by; e["note"] = d.note; e["date"] = d.at.formatted(date: .abbreviated, time: .omitted) }
+                return e
+            }
+            return json(["started": started.formatted(date: .abbreviated, time: .omitted), "items": items.count,
+                         "kept": items.filter { review.decisions[$0.key]?.keep == true }.count,
+                         "to_remove": items.filter { review.decisions[$0.key]?.keep == false }.map(entry),
+                         "not_reviewed": items.filter { review.decisions[$0.key] == nil }.map(entry)])
+        case "apply_fix":
+            guard let id = string("problem_id"), let issue = store.lintIssues.first(where: { $0.id == id }) else {
+                return ("No problem with that id now — call list_problems again; ids change when the policy does.", true)
+            }
+            let label = string("fix")
+            guard let fix = issue.fixes.first(where: { label == nil || $0.label == label }) else {
+                return (issue.fixes.isEmpty ? "That problem has no one-click fix." : "Fixes for it: \(issue.fixes.map(\.label).joined(separator: "; ")).", true)
+            }
+            let before = store.text
+            store.snapshot(reason: "before AI tool fix")
+            store.apply(fix.action)   // one undoable edit, like clicking the fix in Problems
+            guard store.text != before else { return ("The fix changed nothing.", true) }
+            store.aiProposal = AIProposal(summary: "\(fix.label) (\(issue.title))",
+                                          before: store.aiProposal?.before ?? before, after: store.text)
+            let new = store.model
+            return json(["applied_in_editor": true, "fix": fix.label,
+                         "note": "Only the editor changed. The user reviews it (banner: Show changes / Undo) and pushes it themselves.",
+                         "problems_now": store.lintIssues.count,
+                         "access_differences": entityAccessDifferences(m, new, limit: 30)])
+        case "history":
+            let snapshots = SnapshotStore.load(store.currentWorkspaceID)
+            if let wanted = string("snapshot") {
+                guard let s = snapshots.first(where: { $0.id.uuidString == wanted }) else { return ("No snapshot \(wanted).", true) }
+                let differences = (try? HuJSONParser.parse(s.text)).map { entityAccessDifferences(PolicyModel(tree: $0), m, limit: 30) } ?? []
+                return json(["date": s.date.formatted(), "reason": s.reason, "policy": s.text,
+                             "access_differences_since": differences])
+            }
+            let pushes = PushHistory.load().filter { $0.server == store.serverDisplayName }
+            return json(["snapshots": snapshots.prefix(30).map { ["id": $0.id.uuidString, "date": $0.date.formatted(), "reason": $0.reason] },
+                         "pushes": pushes.prefix(20).map { ["date": $0.date.formatted(), "server": $0.server] }])
         case "propose_change":
             guard let policy = args["policy"] as? String, let summary = string("summary"), !summary.isEmpty else {
                 return ("policy and summary are required.", true)
@@ -191,9 +249,27 @@ enum MCPProtocol {
               "not_allowed_only": "Only connections no rule in the editor allows (true/false)",
               "limit": "Maximum rows (default 100)"], numbers: ["limit"], booleans: ["not_allowed_only"]),
         tool("rule_usage", "How much real traffic each rule carried in the loaded flow logs, and which rules carried none."),
+        tool("posture_report", "Which devices fail a device posture (e.g. Huntress), why, and who owns them — before or after requiring it.",
+             ["posture": "Optional posture name, e.g. posture:huntress-protected (default: all)",
+              "all_people": "Check every person's device, not only those the requiring rules apply to (true/false)"], booleans: ["all_people"]),
+        tool("access_review_status", "The current access review: when it started, what's marked to remove, and what isn't reviewed yet."),
+        tool("apply_fix", "Apply one of the app's own one-click fixes for a problem from list_problems, as an undoable edit in the editor (the user reviews and pushes).",
+             ["problem_id": "The id from list_problems", "fix": "The fix label (default: the first fix)"], required: ["problem_id"]),
+        tool("history", "Saved versions of the policy (snapshots) and pushes to the server. With a snapshot id: that version's policy and how access changed since.",
+             ["snapshot": "Optional snapshot id from the list"]),
         tool("propose_change", "Replace the policy in the editor with a full new HuJSON policy. It's only an undoable edit in the app: the user sees a banner to review or undo, and must push it themselves. Returns problems, failing tests, and how access changes.",
              ["policy": "The complete new policy (HuJSON)", "summary": "One sentence the user sees: what changed and why"],
              required: ["policy", "summary"]),
+    ]
+
+    /// Ready-made requests the AI app offers in its prompt menu.
+    static let prompts: [(name: String, title: String, description: String, arguments: [(name: String, description: String)], text: String)] = [
+        ("security-review", "Security review", "Review the tailnet policy for risky access and propose fixes.", [],
+         "Review my tailnet policy in Tailscale ACL for security. Use list_problems (security findings first), run_tests, and who_can_reach for sensitive targets (SSH, RDP, databases). If traffic is loaded, use rule_usage to find broad rules that carry little traffic. Explain each risk in plain words, ranked by impact. Then fix what's safe with apply_fix or propose_change, one change at a time, and tell me what each one does to access before I push."),
+        ("offboard-person", "Offboard a person", "Remove someone's access from the policy.", [("person", "Their login, e.g. name@example.com")],
+         "Offboard {person} from my tailnet policy in Tailscale ACL. Use get_policy and who_can_reach to find every group, rule, test, tag owner, and approver that names them, and propose one change (propose_change) that removes them everywhere without changing anyone else's access. List what it removes. Remind me to also remove their devices and user on the Server screen — the tools can't."),
+        ("unused-access", "Find unused access", "Find rules and ports that real traffic doesn't use.", [],
+         "Using the flow logs loaded in Tailscale ACL, find access nobody uses: call rule_usage and traffic_summary. List rules that carried no traffic and broad rules where only a few ports are used. Suggest narrowing or removing them, but don't change anything until I say which."),
     ]
 
     private static func tool(_ name: String, _ description: String, _ properties: [String: String] = [:],
@@ -218,7 +294,7 @@ enum MCPProtocol {
             let asked = params["protocolVersion"] as? String ?? versions[0]
             return (true, result([
                 "protocolVersion": versions.contains(asked) ? asked : versions[0],
-                "capabilities": ["tools": [String: Any]()],
+                "capabilities": ["tools": [String: Any](), "prompts": [String: Any]()],
                 "serverInfo": ["name": "tailscale-acl", "version": Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "dev"],
                 "instructions": "Tools for the tailnet policy open in the Tailscale ACL app. Prefer simulate_access and who_can_reach over reading the policy yourself; they use the app's exact policy engine. propose_change only edits the user's editor — the user reviews and pushes.",
             ] as [String: Any]))
@@ -226,6 +302,20 @@ enum MCPProtocol {
             return (true, result([String: Any]()))
         case "tools/list":
             return (true, result(["tools": toolDefinitions]))
+        case "prompts/list":
+            return (true, result(["prompts": prompts.map { p in
+                ["name": p.name, "title": p.title, "description": p.description,
+                 "arguments": p.arguments.map { ["name": $0.name, "description": $0.description, "required": true] }] as [String: Any]
+            }]))
+        case "prompts/get":
+            guard let p = prompts.first(where: { $0.name == params["name"] as? String }) else {
+                return (true, ["jsonrpc": "2.0", "id": id, "error": ["code": -32602, "message": "Unknown prompt"]])
+            }
+            let values = params["arguments"] as? [String: Any] ?? [:]
+            var text = p.text
+            for a in p.arguments { text = text.replacingOccurrences(of: "{\(a.name)}", with: values[a.name] as? String ?? "(\(a.name))") }
+            return (true, result(["description": p.description,
+                                  "messages": [["role": "user", "content": ["type": "text", "text": text]]]] as [String: Any]))
         case "tools/call":
             return (false, nil)
         default:

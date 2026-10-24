@@ -11,7 +11,7 @@ final class MCPTests: XCTestCase {
         let ws = Workspace(name: "Office", serverURL: "", policy: """
         {"groups": {"group:eng": ["amy@x.com"]},
          "tagOwners": {"tag:db": []},
-         "hosts": {"db1": "10.0.0.5"},
+         "hosts": {"db1": "10.0.0.5", "old": "10.0.0.9"},
          "grants": [
            // Engineers to the database
            {"src": ["group:eng"], "dst": ["db1"], "ip": ["tcp:5432"]},
@@ -47,7 +47,15 @@ final class MCPTests: XCTestCase {
         XCTAssertNil(MCPProtocol.reply(to: ["jsonrpc": "2.0", "method": "notifications/initialized"], tools: tools), "no reply to notifications")
         let list = (MCPProtocol.reply(to: ["jsonrpc": "2.0", "id": 2, "method": "tools/list"], tools: tools)!["result"] as! [String: Any])["tools"] as! [[String: Any]]
         XCTAssertEqual(Set(list.map { $0["name"] as! String }), ["get_policy", "list_problems", "run_tests", "simulate_access", "who_can_reach",
-                                                                "list_devices", "traffic_summary", "rule_usage", "propose_change"])
+                                                                "list_devices", "traffic_summary", "rule_usage", "propose_change",
+                                                                "posture_report", "access_review_status", "apply_fix", "history"])
+        let prompts = (MCPProtocol.reply(to: ["jsonrpc": "2.0", "id": 4, "method": "prompts/list"], tools: tools)!["result"] as! [String: Any])["prompts"] as! [[String: Any]]
+        XCTAssertEqual(prompts.map { $0["name"] as! String }, ["security-review", "offboard-person", "unused-access"])
+        let offboard = MCPProtocol.reply(to: ["jsonrpc": "2.0", "id": 5, "method": "prompts/get",
+                                              "params": ["name": "offboard-person", "arguments": ["person": "bob@x.com"]]], tools: tools)!
+        let message = (((offboard["result"] as! [String: Any])["messages"] as! [[String: Any]])[0]["content"] as! [String: Any])["text"] as! String
+        XCTAssertTrue(message.hasPrefix("Offboard bob@x.com from my tailnet policy"))
+        XCTAssertTrue(MCPProtocol.localReply(to: ["jsonrpc": "2.0", "id": 6, "method": "prompts/list"]).handled, "answered without the app")
         let unknown = MCPProtocol.reply(to: ["jsonrpc": "2.0", "id": 3, "method": "resources/list"], tools: tools)!
         XCTAssertEqual((unknown["error"] as? [String: Any])?["code"] as? Int, -32601)
         XCTAssertEqual(call(nil, "get_policy")["isError"] as? Bool, true, "locked: no data")
@@ -86,6 +94,29 @@ final class MCPTests: XCTestCase {
         XCTAssertEqual(store.aiProposal?.summary, "Move the database port")
         XCTAssertEqual(store.aiProposal?.before, before)
         XCTAssertEqual(SnapshotStore.load(store.currentWorkspaceID).first?.reason, "AI tool change")
+    }
+
+    func testFixesHistoryReviewAndPosture() throws {
+        let store = PolicyStore()
+        let problems = try JSONSerialization.jsonObject(with: Data(text(call(store, "list_problems")).utf8)) as! [[String: Any]]
+        let unused = try XCTUnwrap(problems.first { ($0["title"] as? String) == "Unused host" })
+        let before = store.text
+        let fixed = try JSONSerialization.jsonObject(with: Data(text(call(store, "apply_fix", ["problem_id": unused["id"]!])).utf8)) as! [String: Any]
+        XCTAssertEqual(fixed["fix"] as? String, "Delete old")
+        XCTAssertNil(store.model.hosts["old"])
+        XCTAssertEqual(store.aiProposal?.before, before, "the banner can undo it")
+        XCTAssertEqual(call(store, "apply_fix", ["problem_id": unused["id"]!])["isError"] as? Bool, true, "stale ids are refused")
+
+        let history = try JSONSerialization.jsonObject(with: Data(text(call(store, "history")).utf8)) as! [String: Any]
+        let snapshots = history["snapshots"] as! [[String: Any]]
+        XCTAssertTrue(snapshots.contains { ($0["reason"] as? String) == "opened" })
+        let opened = snapshots.first { ($0["reason"] as? String) == "opened" }!["id"] as! String
+        let old = try JSONSerialization.jsonObject(with: Data(text(call(store, "history", ["snapshot": opened])).utf8)) as! [String: Any]
+        XCTAssertTrue((old["policy"] as? String ?? "").contains("\"old\""))
+
+        let review = try JSONSerialization.jsonObject(with: Data(text(call(store, "access_review_status")).utf8)) as! [String: Any]
+        XCTAssertEqual(review["started"] as? Bool, false)
+        XCTAssertEqual(call(store, "posture_report")["isError"] as? Bool, true, "no postures in this policy")
     }
 
     func testSocketRoundTripAndPeerCheck() async throws {

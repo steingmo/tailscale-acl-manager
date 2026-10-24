@@ -213,7 +213,12 @@ Swift Package (no Xcode project). All source in `Sources/TailscaleACL/`:
   banner). `tailscale-acl mcp` (`runMCPBridge`) answers initialize/ping/
   tools/list itself (`MCPProtocol.localReply`, `toolDefinitions`) and only
   connects to the socket — opening the app if needed — on a tools/call, so
-  AI apps starting up don't open Tailscale ACL. New tools: add to `MCPTools.definitions` + `call`.
+  AI apps starting up don't open Tailscale ACL. New tools: add to
+  `MCPProtocol.toolDefinitions` + `MCPTools.call`; prompts (security-review,
+  offboard-person, unused-access) are `MCPProtocol.prompts`, answered
+  locally. `apply_fix` applies a Problems fix by `LintIssue.id` as one
+  undoable edit with the `aiProposal` banner; `history` reads snapshots and
+  push history.
 - `CLI.swift` holds `@main`: `TailscaleACL lint|test|mcp` runs headless
   (the cask links it as `tailscale-acl`); anything else starts the app.
 - Linked file (`Workspace.linkedFile`): `PolicyStore` reads it on open and
