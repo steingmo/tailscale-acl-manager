@@ -210,8 +210,10 @@ Swift Package (no Xcode project). All source in `Sources/TailscaleACL/`:
   `read(upToCount:)` blocks), ignores SIGPIPE, and answers via
   `MCPProtocol.reply` + `MCPTools` on the main actor (locked → error).
   `propose_change` → `PolicyStore.proposeAIChange` (undoable, `aiProposal`
-  banner). `tailscale-acl mcp` (`runMCPBridge`) relays stdio to the socket,
-  opening the app if needed. New tools: add to `MCPTools.definitions` + `call`.
+  banner). `tailscale-acl mcp` (`runMCPBridge`) answers initialize/ping/
+  tools/list itself (`MCPProtocol.localReply`, `toolDefinitions`) and only
+  connects to the socket — opening the app if needed — on a tools/call, so
+  AI apps starting up don't open Tailscale ACL. New tools: add to `MCPTools.definitions` + `call`.
 - `CLI.swift` holds `@main`: `TailscaleACL lint|test|mcp` runs headless
   (the cask links it as `tailscale-acl`); anything else starts the app.
 - Linked file (`Workspace.linkedFile`): `PolicyStore` reads it on open and

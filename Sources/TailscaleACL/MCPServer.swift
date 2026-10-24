@@ -41,37 +41,6 @@ struct MCPTools {
     /// nil while the app is locked.
     var store: PolicyStore?
 
-    static let definitions: [[String: Any]] = [
-        tool("get_policy", "The current workspace's tailnet policy (HuJSON) as in the editor, with the workspace and server."),
-        tool("list_problems", "Problems and security findings in the policy, with line numbers and the one-click fixes the app offers."),
-        tool("run_tests", "The policy's own tests (tests and sshTests) and which assertions fail."),
-        tool("simulate_access", "Whether a source can reach a destination on a port, and through which rules — evaluated by the app's policy engine.",
-             ["source": "User email, group:, tag:, device name, or IP",
-              "destination": "Device name, host, IP, tag:, or ipset:",
-              "port": "Port number, e.g. 443"], required: ["source", "destination", "port"], numbers: ["port"]),
-        tool("who_can_reach", "Everyone (people and machine sources) who can reach a device, host, IP, IP set, or tag, with the rule, group, ports, and conditions.",
-             ["target": "Device name, host, IP, ipset:, or tag:"], required: ["target"]),
-        tool("list_devices", "Devices from the server (as last loaded in the app): user, tags, addresses, status, key expiry, and pass/fail for each posture."),
-        tool("traffic_summary", "Real connections from Tailscale's flow logs, as loaded in the app's Traffic screen, with the rule that allows each.",
-             ["filter": "Optional text to match device, user, IP, or port",
-              "not_allowed_only": "Only connections no rule in the editor allows (true/false)",
-              "limit": "Maximum rows (default 100)"], numbers: ["limit"], booleans: ["not_allowed_only"]),
-        tool("rule_usage", "How much real traffic each rule carried in the loaded flow logs, and which rules carried none."),
-        tool("propose_change", "Replace the policy in the editor with a full new HuJSON policy. It's only an undoable edit in the app: the user sees a banner to review or undo, and must push it themselves. Returns problems, failing tests, and how access changes.",
-             ["policy": "The complete new policy (HuJSON)", "summary": "One sentence the user sees: what changed and why"],
-             required: ["policy", "summary"]),
-    ]
-
-    private static func tool(_ name: String, _ description: String, _ properties: [String: String] = [:],
-                             required: [String] = [], numbers: [String] = [], booleans: [String] = []) -> [String: Any] {
-        var props: [String: Any] = [:]
-        for (key, text) in properties {
-            props[key] = ["type": numbers.contains(key) ? "integer" : booleans.contains(key) ? "boolean" : "string", "description": text]
-        }
-        return ["name": name, "description": description,
-                "inputSchema": ["type": "object", "properties": props, "required": required] as [String: Any]]
-    }
-
     /// The tool's answer as JSON text, or an error message.
     func call(_ name: String, _ args: [String: Any]) -> (text: String, isError: Bool) {
         guard let store else {
@@ -206,31 +175,78 @@ struct MCPTools {
 enum MCPProtocol {
     static let versions = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"]
 
-    /// The reply to one message, or nil for notifications.
-    @MainActor
-    static func reply(to message: [String: Any], tools: MCPTools) -> [String: Any]? {
-        guard let id = message["id"] else { return nil }   // notifications get no reply
+    static let toolDefinitions: [[String: Any]] = [
+        tool("get_policy", "The current workspace's tailnet policy (HuJSON) as in the editor, with the workspace and server."),
+        tool("list_problems", "Problems and security findings in the policy, with line numbers and the one-click fixes the app offers."),
+        tool("run_tests", "The policy's own tests (tests and sshTests) and which assertions fail."),
+        tool("simulate_access", "Whether a source can reach a destination on a port, and through which rules — evaluated by the app's policy engine.",
+             ["source": "User email, group:, tag:, device name, or IP",
+              "destination": "Device name, host, IP, tag:, or ipset:",
+              "port": "Port number, e.g. 443"], required: ["source", "destination", "port"], numbers: ["port"]),
+        tool("who_can_reach", "Everyone (people and machine sources) who can reach a device, host, IP, IP set, or tag, with the rule, group, ports, and conditions.",
+             ["target": "Device name, host, IP, ipset:, or tag:"], required: ["target"]),
+        tool("list_devices", "Devices from the server (as last loaded in the app): user, tags, addresses, status, key expiry, and pass/fail for each posture."),
+        tool("traffic_summary", "Real connections from Tailscale's flow logs, as loaded in the app's Traffic screen, with the rule that allows each.",
+             ["filter": "Optional text to match device, user, IP, or port",
+              "not_allowed_only": "Only connections no rule in the editor allows (true/false)",
+              "limit": "Maximum rows (default 100)"], numbers: ["limit"], booleans: ["not_allowed_only"]),
+        tool("rule_usage", "How much real traffic each rule carried in the loaded flow logs, and which rules carried none."),
+        tool("propose_change", "Replace the policy in the editor with a full new HuJSON policy. It's only an undoable edit in the app: the user sees a banner to review or undo, and must push it themselves. Returns problems, failing tests, and how access changes.",
+             ["policy": "The complete new policy (HuJSON)", "summary": "One sentence the user sees: what changed and why"],
+             required: ["policy", "summary"]),
+    ]
+
+    private static func tool(_ name: String, _ description: String, _ properties: [String: String] = [:],
+                             required: [String] = [], numbers: [String] = [], booleans: [String] = []) -> [String: Any] {
+        var props: [String: Any] = [:]
+        for (key, text) in properties {
+            props[key] = ["type": numbers.contains(key) ? "integer" : booleans.contains(key) ? "boolean" : "string", "description": text]
+        }
+        return ["name": name, "description": description,
+                "inputSchema": ["type": "object", "properties": props, "required": required] as [String: Any]]
+    }
+
+    /// Messages answered without the app — the handshake, ping, and the
+    /// tool list — so an AI app starting up doesn't open Tailscale ACL.
+    /// handled is false for anything that needs the app (tools/call).
+    static func localReply(to message: [String: Any]) -> (handled: Bool, reply: [String: Any]?) {
+        guard let id = message["id"] else { return (true, nil) }   // notifications get no reply
         let params = message["params"] as? [String: Any] ?? [:]
         func result(_ r: Any) -> [String: Any] { ["jsonrpc": "2.0", "id": id, "result": r] }
         switch message["method"] as? String ?? "" {
         case "initialize":
             let asked = params["protocolVersion"] as? String ?? versions[0]
-            return result([
+            return (true, result([
                 "protocolVersion": versions.contains(asked) ? asked : versions[0],
                 "capabilities": ["tools": [String: Any]()],
                 "serverInfo": ["name": "tailscale-acl", "version": Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "dev"],
                 "instructions": "Tools for the tailnet policy open in the Tailscale ACL app. Prefer simulate_access and who_can_reach over reading the policy yourself; they use the app's exact policy engine. propose_change only edits the user's editor — the user reviews and pushes.",
-            ] as [String: Any])
+            ] as [String: Any]))
         case "ping":
-            return result([String: Any]())
+            return (true, result([String: Any]()))
         case "tools/list":
-            return result(["tools": MCPTools.definitions])
+            return (true, result(["tools": toolDefinitions]))
         case "tools/call":
-            let (text, isError) = tools.call(params["name"] as? String ?? "", params["arguments"] as? [String: Any] ?? [:])
-            return result(["content": [["type": "text", "text": text]], "isError": isError] as [String: Any])
+            return (false, nil)
         default:
-            return ["jsonrpc": "2.0", "id": id, "error": ["code": -32601, "message": "Method not found"]]
+            return (true, ["jsonrpc": "2.0", "id": id, "error": ["code": -32601, "message": "Method not found"]])
         }
+    }
+
+    /// A tool result that is an error message.
+    static func toolError(_ id: Any, _ text: String) -> [String: Any] {
+        ["jsonrpc": "2.0", "id": id, "result": ["content": [["type": "text", "text": text]], "isError": true] as [String: Any]]
+    }
+
+    /// The reply to one message, or nil for notifications.
+    @MainActor
+    static func reply(to message: [String: Any], tools: MCPTools) -> [String: Any]? {
+        let local = localReply(to: message)
+        if local.handled { return local.reply }
+        let params = message["params"] as? [String: Any] ?? [:]
+        let (text, isError) = tools.call(params["name"] as? String ?? "", params["arguments"] as? [String: Any] ?? [:])
+        return ["jsonrpc": "2.0", "id": message["id"] as Any,
+                "result": ["content": [["type": "text", "text": text]], "isError": isError] as [String: Any]]
     }
 }
 
@@ -343,8 +359,10 @@ final class MCPSocketServer {
     }
 }
 
-/// `tailscale-acl mcp`: relays stdio to the running app (starting it if
-/// needed), so AI apps can use it as an MCP server.
+/// `tailscale-acl mcp`: the MCP server AI apps start. It answers the
+/// handshake and tool list itself, and connects to the running app — opening
+/// it if needed — only when a tool is called, so starting an AI app doesn't
+/// open Tailscale ACL.
 func runMCPBridge(path: String = MCPSocket.path) -> Int32 {
     signal(SIGPIPE, SIG_IGN)   // the AI app closing its end ends the relay, quietly
     func connectSocket() -> Int32 {
@@ -359,9 +377,9 @@ func runMCPBridge(path: String = MCPSocket.path) -> Int32 {
         if !ok { close(fd) }
         return ok ? fd : -1
     }
-    var fd = connectSocket()
-    if fd < 0 {
-        // Start the app in the background and give it a moment.
+    func connectOrOpenApp() -> Int32 {
+        var fd = connectSocket()
+        guard fd < 0 else { return fd }
         let open = Process()
         open.executableURL = URL(fileURLWithPath: "/usr/bin/open")
         open.arguments = ["-g", "-b", MCPSocket.bundleID]
@@ -371,17 +389,51 @@ func runMCPBridge(path: String = MCPSocket.path) -> Int32 {
             Thread.sleep(forTimeInterval: 0.5)
             fd = connectSocket()
         }
+        return fd
     }
-    guard fd >= 0 else {
-        FileHandle.standardError.write(Data("tailscale-acl mcp: can't reach Tailscale ACL. Open the app and turn on Settings ▸ AI tools (MCP).\n".utf8))
-        return 1
+    func send(_ reply: [String: Any]) -> Bool {
+        guard let data = try? JSONSerialization.data(withJSONObject: reply, options: [.withoutEscapingSlashes]) else { return true }
+        return writeAll(STDOUT_FILENO, data + Data([0x0A]))
     }
-    var on: Int32 = 1
-    setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &on, socklen_t(MemoryLayout<Int32>.size))
-    Thread {
-        while let data = readSome(STDIN_FILENO), writeAll(fd, data) {}
-        shutdown(fd, SHUT_WR)
-    }.start()
-    while let data = readSome(fd), writeAll(STDOUT_FILENO, data) {}
+    /// Sends one request line to the app and returns its reply line; nil if
+    /// the connection dropped (e.g. the app quit).
+    func forward(_ fd: Int32, _ line: Data) -> Data? {
+        guard writeAll(fd, line + Data([0x0A])) else { return nil }
+        var reply = Data()
+        while true {
+            if let newline = reply.firstIndex(of: 0x0A) { return Data(reply[..<newline]) }
+            guard let chunk = readSome(fd) else { return nil }
+            reply.append(chunk)
+        }
+    }
+
+    var app: Int32 = -1
+    var input = Data()
+    while let chunk = readSome(STDIN_FILENO) {
+        input.append(chunk)
+        while let newline = input.firstIndex(of: 0x0A) {
+            let line = Data(input[..<newline])
+            input = Data(input[input.index(after: newline)...])
+            guard let message = try? JSONSerialization.jsonObject(with: line) as? [String: Any] else { continue }
+            let local = MCPProtocol.localReply(to: message)
+            if local.handled {
+                if let reply = local.reply, !send(reply) { return 0 }
+                continue
+            }
+            var reply: Data?
+            for _ in 0..<2 where reply == nil {   // once more if the app was restarted
+                if app < 0 { app = connectOrOpenApp() }
+                guard app >= 0 else { break }
+                reply = forward(app, line)
+                if reply == nil { close(app); app = -1 }
+            }
+            if let reply {
+                guard writeAll(STDOUT_FILENO, reply + Data([0x0A])) else { return 0 }
+            } else if !send(MCPProtocol.toolError(message["id"] as Any,
+                                                  "Can't reach Tailscale ACL. Open the app and turn on Settings ▸ AI tools (MCP).")) {
+                return 0
+            }
+        }
+    }
     return 0
 }
