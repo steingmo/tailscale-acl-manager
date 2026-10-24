@@ -13,13 +13,16 @@ enum Main {
 private let usage = """
 usage: tailscale-acl lint <policy.hujson>   problems (exit 1 on errors)
        tailscale-acl test <policy.hujson>   problems + the policy's tests (exit 1 on any failure)
+       tailscale-acl mcp                    MCP server for AI apps (relays to the running app;
+                                            turn on Settings ▸ AI tools first)
 Use - to read the policy from standard input.
 """
 
 /// The exit code for a command, or nil when the arguments aren't one
 /// (e.g. Finder/Xcode launch flags) and the app should start.
 func runCommandLine(_ args: [String], output: (String) -> Void = { print($0) }) -> Int32? {
-    guard let command = args.first, ["lint", "test", "help", "--help", "-h"].contains(command) else { return nil }
+    guard let command = args.first, ["lint", "test", "mcp", "help", "--help", "-h"].contains(command) else { return nil }
+    if command == "mcp" { return runMCPBridge() }
     guard command == "lint" || command == "test" else {
         output(usage)
         return 0

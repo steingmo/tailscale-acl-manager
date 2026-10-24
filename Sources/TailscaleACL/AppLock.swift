@@ -18,6 +18,9 @@ final class AppSession: ObservableObject {
 
     var lockEnabled: Bool { UserDefaults.standard.bool(forKey: Self.lockSettingKey) }
     private var observers: [NSObjectProtocol] = []
+    private var mcp: MCPSocketServer?
+    /// Why AI tools couldn't start, if they couldn't.
+    @Published private(set) var mcpError: String?
 
     init() {
         // Versions before 1.28.3 let the system cache server responses on disk,
@@ -25,6 +28,7 @@ final class AppSession: ObservableObject {
         URLCache.shared.removeAllCachedResponses()
         URLCache.shared = URLCache(memoryCapacity: 4_000_000, diskCapacity: 0)
         if !lockEnabled { open() }
+        updateMCP()
         // Lock when the Mac sleeps or the screen locks.
         let ws = NSWorkspace.shared.notificationCenter
         for name in [NSWorkspace.willSleepNotification, NSWorkspace.screensDidSleepNotification] {
@@ -79,6 +83,22 @@ final class AppSession: ObservableObject {
     func reload() {
         store = nil
         open()
+    }
+
+    /// Listen for AI tools (MCP) exactly while the setting is on. While the
+    /// app is locked the tools answer that it's locked.
+    func updateMCP() {
+        mcp?.stop()
+        mcp = nil
+        mcpError = nil
+        guard UserDefaults.standard.bool(forKey: MCPSocket.settingKey) else { return }
+        let server = MCPSocketServer { [weak self] in self?.store }
+        do {
+            try server.start()
+            mcp = server
+        } catch {
+            mcpError = "AI tools couldn't start: \(error.localizedDescription)"
+        }
     }
 
     /// Manual locks always lock; sleep and screen lock only with the app lock on.

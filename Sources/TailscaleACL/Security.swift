@@ -281,6 +281,8 @@ struct SettingsView: View {
     @State private var fileVault: Bool?
     @State private var backupMode: BackupSheet.Mode?
     @State private var serverDataRemoved = false
+    @AppStorage(MCPSocket.settingKey) private var mcpEnabled = false
+    @State private var copied: String?
 
     var body: some View {
         Form {
@@ -343,6 +345,21 @@ struct SettingsView: View {
                     }
                 }
             }
+            Section("AI tools (MCP)") {
+                Toggle("Let AI apps use Tailscale ACL", isOn: $mcpEnabled)
+                    .onChange(of: mcpEnabled) { session.updateMCP() }
+                Text("AI apps such as Claude Desktop or Claude Code can read the policy, problems, tests, devices, and loaded traffic, run access simulations, and propose changes. A proposal only edits the editor — you see a banner to review or undo it, and push it yourself. They can't push, change devices or users, or see credentials. Only this app's own signed command can connect, and only on this Mac. What the tools return goes to the AI app's model provider.")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                if let error = session.mcpError {
+                    Text(error).font(.caption).foregroundStyle(.red)
+                }
+                if mcpEnabled {
+                    setupLine("Claude Code", "claude mcp add tailscale-acl -- \(MCPSocket.commandPath) mcp")
+                    setupLine("Claude Desktop (claude_desktop_config.json)",
+                              #"{"mcpServers": {"tailscale-acl": {"command": "\#(MCPSocket.commandPath)", "args": ["mcp"]}}}"#)
+                }
+            }
             Section("Activity log") {
                 Text("Every change the app makes on a server is recorded with the date, your user, the workspace, and the result.")
                     .font(.caption).foregroundStyle(.secondary)
@@ -356,6 +373,25 @@ struct SettingsView: View {
             BackupSheet(mode: $0.mode).environmentObject(session)
         }
         .padding(.vertical, 8)
+    }
+}
+
+extension SettingsView {
+    fileprivate func setupLine(_ label: String, _ text: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text(label).font(.caption.weight(.semibold))
+                Spacer()
+                Button(copied == text ? "Copied" : "Copy") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(text, forType: .string)
+                    copied = text
+                }
+                .font(.caption)
+            }
+            Text(text).font(.system(size: 10.5, design: .monospaced)).textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+        }
     }
 }
 

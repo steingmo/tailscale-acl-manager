@@ -157,6 +157,13 @@ Use `-` to read the policy from standard input.
   with the 1Password CLI (approved with Touch ID in 1Password) when it needs it,
   keeping it in memory until the app locks. "Move to 1Password…" moves an
   existing key in one step. The CLI must be 1Password's own signed binary.
+- **AI tools (MCP)** — turn on Settings ▸ AI tools and add `tailscale-acl mcp`
+  to Claude Code (`claude mcp add tailscale-acl -- tailscale-acl mcp`) or
+  Claude Desktop. The AI can read the policy, problems, tests, devices, and
+  loaded traffic, simulate access with the app's engine, and propose
+  changes — which only edit the editor, with a banner to review or undo.
+  It can't push or change the server. Only this app's signed binary can
+  connect, over a local socket.
 - **Data on this Mac** (Settings) — what's stored where, the data folder,
   and Remove Saved Server Data. Flow logs are only ever kept in memory, and
   server responses never go to the system's network cache.

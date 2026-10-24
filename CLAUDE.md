@@ -202,7 +202,17 @@ Swift Package (no Xcode project). All source in `Sources/TailscaleACL/`:
   `RuleMatch.posture` (`AccessResult.conditional`); tests run with only their
   `srcPostureAttrs`, like Tailscale. Device attributes come from the device
   list (`HeadscaleNode.postureAttributes`: node:os, node:tsVersion).
-- `CLI.swift` holds `@main`: `TailscaleACL lint|test <file>` runs headless
+- `MCPServer.swift`: AI tools over MCP. `MCPSocketServer` (Unix socket
+  `<data>/mcp.sock`, 0600, only while `mcpEnabled`; `AppSession.updateMCP`)
+  accepts only peers whose code signature satisfies this app's designated
+  requirement (`peerIsThisApp`), reads newline-delimited JSON-RPC with
+  POSIX `readSome`/`writeAll` (FileHandle raises on reset sockets;
+  `read(upToCount:)` blocks), ignores SIGPIPE, and answers via
+  `MCPProtocol.reply` + `MCPTools` on the main actor (locked → error).
+  `propose_change` → `PolicyStore.proposeAIChange` (undoable, `aiProposal`
+  banner). `tailscale-acl mcp` (`runMCPBridge`) relays stdio to the socket,
+  opening the app if needed. New tools: add to `MCPTools.definitions` + `call`.
+- `CLI.swift` holds `@main`: `TailscaleACL lint|test|mcp` runs headless
   (the cask links it as `tailscale-acl`); anything else starts the app.
 - Linked file (`Workspace.linkedFile`): `PolicyStore` reads it on open and
   polls it; valid parses are written back, but only after it was read this

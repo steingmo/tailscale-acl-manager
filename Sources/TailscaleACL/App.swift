@@ -91,6 +91,7 @@ struct RootView: View {
                 .overlay(Theme.panelBorder)
             VStack(spacing: 0) {
                 if let server = store.serverDrift { driftBanner(server) }
+                if let proposal = store.aiProposal { aiBanner(proposal) }
                 content
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -163,6 +164,31 @@ struct RootView: View {
 
     /// Shown when the server's policy changed since this workspace's last
     /// pull or push — someone edited it elsewhere.
+    private func aiBanner(_ p: AIProposal) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: "sparkles").foregroundStyle(Theme.purple)
+            Text(verbatim: "An AI tool changed the policy in the editor: \(p.summary)")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(Theme.textPrimary)
+                .lineLimit(2)
+            Spacer()
+            Button("Show changes") {
+                overlay = .compare(DiffPresentation(title: "Change from an AI tool", oldLabel: "before", newLabel: "after",
+                                                    old: p.before, new: store.text))
+            }
+            Button("Undo") {
+                store.loadPolicy(p.before, reason: "AI tool change undone")
+                store.aiProposal = nil
+            }
+            Button("Keep") { store.aiProposal = nil }
+                .help("Keep it in the editor; review it in Problems and the push review before pushing")
+        }
+        .font(.system(size: 11.5))
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+        .background(Theme.purple.opacity(0.12))
+    }
+
     private func driftBanner(_ server: String) -> some View {
         HStack(spacing: 10) {
             Image(systemName: "exclamationmark.triangle.fill")

@@ -2,6 +2,12 @@ import SwiftUI
 import AppKit
 import UniformTypeIdentifiers
 
+struct AIProposal {
+    var summary: String
+    var before: String
+    var after: String
+}
+
 @MainActor
 final class PolicyStore: ObservableObject {
     @Published var text: String = "" {
@@ -39,6 +45,9 @@ final class PolicyStore: ObservableObject {
     /// When the devices, users, and policy changes shown were saved, while
     /// they come from the cache rather than the server; nil once refreshed.
     @Published var serverDataSaved: Date?
+    /// The last change an AI tool made in the editor (MCP propose_change),
+    /// until the user keeps or undoes it.
+    @Published var aiProposal: AIProposal?
     /// The current workspace's access review (Access Review screen).
     @Published var review = AccessReview()
     /// Who changed the policy recently (Tailscale's audit log), once loaded.
@@ -125,6 +134,7 @@ final class PolicyStore: ObservableObject {
         postureAttributesFetched = nil
         serverDataSaved = nil
         policyChanges = nil
+        aiProposal = nil
         traffic = nil
         serverDrift = nil
         linkedFileContents = nil
@@ -304,6 +314,7 @@ final class PolicyStore: ObservableObject {
         postureAttributesFetched = nil
         serverDataSaved = nil
         policyChanges = nil
+        aiProposal = nil
         traffic = nil
         saveWorkspaces()
     }
@@ -415,6 +426,13 @@ final class PolicyStore: ObservableObject {
 
     /// Replace the whole policy (import, Headscale pull) and parse immediately.
     /// Snapshots what's being replaced and the result, so both can be restored.
+    /// An AI tool's whole-policy change: an undoable edit plus the banner.
+    func proposeAIChange(_ policy: String, summary: String) {
+        let before = aiProposal?.before ?? text   // undo goes back past every AI change
+        loadPolicy(policy, reason: "AI tool change")
+        aiProposal = AIProposal(summary: summary, before: before, after: policy)
+    }
+
     func loadPolicy(_ contents: String, reason: String = "replaced") {
         snapshot(reason: "before \(reason)")
         defer { snapshot(reason: reason) }
