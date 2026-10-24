@@ -47,6 +47,11 @@ enum OnePassword {
         }
     }
 
+    /// Already read this session, so using it won't ask 1Password again.
+    static func isCached(_ reference: String) -> Bool {
+        lock.withLock { cache[reference.trimmingCharacters(in: .whitespaces)] != nil }
+    }
+
     /// Drop every secret read so far (app lock), so the next use asks again.
     static func forget() {
         lock.withLock { cache = [:] }

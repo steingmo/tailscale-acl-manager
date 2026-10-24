@@ -103,3 +103,72 @@ final class TrafficTests: XCTestCase {
         XCTAssertTrue(md.contains("## Real traffic this would block\n\n- amy-laptop → 10.114.32.11 UDP 88"))
     }
 }
+
+@MainActor
+final class TrafficLoadingTests: XCTestCase {
+    var dir: URL!
+
+    override func setUp() async throws {
+        dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        setenv("TAILSCALE_ACL_DATA_DIR", dir.path, 1)
+        let ws = Workspace(name: "T", serverURL: "", policy: "{}", serverKind: .tailscale)
+        try WorkspaceStore.save([ws])
+        UserDefaults.standard.set(ws.id.uuidString, forKey: "currentWorkspaceID")
+        StubProtocol.requests = []
+    }
+
+    override func tearDown() async throws {
+        try? FileManager.default.removeItem(at: dir)
+        unsetenv("TAILSCALE_ACL_DATA_DIR")
+    }
+
+    func client(_ tailnet: String) -> PolicyServer {
+        makeServer(kind: .tailscale, serverURL: "", tailnet: tailnet, credential: ["tskey", "api", "x"].joined(separator: "-"),
+                   session: StubProtocol.session())!
+    }
+    static let log = Data("""
+    {"logs": [{"nodeId": "n1", "logged": "2026-10-03T10:00:05Z",
+      "virtualTraffic": [{"proto": 6, "src": "100.64.0.1:52343", "dst": "100.64.0.3:5432", "txBytes": 10}]}]}
+    """.utf8)
+
+    func testLoadsTheDayAnHourAtATime() async throws {
+        StubProtocol.handler = { _, _ in .init(body: Self.log) }
+        let store = PolicyStore()
+        let hours = try await store.loadTraffic(days: 1, client: client("day-test"))
+        XCTAssertEqual(hours, 24)
+        // Only this test's requests: another test's cancelled ones may still trickle in.
+        let mine = StubProtocol.requests.filter { $0.request.url!.path.contains("/day-test/") }
+        XCTAssertEqual(mine.count, 24)
+        let windows = mine.compactMap { r -> TimeInterval? in
+            let q = URLComponents(url: r.request.url!, resolvingAgainstBaseURL: false)!.queryItems!
+            let f = ISO8601DateFormatter()
+            guard let s = q.first(where: { $0.name == "start" })?.value.flatMap(f.date),
+                  let e = q.first(where: { $0.name == "end" })?.value.flatMap(f.date) else { return nil }
+            return e.timeIntervalSince(s)
+        }
+        XCTAssertEqual(Set(windows), [3600])
+        XCTAssertEqual(store.traffic?.connections.count, 1)
+        XCTAssertEqual(store.traffic.map { $0.end.timeIntervalSince($0.start) }, 86_400)
+        XCTAssertNil(store.trafficProgress)
+        XCTAssertNil(store.trafficStarted)
+    }
+
+    func testCancelKeepsTheNewestHoursAlreadyIn() async throws {
+        let lock = NSLock()
+        nonisolated(unsafe) var served = 0
+        StubProtocol.handler = { _, _ in
+            let n = lock.withLock { served += 1; return served }
+            if n > 3 { Thread.sleep(forTimeInterval: 3) }   // the first three hours answer, the rest hang
+            return .init(body: Self.log)
+        }
+        let store = PolicyStore()
+        let c = client("cancel-test")
+        let task = Task { try await store.loadTraffic(days: 1, client: c) }
+        try await Task.sleep(nanoseconds: 700_000_000)
+        task.cancel()
+        let hours = try await task.value
+        XCTAssertEqual(hours, 3)
+        XCTAssertEqual(store.traffic.map { $0.end.timeIntervalSince($0.start) }, 3 * 3600)
+        XCTAssertNil(store.trafficProgress)
+    }
+}

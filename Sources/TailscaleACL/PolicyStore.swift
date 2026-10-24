@@ -29,8 +29,10 @@ final class PolicyStore: ObservableObject {
     /// Set (e.g. from the Access Map) to show the Traffic screen filtered to
     /// a device, user, group, tag, or IP; the screen clears it.
     @Published var trafficFilterRequest: String?
-    /// "Loading day 2 of 7…" while traffic loads.
+    /// "Hour 5 of 24 · 1,234 flow records" while traffic loads.
     @Published var trafficProgress: String?
+    /// When the current traffic load started, for the elapsed time.
+    @Published var trafficStarted: Date?
 
     /// The server's users (empty when unknown).
     @Published var serverAccounts: [ServerAccount] = []

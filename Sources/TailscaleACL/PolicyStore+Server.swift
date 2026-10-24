@@ -5,22 +5,54 @@ import Foundation
 extension PolicyStore {
     /// Load the last `days` days of flow logs, a day per request so a busy
     /// tailnet's logs never have to fit in one response.
-    func loadTraffic(days: Int) async throws {
-        guard let client = serverClient() else { return }
+    /// Flow logs for the last `days` days, an hour per request (three at a time,
+    /// newest first), so progress moves and one slow hour doesn't hold up the
+    /// rest. If the load is cancelled, the hours already in are kept. Returns
+    /// how many hours were loaded.
+    @discardableResult
+    func loadTraffic(days: Int, client given: PolicyServer? = nil) async throws -> Int {
+        guard let client = given ?? serverClient() else { return 0 }
         let workspace = currentWorkspaceID
-        let end = Date()
-        var acc = TrafficAccumulator()
-        defer { trafficProgress = nil }
-        for day in 0..<days {
-            trafficProgress = "Loading day \(day + 1) of \(days)…"
-            let from = end.addingTimeInterval(-Double(days - day) * 86_400)
-            guard let records = try await client.flowRecords(from: from, to: from.addingTimeInterval(86_400)) else {
-                throw ServerError(status: 0, message: "\(serverDisplayName) doesn't keep network flow logs.")
-            }
-            acc.add(records)
-            guard workspace == currentWorkspaceID else { return }
+        let hours = days * 24
+        defer { trafficProgress = nil; trafficStarted = nil }
+        // A 1Password key may first wait for approval in 1Password; say so.
+        if given == nil, let stored = HeadscaleKeychain.load(account: workspace.uuidString),
+           OnePassword.isReference(stored), !OnePassword.isCached(stored) {
+            trafficProgress = "Waiting for 1Password approval…"
+            _ = try await OnePassword.read(stored)
         }
-        traffic = TrafficSummary(start: end.addingTimeInterval(-Double(days) * 86_400), end: end, connections: acc.connections)
+        let end = Date()
+        trafficStarted = Date()
+        trafficProgress = "Hour 1 of \(hours)"
+        var acc = TrafficAccumulator()
+        var arrived: [Int: [FlowRecord]] = [:]   // hour (0 = newest) → records, until folded in
+        var folded = 0, done = 0, records = 0
+        do {
+            try await withThrowingTaskGroup(of: (Int, [FlowRecord]?).self) { group in
+                var pending = (0..<hours).makeIterator()
+                func hour(_ i: Int) -> @Sendable () async throws -> (Int, [FlowRecord]?) {
+                    let to = end.addingTimeInterval(-Double(i) * 3600)
+                    return { (i, try await client.flowRecords(from: to.addingTimeInterval(-3600), to: to)) }
+                }
+                for _ in 0..<3 { if let i = pending.next() { group.addTask(operation: hour(i)) } }
+                while let (i, result) = try await group.next() {
+                    guard let result else { throw ServerError(status: 0, message: "\(serverDisplayName) doesn't keep network flow logs.") }
+                    arrived[i] = result
+                    done += 1
+                    records += result.count
+                    // Fold in newest-first, so a cancelled load keeps an unbroken recent window.
+                    while let r = arrived.removeValue(forKey: folded) { acc.add(r); folded += 1 }
+                    trafficProgress = "Hour \(done) of \(hours) · \(records.formatted()) flow records"
+                    if let next = pending.next() { group.addTask(operation: hour(next)) }
+                }
+            }
+        } catch {
+            // Cancelled (the button, or leaving): keep what's in, if anything.
+            guard Task.isCancelled, folded > 0 else { throw error }
+        }
+        guard workspace == currentWorkspaceID, folded > 0 else { return folded }
+        traffic = TrafficSummary(start: end.addingTimeInterval(-Double(folded) * 3600), end: end, connections: acc.connections)
+        return folded
     }
 
     /// Check whether the server's policy changed since the last pull/push.

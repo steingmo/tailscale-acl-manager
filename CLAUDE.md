@@ -95,8 +95,10 @@ Swift Package (no Xcode project). All source in `Sources/TailscaleACL/`:
   invites need a personal access token; user changes need the `users` scope.
   `PolicyStore.addUser(_:toGroups:)` / `removeUserEverywhere` edit the policy.
 - Traffic (Traffic.swift, TrafficScreen.swift): `PolicyServer.flowRecords`
-  (Tailscale `logging/network`; nil for Headscale), loaded a day per request
-  into `PolicyStore.traffic`. Each device logs its own view, so
+  (Tailscale `logging/network`; nil for Headscale), loaded an hour per
+  request, three at a time, folded newest-first into `PolicyStore.traffic`
+  (`loadTraffic` keeps the unbroken recent window on cancel and returns the
+  hours loaded; `trafficProgress`/`trafficStarted` drive the screen). Each device logs its own view, so
   `TrafficAccumulator` treats the lower port as the service and counts bytes
   from the client side only. `Evaluator.proto` makes matching protocol-exact
   for real traffic; `ruleUsage` and `trafficBlocked` (push review) use it.

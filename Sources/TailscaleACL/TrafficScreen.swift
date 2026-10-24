@@ -8,6 +8,8 @@ struct TrafficScreen: View {
     @State private var tab = Tab.connections
     @State private var filter = ""
     @State private var error: String?
+    @State private var loading: Task<Void, Never>?
+    @State private var partial: String?
     @State private var narrowed: String?
 
     enum Tab: String, CaseIterable { case connections = "Connections", usage = "Rule usage" }
@@ -64,11 +66,22 @@ struct TrafficScreen: View {
                 if let error {
                     Text(error).font(.system(size: 11)).foregroundStyle(Theme.red).fixedSize(horizontal: false, vertical: true)
                 }
+                if let partial {
+                    Text(partial).font(.system(size: 11)).foregroundStyle(Theme.orange).fixedSize(horizontal: false, vertical: true)
+                }
             }
             Spacer()
             if let progress = store.trafficProgress {
                 ProgressView().controlSize(.small)
-                Text(progress).font(.system(size: 11)).foregroundStyle(Theme.textSecondary)
+                TimelineView(.periodic(from: .now, by: 1)) { context in
+                    Text(verbatim: progress + (store.trafficStarted.map { " · " + elapsed(since: $0, now: context.date) } ?? ""))
+                        .font(.system(size: 11))
+                        .foregroundStyle(Theme.textSecondary)
+                        .monospacedDigit()
+                }
+                Button("Cancel") { loading?.cancel() }
+                    .font(.system(size: 11))
+                    .help("Stop loading and keep the hours already in")
             }
             Picker("", selection: $days) {
                 Text("Last 24 hours").tag(1)
@@ -83,12 +96,24 @@ struct TrafficScreen: View {
         }
     }
 
+    private func elapsed(since start: Date, now: Date) -> String {
+        let s = max(0, Int(now.timeIntervalSince(start)))
+        return s < 60 ? "\(s) s" : "\(s / 60) min \(s % 60) s"
+    }
+
     private func load() {
         error = nil
-        Task {
+        partial = nil
+        let requested = days * 24
+        loading = Task {
+            defer { loading = nil }
             do {
                 if store.headscaleNodes.isEmpty { try? await store.refreshNodes() }
-                try await store.loadTraffic(days: days)
+                let hours = try await store.loadTraffic(days: days)
+                if hours < requested {
+                    partial = hours == 0 ? "Cancelled before any hour loaded."
+                        : "Cancelled — showing the last \(hours) hour\(hours == 1 ? "" : "s") of \(requested)."
+                }
             } catch {
                 self.error = (error as? ServerError).map { e in
                     e.status == 403 || e.status == 401
