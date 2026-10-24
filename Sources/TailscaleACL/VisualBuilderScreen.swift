@@ -48,8 +48,10 @@ struct VisualBuilderScreen: View {
     @State private var showingAddBox = false
     @State private var renamingNode: Node?
     @State private var filter = ""
-    @State private var showGrants = true
-    @State private var showACLs = true
+    /// Which kind of rule's lines to draw: grants (green), ACLs (blue), or both.
+    @State private var kinds = Kinds.all
+
+    private enum Kinds: Hashable { case all, grants, acls }
     /// A box clicked to show only its connections.
     @State private var focus: String?
     @State private var hoveredNode: String?
@@ -60,6 +62,8 @@ struct VisualBuilderScreen: View {
 
     private struct BuilderLayout {
         var all = 0
+        var grants = 0
+        var acls = 0
         var visible: [Connection] = []
         var sources: [Node] = []
         var dests: [Node] = []
@@ -67,8 +71,19 @@ struct VisualBuilderScreen: View {
         var row: [String: Int] = [:]
     }
 
+    /// Why nothing is drawn, in words.
+    private var emptyMessage: String {
+        if kinds == .acls && layout.acls == 0 {
+            return "Your policy has no ACL rules — everything is written as grants. Choose All or Grants to see them."
+        }
+        if kinds == .grants && layout.grants == 0 {
+            return "Your policy has no grants — everything is written as legacy ACL rules. Choose All or ACLs to see them."
+        }
+        return "No connections match. Clear the filter or the focused box to see everything."
+    }
+
     private var layoutKey: String {
-        "\(store.text.hashValue)|\(filter)|\(showGrants)|\(showACLs)|\(focus ?? "")"
+        "\(store.text.hashValue)|\(filter)|\(kinds)|\(focus ?? "")"
     }
 
     private func rebuildLayout() {
@@ -79,7 +94,9 @@ struct VisualBuilderScreen: View {
         var row: [String: Int] = [:]
         for (i, n) in sources.enumerated() { row[n.id] = i }
         for (i, n) in dests.enumerated() { row[n.id] = i }
-        layout = BuilderLayout(all: all.count, visible: visible, sources: sources, dests: dests, row: row)
+        let grants = all.filter { $0.kind == .grant }.count
+        layout = BuilderLayout(all: all.count, grants: grants, acls: all.count - grants,
+                               visible: visible, sources: sources, dests: dests, row: row)
     }
 
     private var sourceNodes: [Node] { layout.sources }
@@ -87,7 +104,7 @@ struct VisualBuilderScreen: View {
     private var visibleConnections: [Connection] { layout.visible }
 
     /// Filtering or focusing: only boxes with visible connections are drawn.
-    private var narrowed: Bool { focus != nil || !filter.trimmingCharacters(in: .whitespaces).isEmpty || !showGrants || !showACLs }
+    private var narrowed: Bool { focus != nil || !filter.trimmingCharacters(in: .whitespaces).isEmpty || kinds != .all }
 
     private func makeSourceNodes(_ visible: [Connection]) -> [Node] {
         if narrowed {
@@ -142,7 +159,7 @@ struct VisualBuilderScreen: View {
         let names = q.isEmpty ? [:] : Dictionary(ruleSummaries(store.model, sourceIDs: nil).map { ("\($0.kind == .grant ? "g" : "a")\($0.index)", $0.name.lowercased()) },
                                                  uniquingKeysWith: { a, _ in a })
         return connections.filter { c in
-            guard c.kind == .grant ? showGrants : showACLs else { return false }
+            guard kinds == .all || (c.kind == .grant) == (kinds == .grants) else { return false }
             if let focus {
                 let name = String(focus.dropFirst(2))
                 guard focus.hasPrefix("S|") ? c.src == name : c.dstTarget == name else { return false }
@@ -182,7 +199,13 @@ struct VisualBuilderScreen: View {
         VStack(alignment: .leading, spacing: 0) {
             header
             legend
-            if store.isValid {
+            if store.isValid, narrowed, visibleConnections.isEmpty {
+                Text(emptyMessage)
+                    .font(.system(size: 12))
+                    .foregroundStyle(Theme.textSecondary)
+                    .padding(16)
+                Spacer(minLength: 0)
+            } else if store.isValid {
                 ScrollView([.horizontal, .vertical]) {
                     canvas
                         .frame(width: canvasWidth, height: canvasHeight, alignment: .topLeading)
@@ -283,8 +306,15 @@ struct VisualBuilderScreen: View {
             TextField("Show only… (name, group, tag, rule)", text: $filter)
                 .textFieldStyle(.roundedBorder)
                 .frame(width: 230)
-            Toggle("Grants", isOn: $showGrants).toggleStyle(.button).controlSize(.small)
-            Toggle("ACLs", isOn: $showACLs).toggleStyle(.button).controlSize(.small)
+            Picker("", selection: $kinds) {
+                Text("All").tag(Kinds.all)
+                Text(verbatim: "Grants (\(layout.grants))").tag(Kinds.grants)
+                Text(verbatim: "ACLs (\(layout.acls))").tag(Kinds.acls)
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .fixedSize()
+            .help("Show the lines of every rule, only grants (green), or only legacy ACLs (blue)")
             ToolbarButton(label: "Add box", icon: "plus") { showingAddBox = true }
             ToolbarButton(label: "Export", icon: "square.and.arrow.down") { exportPNG() }
         }
