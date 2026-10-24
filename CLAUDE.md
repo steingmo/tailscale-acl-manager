@@ -165,7 +165,13 @@ Swift Package (no Xcode project). All source in `Sources/TailscaleACL/`:
 - `AccessMapScreen(focus:_:direction:)` renders just the map; `renderPNG`
   turns it into an image (map export, per-group/tag images in reports).
   Visual builder draws ACL connections blue, grants green, and edits them
-  with `ConnectionSheet`.
+  with `ConnectionSheet`; it filters (text, grants/ACLs, a clicked box =
+  focus), dims what the hovered box doesn't touch, and orders sources by
+  their destinations and destinations by their sources (unconnected last).
+  `RuleSheet` (Access Map add/edit) edits via, srcPosture, ACL proto, SSH
+  checkPeriod, and expiry, with service port presets; it previews new
+  problems and access changes off the main thread through the pure
+  `applyRuleEdit` (also behind `PolicyStore.saveRule`).
 - `Lint.swift` — pure `lintPolicy(model)`: undefined references, ownerless
   tags, unused entities, empty groups, invalid addresses/port specs,
   same-kind shadowed rules, postures, `via`, expiring and wide-open rules.

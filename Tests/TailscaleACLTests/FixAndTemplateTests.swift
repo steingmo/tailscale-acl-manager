@@ -124,3 +124,28 @@ final class FixAndSnapshotStoreTests: XCTestCase {
         XCTAssertTrue(report.contains("![group:eng](<T images/group-eng.png>)"))
     }
 }
+
+final class RuleEditTests: XCTestCase {
+    func testOptionsAreSetAndRemoved() throws {
+        var tree = try HuJSONParser.parse(#"{"grants": [{"src": ["group:a"], "dst": ["tag:b"], "ip": ["*"], "app": {"x": []}}]}"#)
+        applyRuleEdit(&tree, section: "grants", index: 0, name: "Through the router", expires: .some("2027-01-31"),
+                      fields: [("via", stringArrayJSON(["tag:client-vpn"])), ("srcPosture", stringArrayJSON(["posture:p"]))])
+        var g = PolicyModel(tree: tree).grants[0]
+        XCTAssertEqual(g.via, ["tag:client-vpn"])
+        XCTAssertEqual(g.srcPosture, ["posture:p"])
+        XCTAssertEqual(g.comments, ["Through the router"])
+        XCTAssertEqual(g.expires, "2027-01-31")
+        XCTAssertTrue(g.hasApp, "fields the sheet doesn't show are kept")
+
+        applyRuleEdit(&tree, section: "grants", index: 0, name: "Through the router", expires: .some(nil),
+                      fields: [("via", nil), ("srcPosture", nil)])
+        g = PolicyModel(tree: tree).grants[0]
+        XCTAssertEqual(g.via, [])
+        XCTAssertEqual(g.srcPosture, [])
+        XCTAssertNil(g.expires)
+
+        applyRuleEdit(&tree, section: "acls", index: nil, name: "", fields: [
+            ("action", .string("accept")), ("src", stringArrayJSON(["a@x.com"])), ("dst", stringArrayJSON(["tag:b:22"])), ("proto", .string("tcp"))])
+        XCTAssertEqual(PolicyModel(tree: tree).rules.first?.proto, "tcp")
+    }
+}

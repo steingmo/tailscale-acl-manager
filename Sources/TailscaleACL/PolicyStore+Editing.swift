@@ -240,26 +240,7 @@ extension PolicyStore {
     /// (.some(nil)) the "expires:" comment; leave it nil to keep it as is.
     func saveRule(section: String, index: Int?, name: String, expires: String?? = nil,
                   fields: [(key: String, value: JSON?)]) {
-        mutate { tree in
-            var list = tree[section]?.elements ?? []
-            let existing = index.flatMap { list.indices.contains($0) ? $0 : nil }
-            var element = existing.map { list[$0] } ?? JSON.Element(comments: [], value: .object([]))
-            for field in fields { element.value[field.key] = field.value }
-            var expiry = element.comments.filter { RuleExpiry.date(in: $0) != nil }
-            if let expires { expiry = expires.map { [RuleExpiry.comment(for: $0)] } ?? [] }
-            element.comments.removeAll { RuleExpiry.date(in: $0) != nil }
-            let trimmed = name.trimmingCharacters(in: .whitespaces)
-            if element.comments.isEmpty {
-                if !trimmed.isEmpty { element.comments = [trimmed] }
-            } else if trimmed.isEmpty {
-                element.comments.removeFirst()
-            } else {
-                element.comments[0] = trimmed
-            }
-            element.comments += expiry
-            if let existing { list[existing] = element } else { list.append(element) }
-            tree[section] = .array(list)
-        }
+        mutate { applyRuleEdit(&$0, section: section, index: index, name: name, expires: expires, fields: fields) }
     }
 
     func deleteRule(section: String, index: Int) {
@@ -613,4 +594,29 @@ private func rewriteNames(_ tree: inout JSON, from oldName: String, to newName: 
         }
     }
     walk(&tree)
+}
+
+/// Create (index nil) or update one rule in `tree`: its fields (nil removes a
+/// key), its name (first comment), and its expiry comment. Pure, so the rule
+/// sheet can preview a rule before saving it.
+func applyRuleEdit(_ tree: inout JSON, section: String, index: Int?, name: String, expires: String?? = nil,
+                   fields: [(key: String, value: JSON?)]) {
+    var list = tree[section]?.elements ?? []
+    let existing = index.flatMap { list.indices.contains($0) ? $0 : nil }
+    var element = existing.map { list[$0] } ?? JSON.Element(comments: [], value: .object([]))
+    for field in fields { element.value[field.key] = field.value }
+    var expiry = element.comments.filter { RuleExpiry.date(in: $0) != nil }
+    if let expires { expiry = expires.map { [RuleExpiry.comment(for: $0)] } ?? [] }
+    element.comments.removeAll { RuleExpiry.date(in: $0) != nil }
+    let trimmed = name.trimmingCharacters(in: .whitespaces)
+    if element.comments.isEmpty {
+        if !trimmed.isEmpty { element.comments = [trimmed] }
+    } else if trimmed.isEmpty {
+        element.comments.removeFirst()
+    } else {
+        element.comments[0] = trimmed
+    }
+    element.comments += expiry
+    if let existing { list[existing] = element } else { list.append(element) }
+    tree[section] = .array(list)
 }

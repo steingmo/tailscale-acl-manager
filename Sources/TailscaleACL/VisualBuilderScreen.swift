@@ -47,8 +47,22 @@ struct VisualBuilderScreen: View {
     @State private var creating: (src: String, dst: String)?
     @State private var showingAddBox = false
     @State private var renamingNode: Node?
+    @State private var filter = ""
+    @State private var showGrants = true
+    @State private var showACLs = true
+    /// A box clicked to show only its connections.
+    @State private var focus: String?
+    @State private var hoveredNode: String?
+
+    /// Filtering or focusing: only boxes with visible connections are drawn.
+    private var narrowed: Bool { focus != nil || !filter.trimmingCharacters(in: .whitespaces).isEmpty || !showGrants || !showACLs }
 
     private var sourceNodes: [Node] {
+        if narrowed {
+            var names = ordered(visibleConnections.map(\.src).uniqued())
+            if let focus, focus.hasPrefix("S|"), !names.contains(String(focus.dropFirst(2))) { names.insert(String(focus.dropFirst(2)), at: 0) }
+            return names.map { Node(side: .source, name: $0) }
+        }
         var names = store.model.sourceSpecs
         let used = Set(store.model.rules.flatMap(\.src))
         if !names.contains("*") && used.contains("*") { names.insert("*", at: 0) }
@@ -56,13 +70,56 @@ struct VisualBuilderScreen: View {
         if !names.contains("autogroup:members") {
             names.insert("autogroup:members", at: 1)
         }
-        return names.uniqued().map { Node(side: .source, name: $0) }
+        return ordered(names.uniqued()).map { Node(side: .source, name: $0) }
     }
 
+    /// Sources sorted by the average position of the destinations they reach
+    /// (in policy order), unconnected ones last; destNodes then sorts by
+    /// sources. One pass each way untangles most of the lines.
+    private func ordered(_ sources: [String]) -> [String] {
+        let destOrder = Dictionary(store.model.destTargets.enumerated().map { ($1, Double($0)) }, uniquingKeysWith: { a, _ in a })
+        var reach: [String: [Double]] = [:]
+        for c in visibleConnections { if let d = destOrder[c.dstTarget] { reach[c.src, default: []].append(d) } }
+        let order = Dictionary(sources.enumerated().map { ($1, $0) }, uniquingKeysWith: { a, _ in a })
+        func weight(_ s: String) -> Double {
+            reach[s].map { $0.reduce(0, +) / Double($0.count) } ?? Double.greatestFiniteMagnitude
+        }
+        return sources.sorted { (weight($0), order[$0] ?? 0) < (weight($1), order[$1] ?? 0) }
+    }
+
+    /// Destinations sorted by where their sources sit (the average row of
+    /// the sources reaching them), so lines cross as little as possible.
     private var destNodes: [Node] {
-        var names = store.model.destTargets
-        if !names.contains("*") { names.insert("*", at: 0) }
-        return names.uniqued().map { Node(side: .dest, name: $0) }
+        var names = narrowed ? visibleConnections.map(\.dstTarget).uniqued() : store.model.destTargets
+        if !narrowed, !names.contains("*") { names.insert("*", at: 0) }
+        if let focus, focus.hasPrefix("D|"), !names.contains(String(focus.dropFirst(2))) { names.insert(String(focus.dropFirst(2)), at: 0) }
+        let row = Dictionary(sourceNodes.enumerated().map { ($1.name, Double($0)) }, uniquingKeysWith: { a, _ in a })
+        var rows: [String: [Double]] = [:]
+        for c in visibleConnections { if let r = row[c.src] { rows[c.dstTarget, default: []].append(r) } }
+        let order = Dictionary(names.enumerated().map { ($1, $0) }, uniquingKeysWith: { a, _ in a })
+        func weight(_ n: String) -> Double {
+            rows[n].map { $0.reduce(0, +) / Double($0.count) } ?? Double(sourceNodes.count + (order[n] ?? 0))
+        }
+        return names.uniqued().sorted { (weight($0), order[$0] ?? 0) < (weight($1), order[$1] ?? 0) }
+            .map { Node(side: .dest, name: $0) }
+    }
+
+    /// Connections after the kind toggles, the filter, and the focused box.
+    private var visibleConnections: [Connection] {
+        guard narrowed else { return connections }
+        let q = filter.trimmingCharacters(in: .whitespaces).lowercased()
+        let names = q.isEmpty ? [:] : Dictionary(ruleSummaries(store.model, sourceIDs: nil).map { ("\($0.kind == .grant ? "g" : "a")\($0.index)", $0.name.lowercased()) },
+                                                 uniquingKeysWith: { a, _ in a })
+        return connections.filter { c in
+            guard c.kind == .grant ? showGrants : showACLs else { return false }
+            if let focus {
+                let name = String(focus.dropFirst(2))
+                guard focus.hasPrefix("S|") ? c.src == name : c.dstTarget == name else { return false }
+            }
+            guard !q.isEmpty else { return true }
+            return c.src.lowercased().contains(q) || c.dstTarget.lowercased().contains(q)
+                || (names["\(c.kind == .grant ? "g" : "a")\(c.ruleIndex)"] ?? "").contains(q)
+        }
     }
 
     private var connections: [Connection] {
@@ -190,6 +247,11 @@ struct VisualBuilderScreen: View {
                     .foregroundStyle(Theme.textSecondary)
             }
             Spacer()
+            TextField("Show only… (name, group, tag, rule)", text: $filter)
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 230)
+            Toggle("Grants", isOn: $showGrants).toggleStyle(.button).controlSize(.small)
+            Toggle("ACLs", isOn: $showACLs).toggleStyle(.button).controlSize(.small)
             ToolbarButton(label: "Add box", icon: "plus") { showingAddBox = true }
             ToolbarButton(label: "Export", icon: "square.and.arrow.down") { exportPNG() }
         }
@@ -218,6 +280,21 @@ struct VisualBuilderScreen: View {
             Text("grant")
                 .font(.system(size: 11))
                 .foregroundStyle(Theme.textSecondary)
+            Text("·").foregroundStyle(Theme.textSecondary)
+            Text(verbatim: narrowed ? "\(visibleConnections.count) of \(connections.count) connections" : "\(connections.count) connections · click a box to focus on it")
+                .font(.system(size: 11))
+                .foregroundStyle(Theme.textSecondary)
+            if let focus {
+                Button {
+                    self.focus = nil
+                } label: {
+                    Label(String(focus.dropFirst(2)), systemImage: "xmark.circle.fill")
+                        .font(.system(size: 11, weight: .semibold))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(Theme.purple)
+                .help("Show every connection again")
+            }
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
@@ -233,14 +310,15 @@ struct VisualBuilderScreen: View {
         ZStack(alignment: .topLeading) {
             DotGrid()
             // Connection curves.
-            ForEach(connections) { conn in
+            ForEach(visibleConnections) { conn in
                 let from = dotPoint(for: Node(side: .source, name: conn.src))
                 let to = dotPoint(for: Node(side: .dest, name: conn.dstTarget))
                 let color = conn.kind == .grant ? Theme.lineGreen : Theme.lineBlue
-                let active = hoveredConnection == conn.id || editingConnection?.id == conn.id
+                let touchesHovered = hoveredNode.map { $0 == "S|" + conn.src || $0 == "D|" + conn.dstTarget }
+                let active = hoveredConnection == conn.id || editingConnection?.id == conn.id || touchesHovered == true
 
                 ConnectionCurve(from: from, to: to)
-                    .stroke(color.opacity(active ? 1 : 0.8),
+                    .stroke(color.opacity(active ? 1 : touchesHovered == false ? 0.12 : 0.8),
                             style: StrokeStyle(lineWidth: active ? 3 : 1.5,
                                                dash: active ? [] : [5, 4]))
                 if active {
@@ -264,12 +342,13 @@ struct VisualBuilderScreen: View {
                             style: StrokeStyle(lineWidth: 2, dash: [6, 4]))
             }
 
-            // Nodes.
+            // Nodes, with the boxes linked to the hovered one worked out once.
+            let linked = linkedToHovered
             ForEach(sourceNodes) { node in
-                nodeView(node)
+                nodeView(node, linked: linked)
             }
             ForEach(destNodes) { node in
-                nodeView(node)
+                nodeView(node, linked: linked)
             }
         }
         .coordinateSpace(name: "canvas")
@@ -277,7 +356,7 @@ struct VisualBuilderScreen: View {
         .onContinuousHover(coordinateSpace: .local) { phase in
             switch phase {
             case .active(let point):
-                hoveredConnection = connections.first { conn in
+                hoveredConnection = visibleConnections.first { conn in
                     ConnectionCurve(
                         from: dotPoint(for: Node(side: .source, name: conn.src)),
                         to: dotPoint(for: Node(side: .dest, name: conn.dstTarget))
@@ -292,7 +371,7 @@ struct VisualBuilderScreen: View {
         }
     }
 
-    private func nodeView(_ node: Node) -> some View {
+    private func nodeView(_ node: Node, linked: Set<String>) -> some View {
         let center = position(of: node)
         return NodeBox(
             node: node,
@@ -313,6 +392,12 @@ struct VisualBuilderScreen: View {
             } : nil
         )
         .frame(width: nodeSize.width, height: nodeSize.height)
+        .opacity(hoveredNode == nil || hoveredNode == node.id || linked.contains(node.id) ? 1 : 0.35)
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.purple, lineWidth: focus == node.id ? 2 : 0))
+        .onHover { inside in
+            if inside { hoveredNode = node.id } else if hoveredNode == node.id { hoveredNode = nil }
+        }
+        .simultaneousGesture(TapGesture().onEnded { focus = focus == node.id ? nil : node.id })
         .position(center)
         .gesture(
             DragGesture(coordinateSpace: .named("canvas"))
@@ -327,6 +412,17 @@ struct VisualBuilderScreen: View {
                 }
                 .onEnded { _ in dragOrigin = nil }
         )
+    }
+
+    /// Boxes at the other end of a visible connection from the hovered box.
+    private var linkedToHovered: Set<String> {
+        guard let hovered = hoveredNode else { return [] }
+        var out = Set<String>()
+        for c in visibleConnections {
+            if "S|" + c.src == hovered { out.insert("D|" + c.dstTarget) }
+            if "D|" + c.dstTarget == hovered { out.insert("S|" + c.src) }
+        }
+        return out
     }
 
     private func canDelete(_ node: Node) -> Bool {
