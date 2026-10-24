@@ -9,6 +9,8 @@ struct RoutesScreen: View {
     @State private var pending: RouteChange?
     @State private var routeError: String?
     @State private var approving = false
+    /// Routers whose whole route list is shown.
+    @State private var expandedRouters: Set<String> = []
 
     struct RouteChange {
         var node: HeadscaleNode
@@ -164,37 +166,88 @@ struct RoutesScreen: View {
             if !store.headscaleNodes.isEmpty && routers.isEmpty {
                 Text("No device advertises routes.").font(.system(size: 11.5)).foregroundStyle(Theme.textSecondary)
             }
-            ForEach(routers) { node in
-                row {
-                    Text(verbatim: node.displayName)
-                        .font(.system(size: 12, weight: .semibold, design: .monospaced))
-                        .foregroundStyle(Theme.textPrimary)
-                    ForEach(node.availableRoutes ?? [], id: \.self) { route in
-                        let approved = (node.approvedRoutes ?? []).contains(route)
-                        let auto = ev.autoApproves(route: route, node: node)
-                        Chip(text: route, color: approved ? Theme.green : auto ? Theme.orange : Theme.textSecondary)
-                            .help(approved ? "Approved — right-click to remove approval"
-                                  : auto ? "Not approved yet — auto-approvers cover it"
-                                  : "Needs manual approval (no auto-approver covers it)")
-                            .contextMenu {
-                                if approved, store.serverClient() != nil {
-                                    Button("Remove approval…") {
-                                        pending = RouteChange(node: node, routes: group(route, node), approve: false)
-                                    }
-                                }
-                            }
-                        if !approved, store.serverClient() != nil {
-                            Button("Approve") {
-                                pending = RouteChange(node: node, routes: group(route, node), approve: true)
-                            }
-                            .font(.system(size: 10.5))
-                            .buttonStyle(.borderless)
-                            .disabled(approving)
-                        }
+            ForEach(routers) { node in routerCard(node, ev) }
+        }
+    }
+
+    /// One router: name, counts, "Approve all", and its routes wrapping onto
+    /// as many lines as needed (exit routes first, then by address).
+    private func routerCard(_ node: HeadscaleNode, _ ev: Evaluator) -> some View {
+        let approved = Set(node.approvedRoutes ?? [])
+        // Waiting for approval first, so they're visible even when the list is collapsed.
+        let routes = (node.availableRoutes ?? []).sorted {
+            approved.contains($0) != approved.contains($1) ? !approved.contains($0) : Self.routeOrder($0, $1)
+        }
+        let waiting = routes.filter { !approved.contains($0) }
+        let expanded = expandedRouters.contains(node.id)
+        let shown = expanded || routes.count <= Self.collapsedLimit ? routes : Array(routes.prefix(Self.collapsedLimit))
+        return VStack(alignment: .leading, spacing: 7) {
+            HStack(spacing: 8) {
+                Text(verbatim: node.displayName)
+                    .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(Theme.textPrimary)
+                ForEach(node.allTags, id: \.self) { EntityChip(name: $0) }
+                Text(verbatim: "\(routes.count) route\(routes.count == 1 ? "" : "s") · \(routes.count - waiting.count) approved")
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(Theme.textSecondary)
+                Spacer()
+                if !waiting.isEmpty, store.serverClient() != nil {
+                    Button("Approve all (\(waiting.count))…") {
+                        pending = RouteChange(node: node, routes: waiting, approve: true)
                     }
-                } actions: { EmptyView() }
+                    .font(.system(size: 10.5))
+                    .disabled(approving)
+                }
+            }
+            FlowLayout(spacing: 5) {
+                ForEach(shown, id: \.self) { route in routeChip(route, node, approved: approved.contains(route), ev) }
+                if routes.count > Self.collapsedLimit {
+                    Button(expanded ? "Show fewer" : "Show all \(routes.count)") {
+                        if expanded { expandedRouters.remove(node.id) } else { expandedRouters.insert(node.id) }
+                    }
+                    .buttonStyle(.link)
+                    .font(.system(size: 10.5))
+                }
             }
         }
+        .padding(10)
+        .background(RoundedRectangle(cornerRadius: 7).fill(Color.white.opacity(0.03)))
+    }
+
+    private func routeChip(_ route: String, _ node: HeadscaleNode, approved: Bool, _ ev: Evaluator) -> some View {
+        let auto = !approved && ev.autoApproves(route: route, node: node)
+        return HStack(spacing: 3) {
+            Chip(text: route, color: approved ? Theme.green : auto ? Theme.orange : Theme.textSecondary)
+                .help(approved ? "Approved — right-click to remove approval"
+                      : auto ? "Not approved yet — auto-approvers cover it"
+                      : "Needs manual approval (no auto-approver covers it)")
+                .contextMenu {
+                    if approved, store.serverClient() != nil {
+                        Button("Remove approval…") {
+                            pending = RouteChange(node: node, routes: group(route, node), approve: false)
+                        }
+                    }
+                }
+            if !approved, store.serverClient() != nil {
+                Button("Approve") {
+                    pending = RouteChange(node: node, routes: group(route, node), approve: true)
+                }
+                .font(.system(size: 10.5))
+                .buttonStyle(.borderless)
+                .disabled(approving)
+            }
+        }
+    }
+
+    private static let collapsedLimit = 12
+
+    /// Exit routes first, then IPv4 before IPv6, by address and prefix.
+    private static func routeOrder(_ a: String, _ b: String) -> Bool {
+        let ea = exitRoutes.contains(a), eb = exitRoutes.contains(b)
+        if ea != eb { return ea }
+        guard let x = parseCIDR(a), let y = parseCIDR(b) else { return a < b }
+        if x.bytes.count != y.bytes.count { return x.bytes.count < y.bytes.count }
+        return x.bytes == y.bytes ? x.bits < y.bits : x.bytes.lexicographicallyPrecedes(y.bytes)
     }
 
     // MARK: - Route approval
@@ -209,7 +262,10 @@ struct RoutesScreen: View {
 
     private var pendingTitle: String {
         guard let pending else { return "" }
-        let what = pending.routes.contains("0.0.0.0/0") ? "exit node" : pending.routes.joined(separator: ", ")
+        let subnets = pending.routes.filter { !Self.exitRoutes.contains($0) }
+        let exit = subnets.count < pending.routes.count
+        let listed = subnets.count > 3 ? "\(subnets.count) routes" : subnets.joined(separator: ", ")
+        let what = [exit ? "exit node" : nil, listed.isEmpty ? nil : listed].compactMap { $0 }.joined(separator: " and ")
         return pending.approve ? "Approve \(what) for \(pending.node.displayName)?"
             : "Remove approval of \(what) for \(pending.node.displayName)?"
     }
