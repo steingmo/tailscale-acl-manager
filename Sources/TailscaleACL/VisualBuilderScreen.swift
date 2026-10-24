@@ -52,6 +52,9 @@ struct VisualBuilderScreen: View {
     @State private var kinds = Kinds.all
 
     private enum Kinds: Hashable { case all, grants, acls }
+    /// Draw groups, tags, hosts, and IP sets that no visible rule uses (to drag
+    /// a new connection from or to them). Off by default: they're most of the clutter.
+    @State private var showUnused = false
     /// A box clicked to show only its connections.
     @State private var focus: String?
     @State private var hoveredNode: String?
@@ -64,6 +67,8 @@ struct VisualBuilderScreen: View {
         var all = 0
         var grants = 0
         var acls = 0
+        /// Boxes left out because no visible line touches them.
+        var hiddenUnused = 0
         var visible: [Connection] = []
         var sources: [Node] = []
         var dests: [Node] = []
@@ -83,19 +88,29 @@ struct VisualBuilderScreen: View {
     }
 
     private var layoutKey: String {
-        "\(store.text.hashValue)|\(filter)|\(kinds)|\(focus ?? "")"
+        "\(store.text.hashValue)|\(filter)|\(kinds)|\(focus ?? "")|\(showUnused)"
     }
 
     private func rebuildLayout() {
         let all = connections
         let visible = narrowed ? filtered(all) : all
-        let sources = makeSourceNodes(visible)
-        let dests = makeDestNodes(visible, sources)
+        var sources = makeSourceNodes(visible)
+        var dests = makeDestNodes(visible, sources)
+        // A policy without rules keeps its boxes, so there's something to drag from.
+        var hidden = 0
+        if !showUnused, !all.isEmpty {
+            let usedSources = Set(visible.map(\.src)), usedDests = Set(visible.map(\.dstTarget))
+            let focused = focus.map { String($0.dropFirst(2)) }
+            let keptSources = sources.filter { usedSources.contains($0.name) || $0.name == focused }
+            let keptDests = dests.filter { usedDests.contains($0.name) || $0.name == focused }
+            hidden = sources.count - keptSources.count + dests.count - keptDests.count
+            (sources, dests) = (keptSources, keptDests)
+        }
         var row: [String: Int] = [:]
         for (i, n) in sources.enumerated() { row[n.id] = i }
         for (i, n) in dests.enumerated() { row[n.id] = i }
         let grants = all.filter { $0.kind == .grant }.count
-        layout = BuilderLayout(all: all.count, grants: grants, acls: all.count - grants,
+        layout = BuilderLayout(all: all.count, grants: grants, acls: all.count - grants, hiddenUnused: hidden,
                                visible: visible, sources: sources, dests: dests, row: row)
     }
 
@@ -315,7 +330,10 @@ struct VisualBuilderScreen: View {
             .labelsHidden()
             .fixedSize()
             .help("Show the lines of every rule, only grants (green), or only legacy ACLs (blue)")
-            ToolbarButton(label: "Add box", icon: "plus") { showingAddBox = true }
+            ToolbarButton(label: "Add box", icon: "plus") {
+                showUnused = true   // so the new box shows before it has any lines
+                showingAddBox = true
+            }
             ToolbarButton(label: "Export", icon: "square.and.arrow.down") { exportPNG() }
         }
         .padding(.horizontal, 16)
@@ -347,6 +365,18 @@ struct VisualBuilderScreen: View {
             Text(verbatim: narrowed ? "\(visibleConnections.count) of \(layout.all) connections" : "\(layout.all) connections · click a box to focus on it")
                 .font(.system(size: 11))
                 .foregroundStyle(Theme.textSecondary)
+            if layout.hiddenUnused > 0 || showUnused {
+                Text("·").foregroundStyle(Theme.textSecondary)
+                if layout.hiddenUnused > 0 {
+                    Text(verbatim: "\(layout.hiddenUnused) unused box\(layout.hiddenUnused == 1 ? "" : "es") hidden")
+                        .font(.system(size: 11))
+                        .foregroundStyle(Theme.textSecondary)
+                }
+                Button(showUnused ? "Hide unused" : "Show") { showUnused.toggle() }
+                    .buttonStyle(.link)
+                    .font(.system(size: 11))
+                    .help("Groups, tags, hosts, and IP sets no rule uses — show them to drag a new connection from or to them")
+            }
             if let focus {
                 Button {
                     self.focus = nil
