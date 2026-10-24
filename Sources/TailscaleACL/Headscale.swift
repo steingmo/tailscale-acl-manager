@@ -120,7 +120,7 @@ final class HeadscaleClient: PolicyServer {
     private let apiKey: Credential
     private let session: URLSession
 
-    init(baseURL: URL, apiKey: String, session: URLSession = .shared) {
+    init(baseURL: URL, apiKey: String, session: URLSession = serverSession) {
         self.baseURL = baseURL
         self.apiKey = Credential(stored: apiKey)
         self.session = session

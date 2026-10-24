@@ -19,7 +19,10 @@ live in the Keychain per workspace (`HeadscaleKeychain`) — or only a 1Password
 secret reference does (`OnePassword.swift`: clients hold a `Credential` and
 call `value()`, which runs `op read` once per reference, caches in memory,
 `forget()` on app lock; `op` must be AgileBits-signed; secrets go to `op` on
-stdin only). ATS allows plain
+stdin only). Server requests use
+`serverSession` (ephemeral: never the system's on-disk URL cache, which
+encryption doesn't cover); `AppSession.init` empties that cache and sets
+its disk capacity to 0. ATS allows plain
 HTTP only to local networks (`NSAllowsLocalNetworking`). Client tests stub
 the network with `StubProtocol` (URLProtocol), so they run in CI.
 Unofficial community tool, MIT licensed, distributed via GitHub Releases

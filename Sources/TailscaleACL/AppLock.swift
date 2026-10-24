@@ -20,6 +20,10 @@ final class AppSession: ObservableObject {
     private var observers: [NSObjectProtocol] = []
 
     init() {
+        // Versions before 1.28.3 let the system cache server responses on disk,
+        // unencrypted. Empty that cache and keep it in memory from now on.
+        URLCache.shared.removeAllCachedResponses()
+        URLCache.shared = URLCache(memoryCapacity: 4_000_000, diskCapacity: 0)
         if !lockEnabled { open() }
         // Lock when the Mac sleeps or the screen locks.
         let ws = NSWorkspace.shared.notificationCenter

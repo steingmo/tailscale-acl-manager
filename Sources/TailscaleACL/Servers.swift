@@ -136,8 +136,13 @@ struct PolicyChange: Identifiable, Codable {
 }
 
 /// The server for a workspace's settings and credential, or nil if not configured.
+/// For every server request: ephemeral, so responses (policy, devices, users,
+/// posture) are never written to the system's on-disk URL cache, which the
+/// app's encryption doesn't cover.
+let serverSession = URLSession(configuration: .ephemeral)
+
 func makeServer(kind: ServerKind, serverURL: String, tailnet: String, credential: String,
-                session: URLSession = .shared) -> PolicyServer? {
+                session: URLSession = serverSession) -> PolicyServer? {
     guard !credential.isEmpty else { return nil }
     switch kind {
     case .headscale:
@@ -234,7 +239,7 @@ final class TailscaleClient: PolicyServer {
     /// Tailscale refuses the push if someone changed the policy in between.
     private var etag: String?
 
-    init(tailnet: String, credential: String, session: URLSession = .shared) {
+    init(tailnet: String, credential: String, session: URLSession = serverSession) {
         let t = tailnet.trimmingCharacters(in: .whitespaces)
         self.tailnet = t.isEmpty ? "-" : t
         self.credential = Credential(stored: credential)

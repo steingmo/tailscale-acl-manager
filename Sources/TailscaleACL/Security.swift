@@ -280,6 +280,7 @@ struct SettingsView: View {
     @State private var encryptionError: String?
     @State private var fileVault: Bool?
     @State private var backupMode: BackupSheet.Mode?
+    @State private var serverDataRemoved = false
 
     var body: some View {
         Form {
@@ -325,6 +326,22 @@ struct SettingsView: View {
                 Toggle("Clear copied auth keys and invite links after a minute", isOn: $clearSecrets)
                 Text("Copied secrets are also marked so clipboard managers don't keep them.")
                     .font(.caption).foregroundStyle(.secondary)
+            }
+            Section("Data on this Mac") {
+                Text("Workspaces (with their policies), push history, snapshots, access reviews, the activity log, and the last devices, users, and policy changes from each server are in the app's data folder — encrypted when encryption is on. Credentials are in your Keychain (or only a 1Password reference is). Flow logs are never saved: they stay in memory until the app quits, locks, or switches workspace. Exports go wherever you save them.")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                HStack {
+                    Button("Show Data Folder") { NSWorkspace.shared.activateFileViewerSelecting([appDataDirectory]) }
+                    Button("Remove Saved Server Data") {
+                        ServerCache.deleteAll()
+                        serverDataRemoved = true
+                    }
+                    .help("Deletes the saved devices, users, and policy changes of every workspace; they load again from the server")
+                    if serverDataRemoved {
+                        Label("Removed", systemImage: "checkmark.circle").font(.caption).foregroundStyle(.green)
+                    }
+                }
             }
             Section("Activity log") {
                 Text("Every change the app makes on a server is recorded with the date, your user, the workspace, and the result.")

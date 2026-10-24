@@ -28,6 +28,13 @@ struct ServerCache: Codable {
         if let data = try? encoder.encode(self) { try? DataEncryption.write(data, to: Self.fileURL(workspace)) }
     }
 
+    /// Every workspace's saved server data, and anything older versions left
+    /// in the system's URL cache.
+    static func deleteAll() {
+        try? FileManager.default.removeItem(at: appDataDirectory.appendingPathComponent("server-cache", isDirectory: true))
+        URLCache.shared.removeAllCachedResponses()
+    }
+
     static func delete(_ workspace: UUID) {
         try? FileManager.default.removeItem(at: fileURL(workspace))
     }

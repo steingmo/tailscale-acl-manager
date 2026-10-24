@@ -237,3 +237,21 @@ final class PostureReportTests: XCTestCase {
         XCTAssertEqual(postureReport(unused, posture: "posture:p", nodes: nodes).map(\.status), [.passes])
     }
 }
+
+final class LocalDataTests: XCTestCase {
+    func testServerResponsesNeverGoToADiskCache() {
+        XCTAssertEqual(serverSession.configuration.urlCache?.diskCapacity ?? 0, 0)
+    }
+
+    func testRemoveSavedServerData() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        setenv("TAILSCALE_ACL_DATA_DIR", dir.path, 1)
+        defer { try? FileManager.default.removeItem(at: dir); unsetenv("TAILSCALE_ACL_DATA_DIR") }
+        let id = UUID()
+        ServerCache(saved: Date(), nodes: [], accounts: [], policyChanges: nil).save(id)
+        XCTAssertNotNil(ServerCache.load(id))
+        ServerCache.deleteAll()
+        XCTAssertNil(ServerCache.load(id))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: dir.appendingPathComponent("server-cache").path))
+    }
+}

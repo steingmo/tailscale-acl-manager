@@ -157,6 +157,9 @@ Use `-` to read the policy from standard input.
   with the 1Password CLI (approved with Touch ID in 1Password) when it needs it,
   keeping it in memory until the app locks. "Move to 1Password…" moves an
   existing key in one step. The CLI must be 1Password's own signed binary.
+- **Data on this Mac** (Settings) — what's stored where, the data folder,
+  and Remove Saved Server Data. Flow logs are only ever kept in memory, and
+  server responses never go to the system's network cache.
 - **Works when the server is slow** — the last devices, users, and policy
   changes show at once (encrypted on disk) while fresh ones load.
 - **Access Review** — sign off every group and rule as still needed or to
