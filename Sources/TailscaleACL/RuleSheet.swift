@@ -317,17 +317,24 @@ struct RuleSheet: View {
 
     /// Changes whenever the draft does, for the live check.
     private var draftKey: String {
-        [kind == .grant ? "g" : kind == .acl ? "a" : "s", name, action, proto, checkPeriod, "\(expires)\(expiryDate)"]
-            .joined(separator: "|") + (src + ["|"] + dst + ["|"] + ip + ["|"] + users + ["|"] + via + ["|"] + postures).joined(separator: ",")
+        // Built in steps: one long expression times out CI's type checker.
+        let kindCode: String = kind == .grant ? "g" : kind == .acl ? "a" : "s"
+        let scalars: [String] = [kindCode, name, action, proto, checkPeriod, "\(expires)\(expiryDate)"]
+        let lists: [[String]] = [src, dst, ip, users, via, postures]
+        let joined: [String] = lists.map { $0.joined(separator: ",") }
+        return scalars.joined(separator: "|") + "|" + joined.joined(separator: "|")
     }
 
     private var draftFields: [(key: String, value: JSON?)] {
         func list(_ items: [String]) -> JSON? { items.isEmpty ? nil : stringArrayJSON(items) }
         switch kind {
         case .acl:
-            return (existing == nil ? [("action", JSON.string("accept"))] : [])
-                + [("src", stringArrayJSON(src)), ("dst", stringArrayJSON(dst)),
-                   ("proto", proto.isEmpty ? nil : .string(proto)), ("srcPosture", list(postures))]
+            var fields: [(key: String, value: JSON?)] = existing == nil ? [("action", JSON.string("accept"))] : []
+            fields.append(("src", stringArrayJSON(src)))
+            fields.append(("dst", stringArrayJSON(dst)))
+            fields.append(("proto", proto.isEmpty ? nil : JSON.string(proto)))
+            fields.append(("srcPosture", list(postures)))
+            return fields
         case .grant:
             return [("src", stringArrayJSON(src)), ("dst", stringArrayJSON(dst)), ("ip", list(ip)),
                     ("via", list(via)), ("srcPosture", list(postures))]
