@@ -168,6 +168,9 @@ Swift Package (no Xcode project). All source in `Sources/TailscaleACL/`:
   with `ConnectionSheet`; it filters (text, grants/ACLs, a clicked box =
   focus), dims what the hovered box doesn't touch, and orders sources by
   their destinations and destinations by their sources (unconnected last).
+  All of that is computed once into `layout` when the policy/filter/focus
+  change — never per redraw (1.31.0 did it per line and box: minutes with
+  many ACLs; `VisualBuilderPerformanceTests` guards it).
   `RuleSheet` (Access Map add/edit) edits via, srcPosture, ACL proto, SSH
   checkPeriod, and expiry, with service port presets; it previews new
   problems and access changes off the main thread through the pure

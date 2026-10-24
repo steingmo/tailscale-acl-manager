@@ -277,7 +277,8 @@ struct PolicyModel {
         targets.append(contentsOf: tagOrder)
         targets.append(contentsOf: ipsetOrder)
         // Anything referenced only in rules: autogroups, groups-as-dst, raw IPs.
-        for t in used.sorted() where !targets.contains(t) {
+        let known = Set(targets)
+        for t in used.sorted() where !known.contains(t) {
             targets.append(t)
         }
         return targets.uniqued()
