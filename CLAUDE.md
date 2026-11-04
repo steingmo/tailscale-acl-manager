@@ -56,6 +56,12 @@ Swift Package (no Xcode project). All source in `Sources/TailscaleACL/`:
   traffic are in `PolicyStore+Server.swift`.
   Typing reparses on a 120 ms debounce; programmatic mutations reparse
   immediately.
+  Async server results are applied only through `applyNodes`/
+  `applyPulledPolicy`/`applyPolicyChanges(_:for: workspace)`, which drop
+  them if the user switched workspace meanwhile (capture
+  `currentWorkspaceID` before the `await`); `switchWorkspace` first saves
+  typing still inside the debounce. Screens reset per-workspace state in
+  `.onChange(of: store.currentWorkspaceID)`.
 - `CodeEditor.swift` — NSTextView-based editor. **Deliberately TextKit 1**
   and **deliberately no NSRulerView**: the ruler corrupts NSScrollView
   tiling inside SwiftUI on recent macOS and blanks the text. Line numbers

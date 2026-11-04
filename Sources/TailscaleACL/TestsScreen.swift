@@ -87,6 +87,12 @@ struct TestsScreen: View {
         }
         .sheet(item: $editingRule) { RuleSheet(existing: $0) }
         .onChange(of: store.text) { tailscaleRun = nil }
+        .onChange(of: store.currentWorkspaceID) {
+            // Results belong to the workspace they were made in.
+            generated = nil
+            generatedSSH = []
+            tailscaleRun = nil
+        }
         .sheet(isPresented: $showingAddTest) {
             AddTestSheet()
         }

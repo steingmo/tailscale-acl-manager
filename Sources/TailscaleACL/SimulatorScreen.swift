@@ -212,9 +212,10 @@ struct SimulatorScreen: View {
         guard let client = store.serverClient() else { return }
         loadingNodes = true
         nodeError = nil
+        let workspace = store.currentWorkspaceID
         Task {
             do {
-                store.headscaleNodes = try await client.listNodes()
+                store.applyNodes(try await client.listNodes(), for: workspace)
             } catch {
                 nodeError = error.localizedDescription
             }

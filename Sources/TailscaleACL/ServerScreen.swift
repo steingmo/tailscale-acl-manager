@@ -421,15 +421,18 @@ struct ServerScreen: View {
 
     private func refreshNodes(announce: Bool) {
         run { client in
+            let workspace = store.currentWorkspaceID
             let nodes = try await client.listNodes()
-            store.headscaleNodes = nodes
+            guard store.applyNodes(nodes, for: workspace) else { return "Switched workspace — those devices weren't applied." }
             return announce ? "Connected — \(nodes.count) node\(nodes.count == 1 ? "" : "s")" : "Nodes refreshed"
         }
     }
 
     private func compareWithServer() {
         run { client in
+            let workspace = store.currentWorkspaceID
             let server = try await client.getPolicy()
+            guard workspace == store.currentWorkspaceID else { return "Switched workspace — comparison cancelled." }
             comparing = DiffPresentation(title: "Editor vs server", oldLabel: "on the server",
                                          newLabel: "in the editor", old: server, new: store.text)
             return server == store.text ? "The editor matches the server." : "Showing differences from the server."
@@ -438,12 +441,15 @@ struct ServerScreen: View {
 
     private func pull() {
         run { client in
+            let workspace = store.currentWorkspaceID
             let policy = try await client.getPolicy()
             guard !policy.isEmpty else { return "Server returned an empty policy — editor left unchanged." }
-            store.loadPolicy(policy, reason: "pulled")
-            store.markSynced(policy)
-            store.headscaleNodes = try await client.listNodes()
-            return "Pulled policy and \(store.headscaleNodes.count) devices."
+            guard store.applyPulledPolicy(policy, for: workspace) else {
+                return "Switched workspace while pulling — nothing was changed."
+            }
+            let nodes = try await client.listNodes()
+            store.applyNodes(nodes, for: workspace)
+            return "Pulled policy and \(nodes.count) devices."
         }
     }
 }

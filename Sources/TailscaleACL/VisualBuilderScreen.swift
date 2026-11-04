@@ -230,6 +230,13 @@ struct VisualBuilderScreen: View {
         }
         .background(Theme.background)
         .onAppear(perform: rebuildLayout)
+        .onChange(of: store.currentWorkspaceID) {
+            // A focused box or dragged positions from another workspace would
+            // hide or scatter this one's boxes.
+            focus = nil
+            filter = ""
+            positions = [:]
+        }
         .onChange(of: layoutKey) { rebuildLayout() }
         .sheet(item: $editingConnection) { conn in
             ConnectionSheet(

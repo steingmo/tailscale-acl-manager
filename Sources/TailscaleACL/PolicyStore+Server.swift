@@ -98,6 +98,37 @@ extension PolicyStore {
         return serverName(kind: ws.kind, serverURL: ws.serverURL, tailnet: ws.tailnet ?? "-")
     }
 
+    // Server calls take seconds, and the user may switch workspace meanwhile.
+    // Results are applied only to the workspace the call started on; anything
+    // else would show — and autosave — one workspace's data in another.
+
+    /// Devices loaded for `workspace`; false (and ignored) if it's no longer open.
+    @discardableResult
+    func applyNodes(_ nodes: [HeadscaleNode], for workspace: UUID) -> Bool {
+        guard workspace == currentWorkspaceID else { return false }
+        headscaleNodes = nodes
+        return true
+    }
+
+    /// A policy pulled from `workspace`'s server; false (and ignored) if it's no longer open.
+    @discardableResult
+    func applyPulledPolicy(_ policy: String, for workspace: UUID) -> Bool {
+        guard workspace == currentWorkspaceID else { return false }
+        loadPolicy(policy, reason: "pulled")
+        markSynced(policy)
+        return true
+    }
+
+    /// The audit log loaded for `workspace`; false (and ignored) if it's no longer open.
+    @discardableResult
+    func applyPolicyChanges(_ changes: [PolicyChange], for workspace: UUID) -> Bool {
+        guard workspace == currentWorkspaceID else { return false }
+        policyChanges = changes
+        // While devices still come from the cache, the next refresh saves them all.
+        if serverDataSaved == nil { saveServerCache() }
+        return true
+    }
+
     /// Show what the server returned last time, until a refresh replaces it.
     func loadServerCache() {
         guard let cache = ServerCache.load(currentWorkspaceID) else { return }

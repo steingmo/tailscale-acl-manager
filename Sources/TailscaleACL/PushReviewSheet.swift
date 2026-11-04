@@ -333,6 +333,7 @@ struct PushReviewSheet: View {
     }
 
     private func prepare() async {
+        let workspace = store.currentWorkspaceID
         guard let newTree = try? HuJSONParser.parse(candidate.text) else {
             blocker = "This policy doesn't parse, so it can't be pushed."
             loading = false
@@ -357,7 +358,7 @@ struct PushReviewSheet: View {
             var nodes = store.headscaleNodes
             if nodes.isEmpty {
                 nodes = try await client.listNodes()
-                store.headscaleNodes = nodes
+                store.applyNodes(nodes, for: workspace)
             }
             deviceCount = nodes.count
             if current.isEmpty {

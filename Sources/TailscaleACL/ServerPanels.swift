@@ -215,10 +215,10 @@ struct PolicyChangesPanel: View {
     }
 
     private func loadPolicyChanges() async {
+        let workspace = store.currentWorkspaceID
         do {
-            store.policyChanges = try await client.policyChanges(days: 30) ?? []
-            // While devices still come from the cache, the next refresh saves them all.
-            if store.serverDataSaved == nil { store.saveServerCache() }
+            let changes = try await client.policyChanges(days: 30) ?? []
+            guard store.applyPolicyChanges(changes, for: workspace) else { return }
             policyChangesError = nil
         } catch let error as ServerError where error.status == 403 {
             policyChangesError = "Your credential can't read the audit log. Give the OAuth client the logs:configuration:read scope to see who changed the policy."
@@ -482,8 +482,9 @@ struct DevicesPanel: View {
 
     private func refreshNodes(announce: Bool) {
         run { client in
+            let workspace = store.currentWorkspaceID
             let nodes = try await client.listNodes()
-            store.headscaleNodes = nodes
+            guard store.applyNodes(nodes, for: workspace) else { return "Switched workspace — those devices weren't applied." }
             return announce ? "Connected — \(nodes.count) node\(nodes.count == 1 ? "" : "s")" : "Nodes refreshed"
         }
     }

@@ -123,6 +123,8 @@ final class PolicyStore: ObservableObject {
 
     func switchWorkspace(to id: UUID) {
         guard id != currentWorkspaceID, workspaces.contains(where: { $0.id == id }) else { return }
+        // Save typing still waiting for its debounce into the workspace it was typed in.
+        if parseTask != nil { reparseNow() }
         currentWorkspaceID = id
         UserDefaults.standard.set(id.uuidString, forKey: "currentWorkspaceID")
         headscaleNodes = []
