@@ -60,7 +60,9 @@ Swift Package (no Xcode project). All source in `Sources/TailscaleACL/`:
   `applyPulledPolicy`/`applyPolicyChanges(_:for: workspace)`, which drop
   them if the user switched workspace meanwhile (capture
   `currentWorkspaceID` before the `await`); `switchWorkspace` first saves
-  typing still inside the debounce. Screens reset per-workspace state in
+  typing still inside the debounce. It sets `text` right after
+  `currentWorkspaceID`: any reparse in between (e.g. the
+  `serverUserAutogroups` didSet) autosaves the old text into the new workspace. Screens reset per-workspace state in
   `.onChange(of: store.currentWorkspaceID)`.
 - `CodeEditor.swift` — NSTextView-based editor. **Deliberately TextKit 1**
   and **deliberately no NSRulerView**: the ruler corrupts NSScrollView

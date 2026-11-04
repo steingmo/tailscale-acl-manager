@@ -126,6 +126,10 @@ final class PolicyStore: ObservableObject {
         // Save typing still waiting for its debounce into the workspace it was typed in.
         if parseTask != nil { reparseNow() }
         currentWorkspaceID = id
+        // The text must follow the id at once: resetting serverUserAutogroups
+        // below reparses, and reparsing autosaves the text into the current
+        // workspace (it used to save the previous workspace's policy here).
+        text = currentWorkspace.policy
         UserDefaults.standard.set(id.uuidString, forKey: "currentWorkspaceID")
         headscaleNodes = []
         serverLogins = nil
@@ -140,7 +144,6 @@ final class PolicyStore: ObservableObject {
         traffic = nil
         serverDrift = nil
         linkedFileContents = nil
-        text = currentWorkspace.policy
         reparseNow()
         SnapshotStore.record(id, text: text, reason: "opened")
         review = AccessReview.load(id)

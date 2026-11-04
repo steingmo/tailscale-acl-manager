@@ -39,6 +39,21 @@ final class WorkspaceSwitchTests: XCTestCase {
         XCTAssertEqual(saved(b), b.policy)
     }
 
+    /// Switching away from a workspace whose server users were loaded wrote
+    /// its policy into the workspace being opened.
+    func testSwitchingWithServerUsersLoadedKeepsPolicies() {
+        let store = PolicyStore()
+        store.serverUserAutogroups = ["amy@example.com": ["autogroup:admin"]]
+        store.switchWorkspace(to: b.id)
+        XCTAssertEqual(store.text, b.policy)
+        XCTAssertEqual(saved(a), a.policy)
+        XCTAssertEqual(saved(b), b.policy)
+        store.serverUserAutogroups = ["bob@example.com": ["autogroup:owner"]]
+        store.switchWorkspace(to: a.id)
+        XCTAssertEqual(store.text, a.policy)
+        XCTAssertEqual(saved(b), b.policy)
+    }
+
     func testLateServerResultsDontLandInAnotherWorkspace() {
         let store = PolicyStore()
         let startedOn = store.currentWorkspaceID          // a Pull starts in A…
