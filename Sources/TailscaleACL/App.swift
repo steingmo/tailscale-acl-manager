@@ -92,6 +92,7 @@ struct RootView: View {
             VStack(spacing: 0) {
                 if let server = store.serverDrift { driftBanner(server) }
                 if let proposal = store.aiProposal { aiBanner(proposal) }
+                if !health.isEmpty { healthBanner }
                 content
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -101,10 +102,21 @@ struct RootView: View {
         .frame(minWidth: 980, minHeight: 620)
         .onAppear { store.undoManager = undoManager }
         // Load devices for the open workspace so device views work without a manual refresh.
+        .navigationTitle([store.currentWorkspace.name, store.serverDisplayName].filter { !$0.isEmpty }.joined(separator: " — "))
         .task(id: store.currentWorkspaceID) {
+            health = []
             try? await store.refreshNodes()
             await store.checkServerDrift()
+            // The weekly health check: at most once a week per workspace, and
+            // only when there's something to say.
+            if !Task.isCancelled, Date().timeIntervalSince1970 - UserDefaults.standard.double(forKey: healthKey) > 7 * 86_400 {
+                health = store.weeklyHealthItems()
+            }
         }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            AutoBackup.runIfDue()
+        }
+        .sheet(isPresented: $store.showHealth) { HealthSheet() }
         .onChange(of: undoManager) { store.undoManager = undoManager }
         .onChange(of: store.editorLineRequest) { if store.editorLineRequest != nil { screen = .policyEditor } }
         .onChange(of: store.trafficFilterRequest) { if store.trafficFilterRequest != nil { screen = .traffic } }
@@ -144,6 +156,35 @@ struct RootView: View {
     }
 
     @State private var gitDriftStatus: String?
+    @State private var health: [HealthItem] = []
+    private var healthKey: String { "healthShown-\(store.currentWorkspaceID.uuidString)" }
+
+    private func healthSeen() {
+        UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: healthKey)
+        health = []
+    }
+
+    private var healthBanner: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "heart.text.square").foregroundStyle(Theme.blue)
+            Text(verbatim: "This week: " + health.map(\.title).joined(separator: " · "))
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(Theme.textPrimary)
+                .lineLimit(2)
+            Spacer()
+            Button("Show") {
+                healthSeen()
+                store.showHealth = true
+            }
+            Button(action: healthSeen) { Image(systemName: "xmark") }
+                .buttonStyle(.borderless)
+                .help("Hide until next week (Help ▸ Weekly Health Check shows it any time)")
+        }
+        .font(.system(size: 11.5))
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+        .background(Theme.blue.opacity(0.12))
+    }
 
     private func proposeServerVersion(_ server: String) {
         guard let file = store.linkedFileURL else { return }
@@ -248,6 +289,12 @@ struct RootView: View {
             Button("New Workspace…") { workspaceSheet = .new }
             Button("Duplicate Workspace…") { workspaceSheet = .duplicate }
             Button("Rename Workspace…") { workspaceSheet = .rename }
+            Picker("Colour", selection: Binding(
+                get: { store.colorIndex(of: store.currentWorkspaceID) },
+                set: { store.setWorkspaceColor($0) }
+            )) {
+                ForEach(workspacePalette.indices, id: \.self) { Text(workspacePalette[$0].name).tag($0) }
+            }
             Menu("Compare With") {
                 ForEach(store.workspaces.filter { $0.id != store.currentWorkspaceID }) { ws in
                     Button(ws.name) {
@@ -262,8 +309,7 @@ struct RootView: View {
                 .disabled(store.workspaces.count < 2)
         } label: {
             HStack(spacing: 6) {
-                Image(systemName: "square.stack")
-                    .font(.system(size: 10.5))
+                Circle().fill(store.workspaceColor).frame(width: 9, height: 9)
                 Text(store.currentWorkspace.name)
                     .font(.system(size: 12, weight: .semibold))
                     .lineLimit(1)
@@ -436,6 +482,8 @@ struct TailscaleACLApp: App {
             }
             CommandGroup(replacing: .help) {
                 Button("Getting Started") { session.store?.showGettingStarted = true }
+                    .disabled(session.store == nil)
+                Button("Weekly Health Check") { session.store?.showHealth = true }
                     .disabled(session.store == nil)
             }
         }

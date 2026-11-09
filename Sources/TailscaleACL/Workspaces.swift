@@ -19,6 +19,8 @@ struct Workspace: Codable, Identifiable, Equatable {
     /// The linked file is in a GitHub repository that Tailscale's GitOps
     /// action applies: changes go out as pull requests, not direct pushes.
     var gitOps: Bool?
+    /// Index into `workspacePalette`; nil until chosen (then by list position).
+    var color: Int?
 
     var kind: ServerKind { serverKind ?? .headscale }
 }

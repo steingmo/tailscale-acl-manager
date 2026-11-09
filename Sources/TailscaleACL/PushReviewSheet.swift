@@ -42,6 +42,10 @@ struct PushReviewSheet: View {
     /// The server text as of our last pull/push, when the server has changed since.
     @State private var conflictBase: String?
     @State private var noSyncRecord = false
+    /// Signs this may be the wrong policy for this server (`pushWarnings`);
+    /// the push stays disabled until they're confirmed.
+    @State private var warnings: [String] = []
+    @State private var warningsConfirmed = false
     @State private var comparing: DiffPresentation?
     /// Both policies as parsed for the review, for replaying real traffic.
     @State private var models: (old: PolicyModel, new: PolicyModel)?
@@ -55,6 +59,12 @@ struct PushReviewSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 6) {
+                Circle().fill(store.workspaceColor).frame(width: 9, height: 9)
+                Text(verbatim: "Workspace \(store.currentWorkspace.name)")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(store.workspaceColor)
+            }
             Text(candidate.isRestore ? "Review restore on \(host)" : "Review push to \(host)")
                 .font(.system(size: 16, weight: .bold))
                 .foregroundStyle(Theme.textPrimary)
@@ -93,6 +103,22 @@ struct PushReviewSheet: View {
                         .font(.system(size: 10.5))
                         .foregroundStyle(Theme.textSecondary)
                         .fixedSize(horizontal: false, vertical: true)
+                }
+                if !warnings.isEmpty {
+                    VStack(alignment: .leading, spacing: 6) {
+                        ForEach(warnings, id: \.self) {
+                            Label($0, systemImage: "exclamationmark.octagon.fill")
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundStyle(Theme.red)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        Toggle("This is the right policy for \(host)", isOn: $warningsConfirmed)
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(Theme.textPrimary)
+                    }
+                    .padding(10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(RoundedRectangle(cornerRadius: 8).fill(Theme.red.opacity(0.10)))
                 }
                 summary
                 if postureUnknown > 0 {
@@ -170,12 +196,12 @@ struct PushReviewSheet: View {
                         if pullRequest == nil { openPullRequest() } else { dismiss() }
                     }
                     .keyboardShortcut(.defaultAction)
-                    .disabled(loading || pushing || blocker != nil)
+                    .disabled(loading || pushing || blocker != nil || unconfirmed)
                 } else {
                     Button(conflictBase != nil ? "Overwrite and push"
                            : candidate.isRestore ? "Restore on server" : "Push to server") { push() }
                         .keyboardShortcut(.defaultAction)
-                        .disabled(loading || pushing || blocker != nil)
+                        .disabled(loading || pushing || blocker != nil || unconfirmed)
                 }
             }
         }
@@ -187,6 +213,7 @@ struct PushReviewSheet: View {
     }
 
     private var host: String { client.displayHost }
+    private var unconfirmed: Bool { !warnings.isEmpty && !warningsConfirmed }
 
     /// Replays recent real traffic (flow logs) against the new policy.
     @ViewBuilder
@@ -345,6 +372,8 @@ struct PushReviewSheet: View {
         do {
             let current = try await client.getPolicy()
             serverText = current
+            warnings = pushWarnings(server: current, candidate: candidate.text,
+                                    workspace: store.currentWorkspace, all: store.workspaces)
             if let report = try? await client.validate(candidate.text) {
                 serverVerdict = report.passed ? "" : report.summary
             }

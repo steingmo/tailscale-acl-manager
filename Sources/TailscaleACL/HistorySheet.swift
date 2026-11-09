@@ -14,7 +14,7 @@ struct HistorySheet: View {
                     Text("Version history")
                         .font(.system(size: 16, weight: .bold))
                         .foregroundStyle(Theme.textPrimary)
-                    Text("Saved when the workspace opens, and before and after pulls, imports, pushes, and restores. The newest 100 are kept.")
+                    Text("Saved when the workspace opens, before and after pulls, imports, pushes, and restores, and before any change that replaces a large part of the policy at once. The newest 100 are kept.")
                         .font(.system(size: 11))
                         .foregroundStyle(Theme.textSecondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -38,7 +38,8 @@ struct HistorySheet: View {
                                 .foregroundStyle(Theme.textPrimary)
                             Text(snap.reason)
                                 .font(.system(size: 11))
-                                .foregroundStyle(Theme.textSecondary)
+                                .foregroundStyle(snap.reason == largeChangeReason ? Theme.orange : Theme.textSecondary)
+                                .help(snap.reason == largeChangeReason ? "A large part of the policy was replaced in one step right after this version" : "")
                             Spacer()
                             Button("Compare…") {
                                 comparing = DiffPresentation(title: "Snapshot vs editor",

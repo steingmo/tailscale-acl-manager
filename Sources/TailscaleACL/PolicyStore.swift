@@ -69,6 +69,7 @@ final class PolicyStore: ObservableObject {
 
     /// Shows the Getting Started checklist (first launch, Help menu).
     @Published var showGettingStarted = false
+    @Published var showHealth = false
     /// Set (e.g. from Problems) to show the Policy Editor at a 1-based line;
     /// the editor clears it once revealed.
     @Published var editorLineRequest: Int?
@@ -250,6 +251,12 @@ final class PolicyStore: ObservableObject {
         saveWorkspaces()
     }
 
+    func setWorkspaceColor(_ index: Int) {
+        guard let i = workspaces.firstIndex(where: { $0.id == currentWorkspaceID }) else { return }
+        workspaces[i].color = index
+        saveWorkspaces()
+    }
+
     func deleteWorkspace(_ id: UUID) {
         guard workspaces.count > 1 else { return }
         if id == currentWorkspaceID {
@@ -355,7 +362,7 @@ final class PolicyStore: ObservableObject {
         }
     }
 
-    private func reparseNow() {
+    func reparseNow() {
         parseTask?.cancel()
         parseTask = nil
         // Autosave: the editor text is the current workspace's policy.
@@ -363,6 +370,12 @@ final class PolicyStore: ObservableObject {
         // last keystroke can lose that keystroke.
         if let i = workspaces.firstIndex(where: { $0.id == currentWorkspaceID }),
            workspaces[i].policy != text {
+            // This is the one place a saved policy is replaced. Typing changes
+            // little per save; when most of it goes at once, keep the version
+            // being replaced in History — whatever caused it.
+            if isLargeChange(from: workspaces[i].policy, to: text) {
+                SnapshotStore.record(currentWorkspaceID, text: workspaces[i].policy, reason: largeChangeReason)
+            }
             workspaces[i].policy = text
             saveWorkspaces()
         }

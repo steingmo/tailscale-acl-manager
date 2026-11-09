@@ -30,7 +30,7 @@ struct RuleSheet: View {
     @State private var expires = false
     @State private var expiryDate = Date().addingTimeInterval(7 * 86_400)
     @State private var showOptions = false
-    @State private var preview: (problems: [String], changes: [String])?
+    @State private var preview: (problems: [String], changes: [String], explanation: String?)?
     @State private var confirmingDelete = false
     @State private var copying = false
 
@@ -134,6 +134,7 @@ struct RuleSheet: View {
             try? await Task.sleep(nanoseconds: 300_000_000)
             guard valid, let tree = store.tree else { preview = nil; return }
             let (section, index, name, expiry, fields) = (sectionName, existing?.index, self.name, expiryValue, draftFields)
+            let kind = kind
             let current = store.model
             let currentIssues = Set(store.lintIssues.map(\.id))
             preview = await Task.detached {
@@ -142,7 +143,9 @@ struct RuleSheet: View {
                 var m = PolicyModel(tree: candidate)
                 m.userAutogroups = current.userAutogroups
                 let problems = lintPolicy(m).filter { !currentIssues.contains($0.id) }.map { "\($0.title): \($0.detail)" }
-                return (Array(problems.prefix(6)), entityAccessDifferences(current, m, limit: 8))
+                let count = kind == .acl ? m.rules.count : kind == .grant ? m.grants.count : m.sshRules.count
+                return (Array(problems.prefix(6)), entityAccessDifferences(current, m, limit: 8),
+                        ruleExplanation(m, kind: kind, index: index ?? count - 1))
             }.value
         }
         .sheet(isPresented: $copying) {
@@ -250,6 +253,10 @@ struct RuleSheet: View {
     private var checkPanel: some View {
         if let preview, valid {
             VStack(alignment: .leading, spacing: 5) {
+                if let explanation = preview.explanation {
+                    Text(verbatim: explanation).font(.system(size: 11.5)).foregroundStyle(Theme.textPrimary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
                 if preview.problems.isEmpty {
                     Label("No new problems", systemImage: "checkmark.shield").foregroundStyle(Theme.green)
                 } else {

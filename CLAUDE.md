@@ -164,6 +164,21 @@ Swift Package (no Xcode project). All source in `Sources/TailscaleACL/`:
 - `Snapshots.swift`: per-workspace version history (<data>/snapshots/),
   recorded on open and around every whole-policy replacement
   (`loadPolicy(_:reason:)`), pushes, and by hand.
+- `Safeguards.swift`: `reparseNow` (the one place a saved policy is
+  replaced) snapshots the old version as `largeChangeReason` when
+  `isLargeChange`; `pushWarnings` (another server's policy, or most server
+  rules gone) must be ticked off in the push review before Push enables;
+  `AutoBackup` (daily, newest 14, password in Keychain account
+  "auto-backup-password", `<data>/backups` or a chosen folder — deliberately
+  not in `dataFiles`; `runIfDue` on open and on becoming active, no timer);
+  `Workspace.color` → `workspacePalette` (menu dot, push review header).
+  The window title is workspace — server.
+- `Explain.swift`: `ruleExplanation` — one sentence per rule (Access Map
+  pill tooltip, live in `RuleSheet`'s preview).
+- `WeeklyHealth.swift`: `weeklyHealth` (new problems vs the snapshot from a
+  week ago, policy changes not within 5 min of this app's pushes, expiring
+  keys and rules); banner at most weekly per workspace (`healthShown-<id>`),
+  Help ▸ Weekly Health Check.
 - `Templates.swift`: `policyTemplates`, pure tree edits applied in one
   undoable `mutate`. Every template must lint error-free (tested).
 - `PolicyStore.checkServerDrift` runs when a workspace opens; the root view

@@ -568,7 +568,8 @@ struct AccessMapScreen: View {
     private func pillView(_ pill: RuleSummary) -> some View {
         Button { editing = pill } label: { pillLabel(pill) }
             .buttonStyle(.plain)
-            .help(([pill.name] + pill.notes).joined(separator: " · ") + " — click to edit")
+            .help((ruleExplanation(store.model, kind: pill.kind, index: pill.index) ?? ([pill.name] + pill.notes).joined(separator: " · "))
+                  + "\n\(pill.name) — click to edit")
     }
 
     private func pillLabel(_ pill: RuleSummary) -> some View {

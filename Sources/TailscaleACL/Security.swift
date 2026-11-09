@@ -320,6 +320,7 @@ struct SettingsView: View {
                     Button("Restore from Backup…") { backupMode = .restore }
                 }
                 .disabled(session.store == nil)
+                AutoBackupSettings()
             }
             Section("Security") {
                 Toggle("Require Touch ID or your password before changing a server", isOn: $requireAuth)

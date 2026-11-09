@@ -77,6 +77,7 @@ final class AppSession: ObservableObject {
             return
         }
         store = PolicyStore()
+        AutoBackup.runIfDue()
     }
 
     /// Reopen the workspaces from disk (after restoring a backup).
