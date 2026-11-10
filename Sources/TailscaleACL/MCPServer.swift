@@ -171,10 +171,13 @@ struct MCPTools {
                 if let d = review.decisions[item.key] { e["by"] = d.by; e["note"] = d.note; e["date"] = d.at.formatted(date: .abbreviated, time: .omitted) }
                 return e
             }
-            return json(["started": started.formatted(date: .abbreviated, time: .omitted), "items": items.count,
-                         "kept": items.filter { review.decisions[$0.key]?.keep == true }.count,
-                         "to_remove": items.filter { review.decisions[$0.key]?.keep == false }.map(entry),
-                         "not_reviewed": items.filter { review.decisions[$0.key] == nil }.map(entry)])
+            // Typed step by step: as one dictionary literal this took the type checker most of a second.
+            let kept: Int = items.filter { review.decisions[$0.key]?.keep == true }.count
+            let toRemove: [[String: Any]] = items.filter { review.decisions[$0.key]?.keep == false }.map(entry)
+            let open: [[String: Any]] = items.filter { review.decisions[$0.key] == nil }.map(entry)
+            let status: [String: Any] = ["started": started.formatted(date: .abbreviated, time: .omitted), "items": items.count,
+                                         "kept": kept, "to_remove": toRemove, "not_reviewed": open]
+            return json(status)
         case "apply_fix":
             guard let id = string("problem_id"), let issue = store.lintIssues.first(where: { $0.id == id }) else {
                 return ("No problem with that id now — call list_problems again; ids change when the policy does.", true)

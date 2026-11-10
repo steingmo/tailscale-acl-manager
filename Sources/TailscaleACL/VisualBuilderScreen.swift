@@ -218,13 +218,7 @@ struct VisualBuilderScreen: View {
                         .padding(.bottom, 20)
                 }
             } else {
-                HStack(spacing: 8) {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .foregroundStyle(Theme.orange)
-                    Text("Fix the policy in the editor to use the visual builder.")
-                        .foregroundStyle(Theme.textSecondary)
-                }
-                .padding(16)
+                InvalidPolicyState(purpose: "use the visual builder")
                 Spacer(minLength: 0)
             }
         }

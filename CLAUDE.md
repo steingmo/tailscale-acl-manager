@@ -260,7 +260,16 @@ Swift Package (no Xcode project). All source in `Sources/TailscaleACL/`:
   polls it; valid parses are written back, but only after it was read this
   session, so a stale editor never overwrites it.
 - `App.swift` — app entry, sidebar navigation + workspace menu, Sparkle
-  updater (`UpdaterViewModel`) + "Check for Updates…" menu item.
+  updater (`UpdaterViewModel`) + "Check for Updates…" menu item. The
+  sidebar's selection is `@AppStorage("lastScreen")`, so `openScreen(_:)`
+  (Theme.swift) switches screens from anywhere; rows carry the status
+  (`badge`: syntax error, failing tests or ✓, problem count or ✓, server
+  changed) and ⌘1–⌘9. The sidebar must fit the 620 pt minimum window.
+- Shared UI in `Theme.swift`: `EmptyState` (icon, title, message, actions)
+  for anything with nothing to show, `InvalidPolicyState(purpose:)` for
+  every screen while the policy doesn't parse, `ToolbarButton`,
+  `Theme.contentWidth` for the card screens. The Access Map shrinks to the
+  window's width unless zoomed past 100%.
 - `Workspaces.swift` — named workspaces (policy + Headscale URL) persisted
   to Application Support; each workspace's API key is a Keychain item keyed
   by workspace id. The editor text autosaves into the current workspace.
@@ -331,7 +340,10 @@ the Keychain migration — keep it that way for new store tests.
 Screens can be checked offscreen by hosting them in an `NSWindow` +
 `NSHostingView` and rendering to a PNG via `bitmapImageRepForCachingDisplay`
 (screenshot tools may lack screen-recording permission). Point
-`TAILSCALE_ACL_DATA_DIR` at a temp folder when doing so.
+`TAILSCALE_ACL_DATA_DIR` at a temp folder when doing so. `ScreenSmokeTests`
+does this for every screen with a normal, empty, and broken policy;
+`SCREENSHOT_DIR=<folder> swift test --filter ScreenSmokeTests` writes the
+PNGs — look at them after UI changes.
 
 ## Conventions
 

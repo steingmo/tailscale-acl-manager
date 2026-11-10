@@ -40,13 +40,13 @@ func weeklyHealth(model: PolicyModel, weekAgo: PolicyModel?, policyChanges: [Pol
         "policy changes made outside this app",
         outside.map { "\($0.date.formatted(date: .abbreviated, time: .shortened)) — \($0.who) (\($0.origin))" })
 
-    let keys = nodes.compactMap { n in n.keyDaysLeft(now: now).map { (n, $0) } }.filter { (-7...14).contains($0.1) }
-        .sorted { $0.1 < $1.1 }
+    let dated: [(HeadscaleNode, Int)] = nodes.compactMap { n in n.keyDaysLeft(now: now).map { (n, $0) } }
+    let keys = dated.filter { (-7...14).contains($0.1) }.sorted { $0.1 < $1.1 }
     add("key", keys.count, "device key expiring", "device keys expiring", keys.map { "\($0.0.displayName) — \(days($0.1))" })
 
-    let dated = model.rules.map { ("acls", $0.index, $0.expires) } + model.grants.map { ("grants", $0.index, $0.expires) }
-        + model.sshRules.map { ("ssh", $0.index, $0.expires) }
-    let expiring = dated.compactMap { section, index, expires -> String? in
+    let rules: [(String, Int, String?)] = model.rules.map { ("acls", $0.index, $0.expires) }
+        + model.grants.map { ("grants", $0.index, $0.expires) } + model.sshRules.map { ("ssh", $0.index, $0.expires) }
+    let expiring = rules.compactMap { section, index, expires -> String? in
         guard let expires, let left = RuleExpiry.daysLeft(expires, now: now), left <= 14 else { return nil }
         return "\(section)[\(index)] — \(days(left))"
     }

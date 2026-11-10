@@ -152,7 +152,7 @@ struct SimulatorScreen: View {
                     }
                 }
                 .padding(16)
-                .frame(maxWidth: 760, alignment: .leading)
+                .frame(maxWidth: Theme.contentWidth, alignment: .leading)
                 .background(RoundedRectangle(cornerRadius: 9).fill(Theme.panel))
                 .overlay(RoundedRectangle(cornerRadius: 9).stroke(Theme.panelBorder, lineWidth: 1))
                 .padding(.horizontal, 16)
@@ -163,13 +163,7 @@ struct SimulatorScreen: View {
                     }
                     .padding(16)
                 } else if !store.isValid {
-                    HStack(spacing: 8) {
-                        Image(systemName: "exclamationmark.triangle.fill")
-                            .foregroundStyle(Theme.orange)
-                        Text("Fix the policy in the editor to run the simulator.")
-                            .foregroundStyle(Theme.textSecondary)
-                    }
-                    .padding(20)
+                    InvalidPolicyState(purpose: "run the simulator")
                 }
                 Spacer(minLength: 20)
             }
@@ -330,7 +324,7 @@ struct SimulatorScreen: View {
                 }
             }
         }
-        .frame(maxWidth: 760, alignment: .leading)
+        .frame(maxWidth: Theme.contentWidth, alignment: .leading)
     }
 
     /// The source device's posture attributes (nil for non-device sources).
@@ -513,7 +507,7 @@ struct SimulatorScreen: View {
                 }
             }
         }
-        .frame(maxWidth: 760, alignment: .leading)
+        .frame(maxWidth: Theme.contentWidth, alignment: .leading)
     }
 
     private func matchCard(_ match: RuleMatch) -> some View {

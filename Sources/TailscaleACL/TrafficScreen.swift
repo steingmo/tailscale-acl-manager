@@ -34,11 +34,16 @@ struct TrafficScreen: View {
                     .frame(width: 260)
                     if tab == .connections { connections(traffic) } else { usage(traffic) }
                 } else if store.currentWorkspace.kind != .tailscale {
-                    note("Network flow logs come from Tailscale. Headscale doesn't record traffic.")
+                    EmptyState(icon: "chart.bar.xaxis", title: "No traffic on Headscale",
+                               message: "Network flow logs come from Tailscale. Headscale doesn't record traffic.")
                 } else if store.serverClient() == nil {
-                    note("Connect this workspace to Tailscale on the Server screen to load traffic.")
+                    EmptyState(icon: "chart.bar.xaxis", title: "Not connected to Tailscale",
+                               message: "Connect this workspace to your tailnet to see the real connections behind each rule.") {
+                        Button("Open Server") { openScreen(.server) }
+                    }
                 } else {
-                    note("Load the flow logs to see real connections. Flow logging must be on for the tailnet, and an OAuth client needs the logs:network:read scope.")
+                    EmptyState(icon: "chart.bar.xaxis", title: "Flow logs not loaded",
+                               message: "Choose a period and press Load to see real connections. Flow logging must be on for the tailnet, and an OAuth client needs the logs:network:read scope.")
                 }
             }
             .padding(16)
@@ -317,10 +322,4 @@ struct TrafficScreen: View {
         }
     }
 
-    private func note(_ text: String) -> some View {
-        Label(text, systemImage: "info.circle")
-            .font(.system(size: 12))
-            .foregroundStyle(Theme.textSecondary)
-            .fixedSize(horizontal: false, vertical: true)
-    }
 }

@@ -29,6 +29,8 @@ enum Theme {
     static let pink = Color(hex: 0xF06292)
     static let textPrimary = Color(hex: 0xEDEDED)
     static let textSecondary = Color(hex: 0x9A9AA2)
+    /// How wide the card screens (Server, Routes, Simulator, Access Review) grow.
+    static let contentWidth: CGFloat = 860
 
     static func entityColor(_ name: String) -> Color {
         if name == "*" { return red }
@@ -126,31 +128,12 @@ struct EntityChip: View {
     }
 }
 
-/// Small round status dot + label, used in the sidebar footer.
-struct StatusPill: View {
-    var label: String
-    var ok: Bool
-
-    var body: some View {
-        HStack(spacing: 6) {
-            Circle()
-                .fill(ok ? Theme.green : Theme.red)
-                .frame(width: 7, height: 7)
-            Text(label)
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(Theme.textPrimary)
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 5)
-        .background(Capsule().fill(Color.white.opacity(0.06)))
-        .overlay(Capsule().stroke(Color.white.opacity(0.08), lineWidth: 1))
-    }
-}
-
 struct ToolbarButton: View {
     var label: String
     var icon: String
     var action: () -> Void
+    @Environment(\.isEnabled) private var enabled
+    @State private var hovered = false
 
     var body: some View {
         Button(action: action) {
@@ -162,11 +145,79 @@ struct ToolbarButton: View {
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 5)
-            .background(Capsule().fill(Color.white.opacity(0.07)))
-            .overlay(Capsule().stroke(Color.white.opacity(0.08), lineWidth: 1))
+            .background(Capsule().fill(Color.white.opacity(hovered && enabled ? 0.14 : 0.07)))
+            .overlay(Capsule().stroke(Color.white.opacity(hovered && enabled ? 0.18 : 0.08), lineWidth: 1))
+            .contentShape(Capsule())
         }
         .buttonStyle(.plain)
         .foregroundStyle(Theme.textPrimary)
+        .opacity(enabled ? 1 : 0.45)
+        .onHover { hovered = $0 }
+    }
+}
+
+/// Shows `screen` in the main window, from anywhere (the sidebar's selection
+/// is this stored value).
+func openScreen(_ screen: Screen) {
+    UserDefaults.standard.set(screen.rawValue, forKey: "lastScreen")
+}
+
+/// A screen (or part of one) with nothing to show yet: what it is, why it's
+/// empty, and the next step.
+struct EmptyState<Actions: View>: View {
+    var icon: String
+    var title: String
+    var message: String
+    var tint: Color = Theme.textSecondary
+    @ViewBuilder var actions: Actions
+
+    var body: some View {
+        VStack(spacing: 9) {
+            Image(systemName: icon)
+                .font(.system(size: 21, weight: .medium))
+                .foregroundStyle(tint)
+                .frame(width: 52, height: 52)
+                .background(Circle().fill(tint.opacity(0.12)))
+                .padding(.bottom, 3)
+            Text(title)
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(Theme.textPrimary)
+            Text(message)
+                .font(.system(size: 12))
+                .foregroundStyle(Theme.textSecondary)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: 440)
+            HStack(spacing: 8) { actions }
+                .padding(.top, 5)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 56)
+    }
+}
+
+extension EmptyState where Actions == EmptyView {
+    init(icon: String, title: String, message: String, tint: Color = Theme.textSecondary) {
+        self.init(icon: icon, title: title, message: message, tint: tint) { EmptyView() }
+    }
+}
+
+/// What every screen shows while the policy doesn't parse: the error, and
+/// the way to it. `purpose` completes "Fix it to …".
+struct InvalidPolicyState: View {
+    var purpose: String
+    @EnvironmentObject var store: PolicyStore
+
+    var body: some View {
+        EmptyState(icon: "exclamationmark.triangle", title: "The policy has a syntax error",
+                   message: (store.parseError.map { "\($0.line > 0 ? "Line \($0.line): " : "")\($0.message)\n" } ?? "")
+                       + "Fix it to \(purpose).",
+                   tint: Theme.orange) {
+            Button("Show in Policy Editor") {
+                if let line = store.parseError?.line, line > 0 { store.editorLineRequest = line }
+                openScreen(.policyEditor)
+            }
+        }
     }
 }
 

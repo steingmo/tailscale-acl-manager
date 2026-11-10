@@ -23,7 +23,7 @@ struct TestsScreen: View {
                             .font(.system(size: 16, weight: .bold))
                             .foregroundStyle(Theme.textPrimary)
                         Text(store.isValid
-                             ? "\(passing)/\(total) passing"
+                             ? (total == 0 ? "Lock in the access you expect" : "\(passing)/\(total) passing")
                              : "Policy is invalid")
                             .font(.system(size: 11.5))
                             .foregroundStyle(Theme.textSecondary)
@@ -56,16 +56,16 @@ struct TestsScreen: View {
                         ForEach(ssh) { sshTestCard($0) }
                     }
                 } else if store.isValid {
-                    Text("No tests yet. Add one to lock in the behavior you expect.")
-                        .foregroundStyle(Theme.textSecondary)
-                        .padding(.top, 8)
-                } else {
-                    HStack(spacing: 8) {
-                        Image(systemName: "exclamationmark.triangle.fill")
-                            .foregroundStyle(Theme.orange)
-                        Text("Fix the policy in the editor to run tests.")
-                            .foregroundStyle(Theme.textSecondary)
+                    EmptyState(icon: "checkmark.shield", title: "No tests yet",
+                               message: "Tests lock in the access you expect, so an edit that changes it fails before you push. Generate them from what the policy allows today, or write one.") {
+                        Button("Generate from current access") {
+                            generatedSSH = generateSSHTests(store.model, sources: generationSources)
+                            generated = generateTests(store.model, sources: generationSources)
+                        }
+                        Button("Add test") { showingAddTest = true }
                     }
+                } else {
+                    InvalidPolicyState(purpose: "run tests")
                 }
             }
             .padding(16)

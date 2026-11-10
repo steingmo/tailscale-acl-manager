@@ -31,15 +31,12 @@ struct AccessReviewScreen: View {
             VStack(alignment: .leading, spacing: 12) {
                 header
                 if !store.isValid {
-                    Label("Fix the policy in the editor to review access.", systemImage: "exclamationmark.triangle.fill")
-                        .foregroundStyle(Theme.textSecondary)
+                    InvalidPolicyState(purpose: "review access")
                 } else if store.review.started == nil {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Go through every group and rule and confirm it's still needed. The app keeps who decided what and when, and a changed item comes back for review.")
-                            .font(.system(size: 12))
-                            .foregroundStyle(Theme.textSecondary)
-                            .fixedSize(horizontal: false, vertical: true)
+                    EmptyState(icon: "checklist.checked", title: "No review in progress",
+                               message: "Go through every group and rule and confirm it's still needed. The app keeps who decided what and when, and a changed item comes back for review.") {
                         Button("Start review") { store.startNewReview() }
+                            .keyboardShortcut(.defaultAction)
                     }
                 } else {
                     progress(decided: decided, total: items.count, removals: removals.count)
@@ -65,7 +62,7 @@ struct AccessReviewScreen: View {
                 }
             }
             .padding(16)
-            .frame(maxWidth: 900, alignment: .topLeading)
+            .frame(maxWidth: Theme.contentWidth, alignment: .topLeading)
             .frame(maxWidth: .infinity, alignment: .topLeading)
         }
         .background(Theme.background)

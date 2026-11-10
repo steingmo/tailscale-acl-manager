@@ -24,17 +24,12 @@ struct SSHScreen: View {
                 }
 
                 if !store.isValid {
-                    HStack(spacing: 8) {
-                        Image(systemName: "exclamationmark.triangle.fill")
-                            .foregroundStyle(Theme.orange)
-                        Text("Fix the policy in the editor to manage SSH rules.")
-                            .foregroundStyle(Theme.textSecondary)
-                    }
+                    InvalidPolicyState(purpose: "manage SSH rules")
                 } else if store.model.sshRules.isEmpty {
-                    Text("No SSH rules. Tailscale SSH is disabled until a rule allows it.")
-                        .font(.system(size: 12))
-                        .foregroundStyle(Theme.textSecondary)
-                        .padding(.top, 6)
+                    EmptyState(icon: "terminal", title: "No SSH rules",
+                               message: "Tailscale SSH is off until a rule allows it. A rule says who may log in where, and as which users.") {
+                        Button("Add rule") { adding = true }
+                    }
                 } else {
                     ForEach(store.model.sshRules) { rule in
                         ruleCard(rule)

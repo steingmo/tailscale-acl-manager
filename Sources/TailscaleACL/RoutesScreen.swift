@@ -47,12 +47,11 @@ struct RoutesScreen: View {
                     if !store.model.derpRegions.isEmpty { DERPPanel(regions: store.model.derpRegions) }
                     devicesPanel
                 } else {
-                    Label("Fix the policy in the editor to manage routes.", systemImage: "exclamationmark.triangle.fill")
-                        .foregroundStyle(Theme.textSecondary)
+                    InvalidPolicyState(purpose: "manage routes")
                 }
             }
             .padding(16)
-            .frame(maxWidth: 860, alignment: .topLeading)
+            .frame(maxWidth: Theme.contentWidth, alignment: .topLeading)
             .frame(maxWidth: .infinity, alignment: .topLeading)
         }
         .background(Theme.background)

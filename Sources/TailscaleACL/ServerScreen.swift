@@ -76,7 +76,7 @@ struct ServerScreen: View {
                 if !store.headscaleNodes.isEmpty { DevicesPanel(client: client) }
             }
             .padding(16)
-            .frame(maxWidth: 820, alignment: .topLeading)
+            .frame(maxWidth: Theme.contentWidth, alignment: .topLeading)
             .frame(maxWidth: .infinity, alignment: .topLeading)
         }
         .background(Theme.background)

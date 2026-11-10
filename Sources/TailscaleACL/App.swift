@@ -64,7 +64,7 @@ enum Screen: String, CaseIterable, Identifiable {
 struct RootView: View {
     @EnvironmentObject var store: PolicyStore
     @Environment(\.undoManager) private var undoManager
-    @State private var screen: Screen = .policyEditor
+    @AppStorage("lastScreen") private var screen: Screen = .policyEditor
     @State private var workspaceSheet: WorkspaceSheet.Mode?
     @State private var overlay: Overlay?
 
@@ -83,6 +83,7 @@ struct RootView: View {
         }
     }
     @State private var confirmingDelete = false
+    @State private var hoveredScreen: Screen?
 
     var body: some View {
         HStack(spacing: 0) {
@@ -308,15 +309,33 @@ struct RootView: View {
             Button("Delete Workspace…") { confirmingDelete = true }
                 .disabled(store.workspaces.count < 2)
         } label: {
-            HStack(spacing: 6) {
-                Circle().fill(store.workspaceColor).frame(width: 9, height: 9)
-                Text(store.currentWorkspace.name)
-                    .font(.system(size: 12, weight: .semibold))
-                    .lineLimit(1)
+            HStack(spacing: 8) {
+                RoundedRectangle(cornerRadius: 2).fill(store.workspaceColor).frame(width: 4, height: 28)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(store.currentWorkspace.name)
+                        .font(.system(size: 12.5, weight: .semibold))
+                        .foregroundStyle(Theme.textPrimary)
+                        .lineLimit(1)
+                    Text(store.serverDisplayName.isEmpty ? "No server" : store.serverDisplayName)
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(Theme.textSecondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                Spacer(minLength: 4)
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(Theme.textSecondary)
             }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
+            .background(RoundedRectangle(cornerRadius: 8).fill(Color.white.opacity(0.05)))
+            .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.panelBorder, lineWidth: 1))
+            .contentShape(Rectangle())
         }
-        .menuStyle(.borderlessButton)
-        .foregroundStyle(Theme.textPrimary)
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
         .help("Switch between workspaces — each has its own policy and Headscale or Tailscale server")
         .padding(.horizontal, 10)
         .padding(.bottom, 8)
@@ -377,51 +396,76 @@ struct RootView: View {
             }
             .padding(.horizontal, 8)
 
-            Spacer()
-
-            let passed = store.testResults.filter(\.passed).count + store.sshTestResults.filter(\.passed).count
-            let total = store.testResults.count + store.sshTestResults.count
-            let problems = store.lintIssues.count
-            VStack(alignment: .leading, spacing: 6) {
-                StatusPill(label: store.isValid ? "Policy valid" : "Policy invalid",
-                           ok: store.isValid)
-                StatusPill(
-                    label: "\(passed)/\(total) tests pass",
-                    ok: total > 0 && passed == total
-                )
-                StatusPill(
-                    label: problems == 0 ? "No problems" : "\(problems) problem\(problems == 1 ? "" : "s")",
-                    ok: problems == 0
-                )
-            }
-            .padding(10)
+            Spacer(minLength: 8)
         }
         .frame(width: 210)
         .background(Theme.sidebar)
     }
 
+    /// The state of a screen, at the end of its sidebar row: what needs
+    /// attention, or a green check when its checks pass.
+    private func badge(_ s: Screen) -> (text: String, color: Color, help: String)? {
+        switch s {
+        case .policyEditor:
+            return store.isValid ? nil : ("error", Theme.red, "The policy has a syntax error")
+        case .problems:
+            guard store.isValid else { return nil }
+            let issues = store.lintIssues
+            if issues.isEmpty { return ("✓", Theme.green, "No problems") }
+            let errors = issues.filter { $0.severity == .error }.count
+            return (String(issues.count), errors > 0 ? Theme.red : Theme.orange,
+                    "\(errors) error\(errors == 1 ? "" : "s"), \(issues.count - errors) warning\(issues.count - errors == 1 ? "" : "s")")
+        case .tests:
+            let total = store.testResults.count + store.sshTestResults.count
+            let failing = store.testResults.filter { !$0.passed }.count + store.sshTestResults.filter { !$0.passed }.count
+            guard store.isValid, total > 0 else { return nil }
+            return failing == 0 ? ("✓", Theme.green, "All \(total) tests pass")
+                : (String(failing), Theme.red, "\(failing) of \(total) tests fail")
+        case .server:
+            return store.serverDrift == nil ? nil
+                : ("changed", Theme.orange, "The policy on the server changed since your last pull or push")
+        default:
+            return nil
+        }
+    }
+
     private func sidebarItem(_ s: Screen) -> some View {
-        Button {
+        let selected = screen == s
+        // ⌘1–⌘9 follow the sidebar's order.
+        let number = Screen.groups.flatMap(\.screens).firstIndex(of: s).map { $0 + 1 }.flatMap { $0 <= 9 ? $0 : nil }
+        return Button {
             screen = s
         } label: {
             HStack(spacing: 10) {
                 Image(systemName: s.icon)
                     .font(.system(size: 12, weight: .medium))
                     .frame(width: 17)
+                    .foregroundStyle(selected ? store.workspaceColor : Theme.textPrimary.opacity(0.78))
                 Text(s.rawValue)
-                    .font(.system(size: 12.5, weight: screen == s ? .semibold : .regular))
+                    .font(.system(size: 12.5, weight: selected ? .semibold : .regular))
                 Spacer()
+                if let badge = badge(s) {
+                    Text(verbatim: badge.text)
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(badge.color)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 1.5)
+                        .background(Capsule().fill(badge.color.opacity(0.16)))
+                        .help(badge.help)
+                }
             }
-            .foregroundStyle(screen == s ? Theme.textPrimary : Theme.textPrimary.opacity(0.78))
+            .foregroundStyle(selected ? Theme.textPrimary : Theme.textPrimary.opacity(0.78))
             .padding(.horizontal, 10)
             .padding(.vertical, 7)
             .background(
                 RoundedRectangle(cornerRadius: 8)
-                    .fill(screen == s ? Color.white.opacity(0.08) : Color.clear)
+                    .fill(Color.white.opacity(selected ? 0.09 : hoveredScreen == s ? 0.045 : 0))
             )
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .onHover { hoveredScreen = $0 ? s : (hoveredScreen == s ? nil : hoveredScreen) }
+        .modifier(ScreenShortcut(number: number))
     }
 
     @ViewBuilder
@@ -438,6 +482,21 @@ struct RootView: View {
         case .problems: ProblemsScreen()
         case .accessReview: AccessReviewScreen()
         case .server: ServerScreen()
+        }
+    }
+}
+
+/// ⌘1–⌘9 for a sidebar row, with the shortcut in its tooltip.
+private struct ScreenShortcut: ViewModifier {
+    var number: Int?
+
+    func body(content: Content) -> some View {
+        if let number {
+            content
+                .keyboardShortcut(KeyEquivalent(Character(String(number))), modifiers: .command)
+                .help("⌘\(number)")
+        } else {
+            content
         }
     }
 }

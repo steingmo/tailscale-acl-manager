@@ -28,7 +28,8 @@ struct ProblemsScreen: View {
                         .foregroundStyle(Theme.textSecondary)
                     Text(store.headscaleNodes.isEmpty
                          ? "Connect a server to also check the policy against your real devices."
-                         : "Device checks are using \(store.headscaleNodes.count) devices from \(store.serverDisplayName)"
+                         : "Device checks are using \(store.headscaleNodes.count) devices"
+                            + (store.serverDisplayName.isEmpty ? "" : " from \(store.serverDisplayName)")
                             + (store.serverDataSaved.map { ", saved \($0.formatted(.relative(presentation: .named)))." } ?? "."))
                         .font(.system(size: 10.5))
                         .foregroundStyle(Theme.textSecondary.opacity(0.8))
@@ -48,22 +49,17 @@ struct ProblemsScreen: View {
                 }
 
                 if issues.isEmpty {
-                    HStack(spacing: 10) {
-                        Image(systemName: "checkmark.shield")
-                            .font(.system(size: 13, weight: .semibold))
-                        Text("No problems found. The policy structure looks clean.")
-                            .font(.system(size: 12.5, weight: .semibold))
-                        Spacer()
-                    }
-                    .foregroundStyle(Theme.green)
-                    .padding(11)
-                    .background(RoundedRectangle(cornerRadius: 8).fill(Theme.green.opacity(0.10)))
-                    .overlay(RoundedRectangle(cornerRadius: 8)
-                        .stroke(Theme.green.opacity(0.35), lineWidth: 1))
+                    EmptyState(icon: "checkmark.shield", title: "No problems found",
+                               message: "The policy structure looks clean, and nothing in the security review stands out.",
+                               tint: Theme.green)
                 } else {
-                    Text("\(errors) error\(errors == 1 ? "" : "s"), \(issues.count - errors) warning\(issues.count - errors == 1 ? "" : "s")")
-                        .font(.system(size: 11.5))
-                        .foregroundStyle(Theme.textSecondary)
+                    HStack(spacing: 6) {
+                        if errors > 0 { Chip(text: "\(errors) error\(errors == 1 ? "" : "s")", color: Theme.red, icon: "xmark.circle.fill") }
+                        if issues.count > errors {
+                            Chip(text: "\(issues.count - errors) warning\(issues.count - errors == 1 ? "" : "s")", color: Theme.orange,
+                                 icon: "exclamationmark.triangle.fill")
+                        }
+                    }
                     let security = issues.filter(\.security)
                     let other = issues.filter { !$0.security }
                     if !security.isEmpty {

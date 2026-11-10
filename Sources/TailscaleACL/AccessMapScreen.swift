@@ -115,28 +115,37 @@ struct AccessMapScreen: View {
             }
 
             if !store.isValid {
-                notice("Fix the policy in the editor to see the access map.")
+                InvalidPolicyState(purpose: "see the access map")
+            } else if items.isEmpty, kind == .device {
+                EmptyState(icon: "desktopcomputer", title: "No devices loaded",
+                           message: "Connect a Headscale or Tailscale server to map your real devices. Groups, tags, and users work without one.") {
+                    Button("Open Server") { openScreen(.server) }
+                }
             } else if items.isEmpty {
-                notice(kind == .device
-                       ? "Connect a Headscale or Tailscale server on the Server screen to map your devices."
-                       : "The policy has no \(kindName)s. Use Templates to add common setups.")
+                EmptyState(icon: "circle.hexagongrid", title: "The policy has no \(kindName)s",
+                           message: "Templates add common setups in one step, or define them in the Policy Editor.") {
+                    Button("Templates…") { showingTemplates = true }
+                }
             } else {
                 GeometryReader { viewport in
                     let size = mapSize
+                    // Never cut the destinations off at the window edge: a narrow
+                    // window shrinks the map to its width, unless the user zoomed in.
+                    let shown = zoom > 1 ? zoom : min(zoom, max(viewport.size.width / size.width, Self.zoomRange.lowerBound))
                     ScrollView([.horizontal, .vertical]) {
                         map
-                            .scaleEffect(zoom, anchor: .topLeading)
-                            .frame(width: size.width * zoom, height: size.height * zoom, alignment: .topLeading)
+                            .scaleEffect(shown, anchor: .topLeading)
+                            .frame(width: size.width * shown, height: size.height * shown, alignment: .topLeading)
                     }
                     .gesture(MagnifyGesture()
                         .onChanged { value in
-                            let base = pinchBase ?? zoom
+                            let base = pinchBase ?? shown
                             pinchBase = base
                             zoom = (base * value.magnification).clamped(to: Self.zoomRange)
                         }
                         .onEnded { _ in pinchBase = nil })
                     .overlay(alignment: .bottomTrailing) {
-                        zoomControls(fit: min(viewport.size.width / size.width, viewport.size.height / size.height, 1))
+                        zoomControls(fit: min(viewport.size.width / size.width, viewport.size.height / size.height, 1), shown: shown)
                             .padding(12)
                     }
                 }
@@ -343,13 +352,13 @@ struct AccessMapScreen: View {
     }
 
     /// −, zoom level, +, and Fit, with ⌘−, ⌘0, ⌘= shortcuts.
-    private func zoomControls(fit: Double) -> some View {
+    private func zoomControls(fit: Double, shown: Double) -> some View {
         HStack(spacing: 2) {
-            Button { zoom = (zoom - 0.1).clamped(to: Self.zoomRange) } label: { Image(systemName: "minus") }
+            Button { zoom = (shown - 0.1).clamped(to: Self.zoomRange) } label: { Image(systemName: "minus") }
                 .keyboardShortcut("-", modifiers: .command)
                 .help("Zoom out (⌘−)")
             Button { zoom = 1 } label: {
-                Text(verbatim: "\(Int((zoom * 100).rounded()))%").font(.system(size: 11, design: .monospaced)).frame(width: 40)
+                Text(verbatim: "\(Int((shown * 100).rounded()))%").font(.system(size: 11, design: .monospaced)).frame(width: 40)
             }
             .keyboardShortcut("0", modifiers: .command)
             .help("Actual size (⌘0)")
@@ -702,15 +711,6 @@ struct AccessMapScreen: View {
             .background(RoundedRectangle(cornerRadius: 7).fill(Color.white.opacity(0.06)))
     }
 
-    private func notice(_ text: String) -> some View {
-        HStack(spacing: 8) {
-            Image(systemName: "info.circle")
-                .foregroundStyle(Theme.textSecondary)
-            Text(text)
-                .foregroundStyle(Theme.textSecondary)
-        }
-        .padding(16)
-    }
 }
 
 extension PolicyModel {
