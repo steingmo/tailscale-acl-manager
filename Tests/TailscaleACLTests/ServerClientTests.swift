@@ -1,4 +1,7 @@
 import XCTest
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 @testable import TailscaleACL
 
 /// Answers requests from a handler and records them; no network involved.

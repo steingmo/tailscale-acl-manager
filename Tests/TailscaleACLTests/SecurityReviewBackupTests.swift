@@ -1,5 +1,7 @@
 import XCTest
+#if canImport(CryptoKit)
 import CryptoKit
+#endif
 @testable import TailscaleACL
 
 final class SecurityReviewTests: XCTestCase {

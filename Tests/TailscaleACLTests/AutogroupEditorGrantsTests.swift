@@ -1,5 +1,7 @@
 import XCTest
+#if canImport(AppKit)
 import AppKit
+#endif
 @testable import TailscaleACL
 
 final class AddressAndAutogroupTests: XCTestCase {
