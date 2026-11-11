@@ -85,7 +85,9 @@ final class RoleTests: XCTestCase {
     }
 }
 
+#if MAC_APP
 @MainActor
+#endif
 final class RoleStoreTests: XCTestCase {
     var dir: URL!
 

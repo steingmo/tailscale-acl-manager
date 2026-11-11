@@ -191,7 +191,9 @@ final class ConvertToGrantsTests: XCTestCase {
     }
 }
 
+#if MAC_APP
 @MainActor
+#endif
 final class EditorAssistTests: XCTestCase {
     let m = model("""
     {"groups": {"group:eng": ["amy@x.com"], "group:ops": []}, "tagOwners": {"tag:db": ["group:ops"]},

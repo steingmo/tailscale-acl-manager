@@ -87,7 +87,9 @@ final class PersonalRuleTests: XCTestCase {
     }
 }
 
+#if MAC_APP
 @MainActor
+#endif
 final class PersonalRuleFixTests: XCTestCase {
     var dir: URL!
 

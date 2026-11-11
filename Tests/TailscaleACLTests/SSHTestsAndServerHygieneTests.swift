@@ -145,7 +145,9 @@ final class StaleUserTests: XCTestCase {
     }
 }
 
+#if MAC_APP
 @MainActor
+#endif
 final class RemoveMemberFixTests: XCTestCase {
     var dir: URL!
 

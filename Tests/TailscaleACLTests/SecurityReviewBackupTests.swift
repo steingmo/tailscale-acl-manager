@@ -76,7 +76,9 @@ final class SecurityReviewTests: XCTestCase {
     }
 }
 
+#if MAC_APP
 @MainActor
+#endif
 final class SecurityFixStoreTests: XCTestCase {
     var dir: URL!
 

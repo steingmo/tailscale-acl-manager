@@ -110,7 +110,9 @@ final class UserManagementClientTests: XCTestCase {
     #endif
 }
 
+#if MAC_APP
 @MainActor
+#endif
 final class UserPolicyEditTests: XCTestCase {
     var dir: URL!
 

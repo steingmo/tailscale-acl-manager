@@ -63,7 +63,9 @@ final class TemplateTests: XCTestCase {
     }
 }
 
+#if MAC_APP
 @MainActor
+#endif
 final class FixAndSnapshotStoreTests: XCTestCase {
     var dir: URL!
 

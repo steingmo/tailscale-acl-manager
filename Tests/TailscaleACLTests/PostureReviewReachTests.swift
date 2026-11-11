@@ -133,7 +133,9 @@ final class AccessReviewTests: XCTestCase {
     #endif
 }
 
+#if MAC_APP
 @MainActor
+#endif
 final class CacheAndReviewStoreTests: XCTestCase {
     var dir: URL!
     #if MAC_APP

@@ -156,7 +156,9 @@ final class ExpiryAndBroadRuleTests: XCTestCase {
     }
 }
 
+#if MAC_APP
 @MainActor
+#endif
 final class ExpiryAndFileLinkStoreTests: XCTestCase {
     var dir: URL!
 

@@ -104,7 +104,9 @@ final class TrafficTests: XCTestCase {
     }
 }
 
+#if MAC_APP
 @MainActor
+#endif
 final class TrafficLoadingTests: XCTestCase {
     var dir: URL!
 

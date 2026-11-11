@@ -107,7 +107,9 @@ final class RouteTests: XCTestCase {
     }
 }
 
+#if MAC_APP
 @MainActor
+#endif
 final class RouteStoreTests: XCTestCase {
     var dir: URL!
 
