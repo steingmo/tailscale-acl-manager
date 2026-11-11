@@ -30,7 +30,37 @@ and a Homebrew tap (`steingmo/homebrew-tap`, cask `tailscale-acl`).
 
 ## Architecture
 
-Swift Package (no Xcode project). All source in `Sources/TailscaleACL/`:
+Swift Package (no Xcode project), one module, two layers:
+
+- **Engine** — the files directly in `Sources/TailscaleACL/`: HuJSON, the
+  policy model, evaluator, lint, impact, explanations, templates, reports,
+  traffic, JIT logic, the server clients, and the `lint|test` command-line
+  tool. Foundation only; builds and is tested on Linux.
+- **Mac app** — everything in `Sources/TailscaleACL/Mac/`: the screens and
+  sheets, `PolicyStore`, the Keychain, app lock, encryption, 1Password,
+  MCP, GitOps, history. Its tests are in `Tests/TailscaleACLTests/Mac/`.
+
+`Package.swift` leaves the `Mac` folders out on Linux, and on a Mac when
+`TAILSCALE_ACL_ENGINE=1` is set (the quick local check that the engine
+doesn't lean on the app):
+
+```sh
+TAILSCALE_ACL_ENGINE=1 swift test --scratch-path "$HOME/Library/Caches/tailscale-acl-engine-build"
+```
+
+Rules that keep it working (the "Linux engine" CI job checks them):
+- A file that imports SwiftUI, AppKit, Security, CryptoKit, Network, or
+  uses `PolicyStore` belongs in `Mac/`. Engine code never references it;
+  where it must hand over (the app's `main`, 1Password reads), that is
+  inside `#if MAC_APP` (defined only when the app is built).
+- Engine files that use `URLSession` import `FoundationNetworking` when it
+  exists. No CoreFoundation calls, no `RelativeDateTimeFormatter`.
+- In test files outside `Mac/`, tests that need the app are inside
+  `#if MAC_APP`, and a test class is `@MainActor` only under `#if MAC_APP`
+  (Linux XCTest can't list synchronous tests of a main-actor class).
+
+File names below are without the folder; the engine/Mac rule above says
+where each is.
 
 - `HuJSON.swift` — HuJSON parser/serializer (JSON + comments + trailing
   commas). Comments preceding object members / array elements are captured
@@ -342,7 +372,8 @@ macOS purges old files there, which corrupts the cached Sparkle artifact. `relea
 (debug, then release with `-enable-testing`) and launches the built app for
 10 s with a throwaway data folder (`-lockApp NO …` argument defaults, so
 real settings stay untouched), stopping on any failure; GitHub Actions (`.github/workflows/test.yml`) runs
-it on every push to main. Store tests set `TAILSCALE_ACL_DATA_DIR` to a temp
+it on every push to main; `linux.yml` builds and tests the engine alone on
+Ubuntu (Swift 6.1 container) and lints a policy with the command-line tool. Store tests set `TAILSCALE_ACL_DATA_DIR` to a temp
 folder and pre-seed `workspaces.json`, so they never touch real app data or
 the Keychain migration — keep it that way for new store tests.
 

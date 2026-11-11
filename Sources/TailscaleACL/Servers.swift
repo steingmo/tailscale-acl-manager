@@ -406,7 +406,7 @@ final class TailscaleClient: PolicyServer {
                 if let b = try? c.decode(Bool.self) { text = b ? "true" : "false" }
                 else if let i = try? c.decode(Int.self) { text = String(i) }
                 else if let d = try? c.decode(Double.self) { text = String(d) }
-                else { text = try c.decode(String.self) }
+                else { text = (try? c.decode(String.self)) ?? "" }  // one odd value mustn't lose the device's others
             }
         }
         var attributes: [String: Value]?
