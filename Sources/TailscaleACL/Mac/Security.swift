@@ -79,41 +79,6 @@ func isUnencryptedRemote(_ urlString: String) -> Bool {
     return !["localhost", "127.0.0.1", "::1", "[::1]"].contains(host)
 }
 
-// MARK: - Credentials
-
-/// What the stored credential is and what it may do.
-struct CredentialInfo: Equatable {
-    var kind: String
-    /// Granted OAuth scopes; nil when the server doesn't say. "all" = full access.
-    var scopes: [String]?
-    var expires: Date?
-    /// The 1Password secret reference it's read from; nil when it's in the Keychain.
-    var reference: String? = nil
-
-    var isFullAccess: Bool { scopes?.contains("all") == true }
-
-    /// Scopes each app feature needs (Tailscale OAuth clients).
-    static let featureScopes: [(feature: String, scope: String)] = [
-        ("pull and push the policy", "policy_file"),
-        ("devices, tags, key expiry", "devices:core"),
-        ("route approval", "devices:routes"),
-        ("auth keys", "auth_keys"),
-        ("listing users and roles", "users:read"),
-        ("device posture (Huntress…)", "devices:posture_attributes:read"),
-        ("managing users", "users"),
-        ("who changed the policy", "logs:configuration:read"),
-        ("traffic (flow logs)", "logs:network:read"),
-    ]
-
-    /// Features this credential's scopes don't cover (a write scope covers its :read).
-    var missingFeatures: [String] {
-        guard let scopes, !isFullAccess else { return [] }
-        return Self.featureScopes.filter { f in
-            !scopes.contains(f.scope) && !(f.scope.hasSuffix(":read") && scopes.contains(String(f.scope.dropLast(5))))
-        }.map(\.feature)
-    }
-}
-
 // MARK: - Activity log
 
 /// Every change the app makes on a server, appended as JSON lines to

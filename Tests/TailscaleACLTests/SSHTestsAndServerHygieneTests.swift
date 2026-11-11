@@ -149,6 +149,7 @@ final class StaleUserTests: XCTestCase {
 final class RemoveMemberFixTests: XCTestCase {
     var dir: URL!
 
+    #if MAC_APP
     override func setUp() async throws {
         dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         setenv("TAILSCALE_ACL_DATA_DIR", dir.path, 1)
@@ -156,12 +157,14 @@ final class RemoveMemberFixTests: XCTestCase {
         try WorkspaceStore.save([ws])
         UserDefaults.standard.set(ws.id.uuidString, forKey: "currentWorkspaceID")
     }
+    #endif
 
     override func tearDown() async throws {
         try? FileManager.default.removeItem(at: dir)
         unsetenv("TAILSCALE_ACL_DATA_DIR")
     }
 
+    #if MAC_APP
     func testFixRemovesTheMemberAndTheWarning() {
         let store = PolicyStore()
         store.serverLogins = ["amy@x.com"]
@@ -171,4 +174,5 @@ final class RemoveMemberFixTests: XCTestCase {
         XCTAssertEqual(store.model.groups["group:eng"], ["amy@x.com"])
         XCTAssertFalse(store.lintIssues.contains { $0.title == "Not a user on the server" })
     }
+    #endif
 }

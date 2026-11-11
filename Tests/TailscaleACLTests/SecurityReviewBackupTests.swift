@@ -78,6 +78,7 @@ final class SecurityReviewTests: XCTestCase {
 final class SecurityFixStoreTests: XCTestCase {
     var dir: URL!
 
+    #if MAC_APP
     override func setUp() async throws {
         dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         setenv("TAILSCALE_ACL_DATA_DIR", dir.path, 1)
@@ -89,12 +90,14 @@ final class SecurityFixStoreTests: XCTestCase {
         try WorkspaceStore.save([ws])
         UserDefaults.standard.set(ws.id.uuidString, forKey: "currentWorkspaceID")
     }
+    #endif
 
     override func tearDown() async throws {
         try? FileManager.default.removeItem(at: dir)
         unsetenv("TAILSCALE_ACL_DATA_DIR")
     }
 
+    #if MAC_APP
     func testFixesApply() {
         let store = PolicyStore()
         for title in ["SSH as root without check mode", "Anyone can apply tag:s"] {
@@ -105,7 +108,9 @@ final class SecurityFixStoreTests: XCTestCase {
         XCTAssertEqual(store.model.sshRules.first?.action, "check")
         XCTAssertEqual(store.model.tagOwners["tag:s"], ["autogroup:admin"])
     }
+    #endif
 
+    #if MAC_APP
     func testNarrowing() {
         let store = PolicyStore()
         store.narrowRule(section: "grants", index: 0, to: ["udp:88", "tcp:443", "tcp:88"])
@@ -116,23 +121,29 @@ final class SecurityFixStoreTests: XCTestCase {
         XCTAssertEqual(PolicyModel(tree: tree).rules.first?.dst, ["tag:a:22,443", "[fd7a::1]:22,443"])
         XCTAssertFalse(narrowRulePorts(&tree, section: "acls", index: 5, to: ["tcp:1"]))
     }
+    #endif
 }
 
 final class BackupTests: XCTestCase {
     var dir: URL!
 
+    #if MAC_APP
     override func setUp() async throws {
         dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         setenv("TAILSCALE_ACL_DATA_DIR", dir.path, 1)
         DataEncryption.key = nil
     }
+    #endif
 
+    #if MAC_APP
     override func tearDown() async throws {
         DataEncryption.key = nil
         try? FileManager.default.removeItem(at: dir)
         unsetenv("TAILSCALE_ACL_DATA_DIR")
     }
+    #endif
 
+    #if MAC_APP
     func testBackupRoundTripAndRestore() throws {
         let ws = Workspace(name: "Office", serverURL: "", policy: #"{"groups": {"group:secret": []}}"#)
         try WorkspaceStore.save([ws])
@@ -153,7 +164,9 @@ final class BackupTests: XCTestCase {
         let kept = try Data(contentsOf: aside.appendingPathComponent("workspaces.json"))
         XCTAssertTrue(String(decoding: kept, as: UTF8.self).contains("Changed"))
     }
+    #endif
 
+    #if MAC_APP
     func testRejectsPathsOutsideTheDataFolder() {
         XCTAssertTrue(Backup.isAllowedPath("workspaces.json"))
         XCTAssertTrue(Backup.isAllowedPath("snapshots/\(UUID().uuidString).json"))
@@ -161,6 +174,7 @@ final class BackupTests: XCTestCase {
         XCTAssertFalse(Backup.isAllowedPath("snapshots/../../.zshrc"))
         XCTAssertFalse(Backup.isAllowedPath("/etc/hosts"))
     }
+    #endif
 }
 
 final class AuditReportTests: XCTestCase {

@@ -185,9 +185,11 @@ final class HeadscaleClientTests: XCTestCase {
         }
     }
 
+    #if MAC_APP
     func testOldWorkspacesDefaultToHeadscale() throws {
         let ws = try JSONDecoder().decode(Workspace.self, from: Data(
             #"{"id": "\#(UUID().uuidString)", "name": "Old", "serverURL": "https://hs", "policy": "{}"}"#.utf8))
         XCTAssertEqual(ws.kind, .headscale)
     }
+    #endif
 }

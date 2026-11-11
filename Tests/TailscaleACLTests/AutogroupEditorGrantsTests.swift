@@ -208,6 +208,7 @@ final class EditorAssistTests: XCTestCase {
         XCTAssertNotNil(v.definition(of: "autogroup:self"))
     }
 
+    #if MAC_APP
     func testTextViewCompletionRangeAndReveal() {
         let tv = PolicyTextView(frame: NSRect(x: 0, y: 0, width: 400, height: 300))
         tv.vocabulary = EditorVocabulary(m)
@@ -223,6 +224,7 @@ final class EditorAssistTests: XCTestCase {
         tv.reveal(line: 2)
         XCTAssertEqual((tv.string as NSString).substring(with: tv.selectedRange()), "two")
     }
+    #endif
 }
 
 final class AuditLogTests: XCTestCase {
@@ -312,6 +314,7 @@ final class IPSetSyntaxTests: XCTestCase {
 }
 
 final class IPSetDisplayTests: XCTestCase {
+    #if MAC_APP
     func testLinesExpandNestedSetsAndHosts() {
         let m = model("""
         {"hosts": {"dc1": "10.114.32.11"},
@@ -324,4 +327,5 @@ final class IPSetDisplayTests: XCTestCase {
         XCTAssertEqual(lines.map(\.remove), [false, true, false, false, false, false])
         XCTAssertEqual(lines.map(\.depth), [0, 0, 0, 1, 1, 0])
     }
+    #endif
 }

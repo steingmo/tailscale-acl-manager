@@ -101,17 +101,20 @@ final class UserManagementClientTests: XCTestCase {
         XCTAssertTrue(StubProtocol.requests.isEmpty)
     }
 
+    #if MAC_APP
     func testPermissionErrorsExplainTheFix() {
         let text = UsersPanel.explain(ServerError(status: 403, message: "HTTP 403: forbidden"), kind: .tailscale)
         XCTAssertTrue(text.contains("users scope"))
         XCTAssertTrue(text.contains("personal API access token"))
     }
+    #endif
 }
 
 @MainActor
 final class UserPolicyEditTests: XCTestCase {
     var dir: URL!
 
+    #if MAC_APP
     override func setUp() async throws {
         dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         setenv("TAILSCALE_ACL_DATA_DIR", dir.path, 1)
@@ -125,12 +128,14 @@ final class UserPolicyEditTests: XCTestCase {
         try WorkspaceStore.save([ws])
         UserDefaults.standard.set(ws.id.uuidString, forKey: "currentWorkspaceID")
     }
+    #endif
 
     override func tearDown() async throws {
         try? FileManager.default.removeItem(at: dir)
         unsetenv("TAILSCALE_ACL_DATA_DIR")
     }
 
+    #if MAC_APP
     func testAddToGroupsSkipsExistingAndCreatesMissing() {
         let store = PolicyStore()
         store.addUser("carl@x.com", toGroups: ["group:eng", "group:new"])
@@ -139,7 +144,9 @@ final class UserPolicyEditTests: XCTestCase {
         XCTAssertEqual(store.model.groups["group:new"], ["carl@x.com"])
         XCTAssertTrue(store.text.contains("// Teams"), "comments survive")
     }
+    #endif
 
+    #if MAC_APP
     func testOffboardingRemovesEverywhere() {
         let store = PolicyStore()
         XCTAssertEqual(store.groups(containing: ["amy@x.com"]), ["group:eng", "group:ops"])
@@ -155,4 +162,5 @@ final class UserPolicyEditTests: XCTestCase {
         um.undo()
         XCTAssertEqual(store.model.groups["group:ops"], ["Amy@X.com", "bob@x.com"], "one undo step")
     }
+    #endif
 }

@@ -108,6 +108,7 @@ final class TrafficTests: XCTestCase {
 final class TrafficLoadingTests: XCTestCase {
     var dir: URL!
 
+    #if MAC_APP
     override func setUp() async throws {
         dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         setenv("TAILSCALE_ACL_DATA_DIR", dir.path, 1)
@@ -116,6 +117,7 @@ final class TrafficLoadingTests: XCTestCase {
         UserDefaults.standard.set(ws.id.uuidString, forKey: "currentWorkspaceID")
         StubProtocol.requests = []
     }
+    #endif
 
     override func tearDown() async throws {
         try? FileManager.default.removeItem(at: dir)
@@ -131,6 +133,7 @@ final class TrafficLoadingTests: XCTestCase {
       "virtualTraffic": [{"proto": 6, "src": "100.64.0.1:52343", "dst": "100.64.0.3:5432", "txBytes": 10}]}]}
     """.utf8)
 
+    #if MAC_APP
     func testLoadsTheDayAnHourAtATime() async throws {
         StubProtocol.handler = { _, _ in .init(body: Self.log) }
         let store = PolicyStore()
@@ -152,7 +155,9 @@ final class TrafficLoadingTests: XCTestCase {
         XCTAssertNil(store.trafficProgress)
         XCTAssertNil(store.trafficStarted)
     }
+    #endif
 
+    #if MAC_APP
     func testCancelKeepsTheNewestHoursAlreadyIn() async throws {
         let lock = NSLock()
         nonisolated(unsafe) var served = 0
@@ -171,6 +176,7 @@ final class TrafficLoadingTests: XCTestCase {
         XCTAssertEqual(store.traffic.map { $0.end.timeIntervalSince($0.start) }, 3 * 3600)
         XCTAssertNil(store.trafficProgress)
     }
+    #endif
 }
 
 final class ExitNodeDNSTrafficTests: XCTestCase {

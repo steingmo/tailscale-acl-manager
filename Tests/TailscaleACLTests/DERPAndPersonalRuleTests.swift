@@ -37,6 +37,7 @@ final class DERPTests: XCTestCase {
         XCTAssertEqual(p.line(at: "derpMap.Regions[901]"), 1)
     }
 
+    #if MAC_APP
     func testSTUNMessages() {
         let tx: [UInt8] = Array(1...12)
         let req = stunBindingRequest(transactionID: tx)
@@ -49,6 +50,7 @@ final class DERPTests: XCTestCase {
         XCTAssertFalse(isSTUNBindingSuccess(reply, transactionID: Array(repeating: 0, count: 12)))
         XCTAssertFalse(isSTUNBindingSuccess(req, transactionID: tx), "a request isn't a response")
     }
+    #endif
 }
 
 final class PersonalRuleTests: XCTestCase {
@@ -89,6 +91,7 @@ final class PersonalRuleTests: XCTestCase {
 final class PersonalRuleFixTests: XCTestCase {
     var dir: URL!
 
+    #if MAC_APP
     override func setUp() async throws {
         dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         setenv("TAILSCALE_ACL_DATA_DIR", dir.path, 1)
@@ -104,12 +107,14 @@ final class PersonalRuleFixTests: XCTestCase {
         try WorkspaceStore.save([ws])
         UserDefaults.standard.set(ws.id.uuidString, forKey: "currentWorkspaceID")
     }
+    #endif
 
     override func tearDown() async throws {
         try? FileManager.default.removeItem(at: dir)
         unsetenv("TAILSCALE_ACL_DATA_DIR")
     }
 
+    #if MAC_APP
     func testMoveToGroup() {
         let store = PolicyStore()
         let before = Evaluator(model: store.model)
@@ -126,4 +131,5 @@ final class PersonalRuleFixTests: XCTestCase {
         }
         XCTAssertFalse(store.lintIssues.contains { $0.title.hasPrefix("Access given to") })
     }
+    #endif
 }

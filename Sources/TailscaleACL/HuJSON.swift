@@ -436,3 +436,7 @@ enum HuJSONSerializer {
         return out
     }
 }
+
+func stringArrayJSON(_ strings: [String]) -> JSON {
+    .array(strings.map { JSON.Element(comments: [], value: .string($0)) })
+}

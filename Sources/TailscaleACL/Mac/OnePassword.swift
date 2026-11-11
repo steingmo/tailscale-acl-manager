@@ -144,14 +144,6 @@ struct OnePasswordError: LocalizedError {
     var errorDescription: String? { message }
 }
 
-/// A server credential as stored: the key itself, or a 1Password reference.
-struct Credential {
-    let stored: String
-    var isReference: Bool { OnePassword.isReference(stored) }
-    /// The key, read from 1Password when it's a reference.
-    func value() async throws -> String { isReference ? try await OnePassword.read(stored) : stored }
-}
-
 /// Saves the workspace's key in 1Password and hands back the reference
 /// that replaces it in the Keychain (Server screen).
 struct MoveToOnePasswordSheet: View {

@@ -25,6 +25,7 @@ final class HuntressPostureTests: XCTestCase {
         XCTAssertEqual(fix(3), "huntress:defenderStatus == 'Protected'")
     }
 
+    #if MAC_APP
     func testTailscaleAttributesAreStrings() async throws {
         StubProtocol.requests = []
         StubProtocol.handler = { _, _ in .init(body: Data("""
@@ -38,6 +39,7 @@ final class HuntressPostureTests: XCTestCase {
         let none = try await headscale.postureAttributes(nodeID: "1")
         XCTAssertNil(none)
     }
+    #endif
 
     func testDryRunShowsWhoLosesAccess() {
         let old = model(#"{"grants": [{"src": ["autogroup:member"], "dst": ["tag:rds"], "ip": ["3389"]}]}"#)
@@ -77,6 +79,7 @@ final class HuntressPostureTests: XCTestCase {
 }
 
 final class WhoCanReachTests: XCTestCase {
+    #if MAC_APP
     func testPeopleMachinesAndCoveringRanges() {
         let m = model("""
         {"groups": {"group:rds": ["amy@x.com", "bob@x.com"]},
@@ -104,9 +107,11 @@ final class WhoCanReachTests: XCTestCase {
         XCTAssertTrue(csv.hasPrefix("who,kind,through,rule,access,conditions\n"))
         XCTAssertTrue(csv.contains("\"zoe@x.com\",\"person\",\"autogroup:member\""))
     }
+    #endif
 }
 
 final class AccessReviewTests: XCTestCase {
+    #if MAC_APP
     func testKeysFollowContentAndReport() {
         let a = model(#"{"groups": {"group:eng": ["amy@x.com"]}, "grants": [{"src": ["group:eng"], "dst": ["tag:db"], "ip": ["5432"]}]}"#)
         let b = model(#"{"groups": {"group:eng": ["amy@x.com", "bob@x.com"]}, "grants": [{"src": ["group:eng"], "dst": ["tag:db"], "ip": ["5432"]}]}"#)
@@ -125,13 +130,17 @@ final class AccessReviewTests: XCTestCase {
         XCTAssertTrue(report.contains("core team (was kept)"))
         XCTAssertTrue(report.contains("Reviewed by Sos."))
     }
+    #endif
 }
 
 @MainActor
 final class CacheAndReviewStoreTests: XCTestCase {
     var dir: URL!
+    #if MAC_APP
     var ws: Workspace!
+    #endif
 
+    #if MAC_APP
     override func setUp() async throws {
         dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         setenv("TAILSCALE_ACL_DATA_DIR", dir.path, 1)
@@ -145,12 +154,14 @@ final class CacheAndReviewStoreTests: XCTestCase {
         try WorkspaceStore.save([ws])
         UserDefaults.standard.set(ws.id.uuidString, forKey: "currentWorkspaceID")
     }
+    #endif
 
     override func tearDown() async throws {
         try? FileManager.default.removeItem(at: dir)
         unsetenv("TAILSCALE_ACL_DATA_DIR")
     }
 
+    #if MAC_APP
     func testCacheShowsLastServerDataOnOpen() {
         var node = HeadscaleNode(id: "1", name: "pc", ipAddresses: ["100.64.0.1"])
         node.attributes = ["huntress:firewallStatus": "Enabled"]
@@ -166,7 +177,9 @@ final class CacheAndReviewStoreTests: XCTestCase {
         XCTAssertTrue(Backup.isAllowedPath("server-cache/\(ws.id.uuidString).json"))
         XCTAssertTrue(Backup.isAllowedPath("reviews/\(ws.id.uuidString).json"))
     }
+    #endif
 
+    #if MAC_APP
     func testReviewDecisionsPersistAndRemovalsApply() {
         let store = PolicyStore()
         store.startNewReview()
@@ -183,6 +196,7 @@ final class CacheAndReviewStoreTests: XCTestCase {
         XCTAssertNil(store.model.groups["group:old"])
         XCTAssertEqual(store.model.grants.map(\.src), [["group:eng"]], "eve's rule is deleted, and so is the rule left without sources")
     }
+    #endif
 }
 
 final class PostureReportTests: XCTestCase {
@@ -199,6 +213,7 @@ final class PostureReportTests: XCTestCase {
         return n
     }
 
+    #if MAC_APP
     func testScopeReasonsAndNotes() {
         let nodes = [
             device("1", "amy@x.com", ["huntress:firewallStatus": "Enabled", "huntress:defenderStatus": "Protected"]),
@@ -229,13 +244,16 @@ final class PostureReportTests: XCTestCase {
         XCTAssertFalse(notes.contains("dev-1"), "passing devices aren't mentioned")
         XCTAssertTrue(postureReportCSV(checks).hasPrefix("device,owner,os,status,reasons\n\"dev-2\",\"amy@x.com\""))
     }
+    #endif
 
+    #if MAC_APP
     func testUnusedPostureChecksEveryPersonsDevice() {
         let unused = model(#"{"postures": {"posture:p": ["huntress:firewallStatus == 'Enabled'"]}}"#)
         let nodes = [device("1", "a@x.com", ["huntress:firewallStatus": "Enabled"]), device("2", nil, [:], tags: ["tag:s"])]
         XCTAssertNil(postureScope(unused, posture: "posture:p", nodes: nodes))
         XCTAssertEqual(postureReport(unused, posture: "posture:p", nodes: nodes).map(\.status), [.passes])
     }
+    #endif
 }
 
 final class LocalDataTests: XCTestCase {
@@ -243,6 +261,7 @@ final class LocalDataTests: XCTestCase {
         XCTAssertEqual(serverSession.configuration.urlCache?.diskCapacity ?? 0, 0)
     }
 
+    #if MAC_APP
     func testRemoveSavedServerData() throws {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         setenv("TAILSCALE_ACL_DATA_DIR", dir.path, 1)
@@ -254,4 +273,5 @@ final class LocalDataTests: XCTestCase {
         XCTAssertNil(ServerCache.load(id))
         XCTAssertFalse(FileManager.default.fileExists(atPath: dir.appendingPathComponent("server-cache").path))
     }
+    #endif
 }

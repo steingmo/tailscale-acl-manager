@@ -79,7 +79,12 @@ final class JITTests: XCTestCase {
             """.utf8))
         }
         let client = makeServer(kind: .tailscale, serverURL: "", tailnet: "-", credential: "tskey-api-x", session: StubProtocol.session())!
-        let server = GuardedServer(client, workspace: "t", requireAuth: false)
+        #if MAC_APP
+        // Through the app's wrapper too: it must forward both calls.
+        let server: PolicyServer = GuardedServer(client, workspace: "t", requireAuth: false)
+        #else
+        let server = client
+        #endif
         let until = ISO8601DateFormatter().date(from: "2027-01-15T10:00:00Z")!
         let posture = try await server.setPostureAttribute(nodeID: "n1", key: "custom:jitProd", value: .bool(true), expiry: until,
                                                            comment: "TICKET-1")

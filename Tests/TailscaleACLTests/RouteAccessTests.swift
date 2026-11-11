@@ -53,11 +53,13 @@ final class RouteAccessTests: XCTestCase {
         XCTAssertTrue(a.subnets.isEmpty, "the internet reaches no subnet route")
     }
 
+    #if MAC_APP
     func testZoomClamping() {
         XCTAssertEqual(0.1.clamped(to: 0.3...2.0), 0.3)
         XCTAssertEqual(2.5.clamped(to: 0.3...2.0), 2.0)
         XCTAssertEqual(1.2.clamped(to: 0.3...2.0), 1.2)
     }
+    #endif
 
     func testNoInternetRule() {
         let a = routeAccess(model(policy), sourceIDs: ["eve@x.com"], nodes: [exitA, router])
@@ -68,9 +70,11 @@ final class RouteAccessTests: XCTestCase {
 }
 
 final class SidebarTests: XCTestCase {
+    #if MAC_APP
     func testEveryScreenIsInExactlyOneSidebarGroup() {
         let listed = Screen.groups.flatMap(\.screens)
         XCTAssertEqual(listed.count, Set(listed).count, "no duplicates")
         XCTAssertEqual(Set(listed), Set(Screen.allCases), "nothing missing from the sidebar")
     }
+    #endif
 }

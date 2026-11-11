@@ -1,5 +1,7 @@
 import Foundation
-import Security
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 
 /// A node as returned by Headscale's `GET /api/v1/node`. Everything is
 /// optional so older and newer server versions both decode.
@@ -96,9 +98,16 @@ struct HeadscaleNode: Codable, Identifiable {
     var statusText: String {
         if online == true { return "online" }
         guard let date = lastSeenDate else { return "offline" }
+        #if canImport(Darwin)
         let f = RelativeDateTimeFormatter()
         f.unitsStyle = .short
         return "last seen \(f.localizedString(for: date, relativeTo: Date()))"
+        #else
+        // Linux has no RelativeDateTimeFormatter.
+        let minutes = max(Int(Date().timeIntervalSince(date) / 60), 0)
+        let ago = minutes < 60 ? "\(minutes) min." : minutes < 2_880 ? "\(minutes / 60) hr." : "\(minutes / 1_440) days"
+        return "last seen \(ago) ago"
+        #endif
     }
 
     /// Policy identities this node matches as, following Tailscale semantics:
@@ -270,40 +279,5 @@ final class HeadscaleClient: PolicyServer {
         let (data, response) = try await session.data(for: req)
         _ = try checkResponse(data, response)
         return data
-    }
-}
-
-/// Server credentials (Headscale API keys, Tailscale tokens or OAuth client
-/// secrets) live in the login keychain (one per workspace id),
-/// never in UserDefaults or the workspace file.
-enum HeadscaleKeychain {
-    /// Account used before workspaces existed; migrated on first launch.
-    static let legacyAccount = "api-key"
-
-    private static func query(_ account: String) -> [String: Any] {
-        [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: "com.local.tailscale-acl-manager.headscale",
-            kSecAttrAccount as String: account,
-        ]
-    }
-
-    static func load(account: String) -> String? {
-        var q = query(account)
-        q[kSecReturnData as String] = true
-        q[kSecMatchLimit as String] = kSecMatchLimitOne
-        var item: CFTypeRef?
-        guard SecItemCopyMatching(q as CFDictionary, &item) == errSecSuccess,
-              let data = item as? Data else { return nil }
-        return String(data: data, encoding: .utf8)
-    }
-
-    /// Saving an empty key deletes the item.
-    static func save(_ key: String, account: String) {
-        SecItemDelete(query(account) as CFDictionary)
-        guard !key.isEmpty else { return }
-        var q = query(account)
-        q[kSecValueData as String] = Data(key.utf8)
-        SecItemAdd(q as CFDictionary, nil)
     }
 }

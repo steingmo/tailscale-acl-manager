@@ -2,18 +2,24 @@ import Foundation
 
 /// Entry point: `tailscale-acl lint|test <file>` runs the app's checks in a
 /// terminal or CI without starting the UI; anything else starts the app.
+/// Built without the app (Linux), it is the command-line tool only.
 @main
 enum Main {
     static func main() {
         if let code = runCommandLine(Array(CommandLine.arguments.dropFirst())) { exit(code) }
+        #if MAC_APP
         TailscaleACLApp.main()
+        #else
+        print(usage)
+        exit(2)
+        #endif
     }
 }
 
 private let usage = """
 usage: tailscale-acl lint <policy.hujson>   problems (exit 1 on errors)
        tailscale-acl test <policy.hujson>   problems + the policy's tests (exit 1 on any failure)
-       tailscale-acl mcp                    MCP server for AI apps (relays to the running app;
+       tailscale-acl mcp                    MCP server for AI apps (relays to the running Mac app;
                                             turn on Settings ▸ AI tools first)
 Use - to read the policy from standard input.
 """
@@ -22,7 +28,14 @@ Use - to read the policy from standard input.
 /// (e.g. Finder/Xcode launch flags) and the app should start.
 func runCommandLine(_ args: [String], output: (String) -> Void = { print($0) }) -> Int32? {
     guard let command = args.first, ["lint", "test", "mcp", "help", "--help", "-h"].contains(command) else { return nil }
-    if command == "mcp" { return runMCPBridge() }
+    if command == "mcp" {
+        #if MAC_APP
+        return runMCPBridge()
+        #else
+        output("tailscale-acl mcp relays to the Mac app, so it only works on macOS.")
+        return 2
+        #endif
+    }
     guard command == "lint" || command == "test" else {
         output(usage)
         return 0

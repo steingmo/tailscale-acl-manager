@@ -67,17 +67,20 @@ final class TemplateTests: XCTestCase {
 final class FixAndSnapshotStoreTests: XCTestCase {
     var dir: URL!
 
+    #if MAC_APP
     override func setUp() async throws {
         dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         setenv("TAILSCALE_ACL_DATA_DIR", dir.path, 1)
         try WorkspaceStore.save([Workspace(name: "T", serverURL: "", policy: "{\"groups\": {}}\n")])
     }
+    #endif
 
     override func tearDown() async throws {
         try? FileManager.default.removeItem(at: dir)
         unsetenv("TAILSCALE_ACL_DATA_DIR")
     }
 
+    #if MAC_APP
     func testFixesClearTheirProblems() {
         let store = PolicyStore()
         store.loadPolicy("""
@@ -99,7 +102,9 @@ final class FixAndSnapshotStoreTests: XCTestCase {
         XCTAssertNil(store.model.groups["group:unused"])
         XCTAssertFalse(store.lintIssues.contains { $0.severity == .error }, "\(store.lintIssues.map(\.title))")
     }
+    #endif
 
+    #if MAC_APP
     func testSnapshotsOnOpenAndReplace() {
         let store = PolicyStore()
         let id = store.currentWorkspaceID
@@ -113,7 +118,9 @@ final class FixAndSnapshotStoreTests: XCTestCase {
         for i in 0..<120 { SnapshotStore.record(id, text: "\(i)", reason: "x") }
         XCTAssertEqual(SnapshotStore.load(id).count, 100)
     }
+    #endif
 
+    #if MAC_APP
     func testMapImageRendersAndReportLinksIt() {
         let store = PolicyStore()
         store.loadPolicy(SamplePolicy.text)
@@ -123,9 +130,11 @@ final class FixAndSnapshotStoreTests: XCTestCase {
                                   mapImages: [("group:eng", "T images/group-eng.png")])
         XCTAssertTrue(report.contains("![group:eng](<T images/group-eng.png>)"))
     }
+    #endif
 }
 
 final class RuleEditTests: XCTestCase {
+    #if MAC_APP
     func testOptionsAreSetAndRemoved() throws {
         var tree = try HuJSONParser.parse(#"{"grants": [{"src": ["group:a"], "dst": ["tag:b"], "ip": ["*"], "app": {"x": []}}]}"#)
         applyRuleEdit(&tree, section: "grants", index: 0, name: "Through the router", expires: .some("2027-01-31"),
@@ -148,4 +157,5 @@ final class RuleEditTests: XCTestCase {
             ("action", .string("accept")), ("src", stringArrayJSON(["a@x.com"])), ("dst", stringArrayJSON(["tag:b:22"])), ("proto", .string("tcp"))])
         XCTAssertEqual(PolicyModel(tree: tree).rules.first?.proto, "tcp")
     }
+    #endif
 }

@@ -1,0 +1,21 @@
+name: Linux engine
+
+# The policy engine and the command-line tool, without the Mac app
+# (everything in a Mac/ folder is left out — see Package.swift).
+on:
+  push:
+    branches: [main, linux-engine]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    container: swift:6.1-noble
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - name: Run tests
+        run: swift test
+      - name: Lint a policy with the command-line tool
+        run: |
+          printf '{"groups": {"group:eng": ["a@example.com"]}, "grants": [{"src": ["group:eng"], "dst": ["*"], "ip": ["tcp:443"]}]}' > /tmp/policy.hujson
+          swift run TailscaleACL lint /tmp/policy.hujson

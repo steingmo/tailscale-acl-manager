@@ -332,3 +332,67 @@ extension Array where Element: Hashable {
         return filter { seen.insert($0).inserted }
     }
 }
+
+/// Entity names for completion, and what each one is, for hover.
+struct EditorVocabulary {
+    var names: [String] = []
+    var definitions: [String: String] = [:]
+
+    static let nameCharacters = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: ":-_@.*"))
+
+    static let autogroups: [(String, String)] = [
+        ("autogroup:member", "Users who are members of the tailnet (not shared or tagged devices)"),
+        ("autogroup:tagged", "All devices with at least one tag"),
+        ("autogroup:self", "The source user's own untagged devices (destination only)"),
+        ("autogroup:internet", "Public internet through an exit node (destination only)"),
+        ("autogroup:admin", "Users with the Admin role"),
+        ("autogroup:owner", "The user with the Owner role"),
+        ("autogroup:it-admin", "Users with the IT admin role"),
+        ("autogroup:network-admin", "Users with the Network admin role"),
+        ("autogroup:billing-admin", "Users with the Billing admin role"),
+        ("autogroup:auditor", "Users with the Auditor role"),
+        ("autogroup:shared", "Users who accepted a sharing invitation into this tailnet (source only)"),
+        ("autogroup:nonroot", "SSH: any login user except root"),
+        ("autogroup:danger-all", "Every device, even outside the tailnet — avoid (source only)"),
+    ]
+
+    init() {}
+
+    init(_ m: PolicyModel) {
+        func list(_ items: [String]) -> String { items.isEmpty ? "none" : items.joined(separator: ", ") }
+        for g in m.groupOrder {
+            definitions[g] = "\(g) — members: \(list(m.groups[g] ?? []))"
+        }
+        for t in m.tagOrder {
+            definitions[t] = "\(t) — owners: \(list(m.tagOwners[t] ?? []))"
+        }
+        for h in m.hostOrder {
+            definitions[h] = "\(h) = \(m.hosts[h] ?? "")"
+            definitions["host:\(h)"] = definitions[h]
+        }
+        for s in m.ipsetOrder {
+            definitions[s] = "\(s) — \(list(m.ipsets[s] ?? []))"
+        }
+        for p in m.postureOrder {
+            definitions[p] = "\(p) — all of: \((m.postures[p] ?? []).joined(separator: "; "))"
+        }
+        for u in m.allUsers {
+            definitions[u] = "\(u) — in \(list(m.groupOrder.filter { m.groups[$0]?.contains(u) == true }))"
+        }
+        for (a, text) in Self.autogroups { definitions[a] = "\(a) — \(text)" }
+        names = m.groupOrder + m.tagOrder + m.hostOrder + m.ipsetOrder + m.postureOrder
+            + Self.autogroups.map(\.0) + m.allUsers
+    }
+
+    /// Names that extend `partial` (case-insensitive), excluding an exact match.
+    func completions(for partial: String) -> [String] {
+        let p = partial.lowercased()
+        guard !p.isEmpty else { return [] }
+        return names.filter { $0.lowercased().hasPrefix(p) && $0 != partial }.uniqued()
+    }
+
+    /// What a string under the cursor names, e.g. "tag:db:5432" → tag:db's owners.
+    func definition(of token: String) -> String? {
+        definitions[token] ?? definitions[DestSpec(token).target]
+    }
+}

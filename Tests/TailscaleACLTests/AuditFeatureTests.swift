@@ -111,17 +111,20 @@ final class RouteTests: XCTestCase {
 final class RouteStoreTests: XCTestCase {
     var dir: URL!
 
+    #if MAC_APP
     override func setUp() async throws {
         dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         setenv("TAILSCALE_ACL_DATA_DIR", dir.path, 1)
         try WorkspaceStore.save([Workspace(name: "T", serverURL: "", policy: "{\"groups\": {}}\n")])
     }
+    #endif
 
     override func tearDown() async throws {
         try? FileManager.default.removeItem(at: dir)
         unsetenv("TAILSCALE_ACL_DATA_DIR")
     }
 
+    #if MAC_APP
     func testRouteApproverEditing() {
         let store = PolicyStore()
         store.setRouteApprovers(route: "10.0.0.0/8", approvers: ["tag:router"])
@@ -134,7 +137,9 @@ final class RouteStoreTests: XCTestCase {
         store.setExitNodeApprovers([])
         XCTAssertFalse(store.text.contains("autoApprovers"), "empty section removed")
     }
+    #endif
 
+    #if MAC_APP
     func testGeneratedTestsWrittenAndPass() {
         let store = PolicyStore()
         store.loadPolicy(SamplePolicy.text)
@@ -143,4 +148,5 @@ final class RouteStoreTests: XCTestCase {
         XCTAssertEqual(store.model.tests.count, generated.count)
         XCTAssertTrue(store.testResults.allSatisfy(\.passed))
     }
+    #endif
 }

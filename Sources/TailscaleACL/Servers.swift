@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 
 /// Which control server a workspace talks to.
 enum ServerKind: String, Codable, CaseIterable {
@@ -393,14 +396,26 @@ final class TailscaleClient: PolicyServer {
         return try Self.devicePosture(data)
     }
 
+    /// Decoded, not JSONSerialization: telling true from 1 there needs
+    /// CoreFoundation, which Linux doesn't have.
+    private struct PostureReply: Decodable {
+        struct Value: Decodable {
+            var text: String
+            init(from decoder: Decoder) throws {
+                let c = try decoder.singleValueContainer()
+                if let b = try? c.decode(Bool.self) { text = b ? "true" : "false" }
+                else if let i = try? c.decode(Int.self) { text = String(i) }
+                else if let d = try? c.decode(Double.self) { text = String(d) }
+                else { text = try c.decode(String.self) }
+            }
+        }
+        var attributes: [String: Value]?
+        var expiries: [String: String]?
+    }
+
     private static func devicePosture(_ data: Data) throws -> DevicePosture {
-        let object = try JSONSerialization.jsonObject(with: data) as? [String: Any]
-        let attrs = object?["attributes"] as? [String: Any] ?? [:]
-        return DevicePosture(attributes: attrs.mapValues { v in
-            if let b = v as? Bool, CFGetTypeID(v as CFTypeRef) == CFBooleanGetTypeID() { return b ? "true" : "false" }
-            if let n = v as? NSNumber { return n.stringValue }
-            return "\(v)"
-        }, expiries: object?["expiries"] as? [String: String] ?? [:])
+        let reply = try JSONDecoder().decode(PostureReply.self, from: data)
+        return DevicePosture(attributes: (reply.attributes ?? [:]).mapValues(\.text), expiries: reply.expiries ?? [:])
     }
 
     /// Needs the devices:posture_attributes scope (and a plan with device
@@ -662,5 +677,56 @@ final class TailscaleClient: PolicyServer {
         req.httpBody = body
         let (data, response) = try await session.data(for: req)
         return (data, try checkResponse(data, response))
+    }
+}
+
+// MARK: - Credentials
+
+/// What the stored credential is and what it may do.
+struct CredentialInfo: Equatable {
+    var kind: String
+    /// Granted OAuth scopes; nil when the server doesn't say. "all" = full access.
+    var scopes: [String]?
+    var expires: Date?
+    /// The 1Password secret reference it's read from; nil when it's in the Keychain.
+    var reference: String? = nil
+
+    var isFullAccess: Bool { scopes?.contains("all") == true }
+
+    /// Scopes each app feature needs (Tailscale OAuth clients).
+    static let featureScopes: [(feature: String, scope: String)] = [
+        ("pull and push the policy", "policy_file"),
+        ("devices, tags, key expiry", "devices:core"),
+        ("route approval", "devices:routes"),
+        ("auth keys", "auth_keys"),
+        ("listing users and roles", "users:read"),
+        ("device posture (Huntress…)", "devices:posture_attributes:read"),
+        ("managing users", "users"),
+        ("who changed the policy", "logs:configuration:read"),
+        ("traffic (flow logs)", "logs:network:read"),
+    ]
+
+    /// Features this credential's scopes don't cover (a write scope covers its :read).
+    var missingFeatures: [String] {
+        guard let scopes, !isFullAccess else { return [] }
+        return Self.featureScopes.filter { f in
+            !scopes.contains(f.scope) && !(f.scope.hasSuffix(":read") && scopes.contains(String(f.scope.dropLast(5))))
+        }.map(\.feature)
+    }
+}
+
+/// A server credential as stored: the key itself, or a 1Password reference
+/// (op://vault/item/field), which only the Mac app can read.
+struct Credential {
+    let stored: String
+    var isReference: Bool { stored.trimmingCharacters(in: .whitespaces).hasPrefix("op://") }
+    /// The key, read from 1Password when it's a reference.
+    func value() async throws -> String {
+        guard isReference else { return stored }
+        #if MAC_APP
+        return try await OnePassword.read(stored)
+        #else
+        throw ServerError(status: 0, message: "1Password references are read by the Mac app only; give this the key itself.")
+        #endif
     }
 }

@@ -15,6 +15,7 @@ final class IPLookupTests: XCTestCase {
      "tests": [{"src": "amy@x.com", "accept": ["10.114.32.11:88"]}]}
     """)
 
+    #if MAC_APP
     func testFindsEverythingCoveringTheAddress() {
         let node = HeadscaleNode(id: "7", name: "dc-1", ipAddresses: ["10.114.32.11"])
         let hits = ipLookup("10.114.32.11", m, nodes: [node])
@@ -27,10 +28,13 @@ final class IPLookupTests: XCTestCase {
         let tree = try! HuJSONParser.parse(model_text)
         XCTAssertTrue(hits.compactMap(\.path).allSatisfy { tree.line(at: $0) != nil })
     }
+    #endif
 
+    #if MAC_APP
     func testRemovedAddressIsNotInTheSet() {
         XCTAssertFalse(ipLookup("10.114.32.99", m).contains { $0.path == "ipsets[ipset:mgmt]" })
     }
+    #endif
 
     var model_text: String {
         """
@@ -85,6 +89,7 @@ final class RoleTests: XCTestCase {
 final class RoleStoreTests: XCTestCase {
     var dir: URL!
 
+    #if MAC_APP
     override func setUp() async throws {
         dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         setenv("TAILSCALE_ACL_DATA_DIR", dir.path, 1)
@@ -95,12 +100,14 @@ final class RoleStoreTests: XCTestCase {
         try WorkspaceStore.save([ws])
         UserDefaults.standard.set(ws.id.uuidString, forKey: "currentWorkspaceID")
     }
+    #endif
 
     override func tearDown() async throws {
         try? FileManager.default.removeItem(at: dir)
         unsetenv("TAILSCALE_ACL_DATA_DIR")
     }
 
+    #if MAC_APP
     func testLoadingRolesReevaluatesTests() {
         let store = PolicyStore()
         XCTAssertEqual(store.testResults.map(\.passed), [false])
@@ -108,6 +115,7 @@ final class RoleStoreTests: XCTestCase {
         XCTAssertEqual(store.testResults.map(\.passed), [true])
         XCTAssertEqual(store.model.userAutogroups["amy@x.com"], ["autogroup:admin"])
     }
+    #endif
 }
 
 final class ReviewExportTests: XCTestCase {

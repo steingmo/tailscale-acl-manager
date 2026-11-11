@@ -160,6 +160,7 @@ final class ExpiryAndBroadRuleTests: XCTestCase {
 final class ExpiryAndFileLinkStoreTests: XCTestCase {
     var dir: URL!
 
+    #if MAC_APP
     override func setUp() async throws {
         dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         setenv("TAILSCALE_ACL_DATA_DIR", dir.path, 1)
@@ -167,12 +168,14 @@ final class ExpiryAndFileLinkStoreTests: XCTestCase {
         try WorkspaceStore.save([ws])
         UserDefaults.standard.set(ws.id.uuidString, forKey: "currentWorkspaceID")
     }
+    #endif
 
     override func tearDown() async throws {
         try? FileManager.default.removeItem(at: dir)
         unsetenv("TAILSCALE_ACL_DATA_DIR")
     }
 
+    #if MAC_APP
     func testSaveRuleSetsKeepsAndRemovesExpiry() {
         let store = PolicyStore()
         let fields: [(key: String, value: JSON?)] = [("src", stringArrayJSON(["a@x.com"])),
@@ -186,7 +189,9 @@ final class ExpiryAndFileLinkStoreTests: XCTestCase {
         store.saveRule(section: "grants", index: 0, name: "Renamed", expires: .some(nil), fields: fields)
         XCTAssertNil(store.model.grants[0].expires)
     }
+    #endif
 
+    #if MAC_APP
     func testLinkedFileSyncsBothWays() async throws {
         let file = dir.appendingPathComponent("policy.hujson")
         try "{\n  // from git\n  \"groups\": {\"group:a\": []},\n}\n".write(to: file, atomically: true, encoding: .utf8)
@@ -212,6 +217,7 @@ final class ExpiryAndFileLinkStoreTests: XCTestCase {
         store.setLinkedFile(nil)
         reopened.setLinkedFile(nil)
     }
+    #endif
 }
 
 final class CommandLineTests: XCTestCase {

@@ -547,10 +547,6 @@ extension PolicyStore {
 
 // MARK: - Tree helpers
 
-func stringArrayJSON(_ strings: [String]) -> JSON {
-    .array(strings.map { JSON.Element(comments: [], value: .string($0)) })
-}
-
 private func appendMember(_ tree: inout JSON, section: String, key: String, value: JSON) {
     if var members = tree[section]?.members {
         guard !members.contains(where: { $0.key == key }) else { return }
