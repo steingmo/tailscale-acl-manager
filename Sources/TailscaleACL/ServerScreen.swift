@@ -73,6 +73,7 @@ struct ServerScreen: View {
                 if let client { AuthKeysPanel(client: client) }
                 if !serverHistory.isEmpty { historyPanel }
                 if !activity.isEmpty { activityPanel }
+                if kind == .tailscale, client != nil { JITPanel() }
                 if !store.headscaleNodes.isEmpty { DevicesPanel(client: client) }
             }
             .padding(16)

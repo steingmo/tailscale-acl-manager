@@ -33,7 +33,7 @@ final class HuntressPostureTests: XCTestCase {
         let c = makeServer(kind: .tailscale, serverURL: "", tailnet: "-", credential: "tskey-api-x", session: StubProtocol.session())!
         let attrs = try await GuardedServer(c, workspace: "t", requireAuth: false).postureAttributes(nodeID: "n1")
         XCTAssertEqual(StubProtocol.requests.first?.request.url?.path, "/api/v2/device/n1/attributes")
-        XCTAssertEqual(attrs, ["huntress:defenderStatus": "Protected", "custom:score": "80", "custom:encrypted": "true", "node:os": "windows"])
+        XCTAssertEqual(attrs?.attributes, ["huntress:defenderStatus": "Protected", "custom:score": "80", "custom:encrypted": "true", "node:os": "windows"])
         let headscale = makeServer(kind: .headscale, serverURL: "https://hs.example", tailnet: "", credential: "k", session: StubProtocol.session())!
         let none = try await headscale.postureAttributes(nodeID: "1")
         XCTAssertNil(none)

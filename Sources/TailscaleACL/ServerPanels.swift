@@ -239,6 +239,7 @@ struct DevicesPanel: View {
     @State private var busy = false
     @State private var status: (ok: Bool, text: String)?
     @State private var editingTags: HeadscaleNode?
+    @State private var jitDevice: HeadscaleNode?
     @State private var deviceFilter = DeviceFilter.all
     @State private var nodeAction: NodeAction?
     @State private var renaming: HeadscaleNode?
@@ -288,6 +289,7 @@ struct DevicesPanel: View {
     var body: some View {
         nodesPanel
             .sheet(item: $editingTags) { DeviceTagsSheet(node: $0) }
+            .sheet(item: $jitDevice) { JITSheet(device: $0) }
             .sheet(isPresented: Binding(get: { postureReport != nil }, set: { if !$0 { postureReport = nil } })) {
                 PostureReportSheet(posture: postureReport ?? "")
             }
@@ -429,6 +431,9 @@ struct DevicesPanel: View {
                     Menu {
                         Button("Tags…") { editingTags = node }
                         Button("Rename…") { newName = node.displayName; renaming = node }
+                        if tailscale, !jitPostures(store.model).isEmpty {
+                            Button("Grant Temporary Access…") { jitDevice = node }
+                        }
                         Divider()
                         Button("Expire Key…") { nodeAction = NodeAction(kind: .expire, nodes: [node]) }
                         if tailscale {

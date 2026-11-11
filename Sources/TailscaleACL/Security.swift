@@ -207,7 +207,7 @@ final class GuardedServer: PolicyServer {
     func listInvites() async throws -> [PendingInvite] { try await inner.listInvites() }
     func flowRecords(from: Date, to: Date) async throws -> [FlowRecord]? { try await inner.flowRecords(from: from, to: to) }
     func credentialInfo() async throws -> CredentialInfo? { try await inner.credentialInfo() }
-    func postureAttributes(nodeID: String) async throws -> [String: String]? { try await inner.postureAttributes(nodeID: nodeID) }
+    func postureAttributes(nodeID: String) async throws -> DevicePosture? { try await inner.postureAttributes(nodeID: nodeID) }
 
     // Changes
     func setPolicy(_ policy: String) async throws {
@@ -228,6 +228,18 @@ final class GuardedServer: PolicyServer {
     }
     func expireNode(nodeID: String) async throws {
         try await change("Expire a device key", "device \(nodeID)") { try await inner.expireNode(nodeID: nodeID) }
+    }
+    func setPostureAttribute(nodeID: String, key: String, value: PostureValue, expiry: Date?,
+                             comment: String) async throws -> DevicePosture {
+        let until = expiry.map { " until \(ISO8601DateFormatter().string(from: $0))" } ?? " with no expiry"
+        return try await change("Grant temporary access", "device \(nodeID): \(key) = \(value.text)\(until)\(comment.isEmpty ? "" : " — \(comment)")") {
+            try await inner.setPostureAttribute(nodeID: nodeID, key: key, value: value, expiry: expiry, comment: comment)
+        }
+    }
+    func removePostureAttribute(nodeID: String, key: String) async throws {
+        try await change("End temporary access", "device \(nodeID): \(key)") {
+            try await inner.removePostureAttribute(nodeID: nodeID, key: key)
+        }
     }
     func setKeyExpiry(nodeID: String, disabled: Bool) async throws {
         try await change(disabled ? "Turn off key expiry" : "Turn on key expiry", "device \(nodeID)") {

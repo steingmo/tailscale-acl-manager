@@ -232,4 +232,24 @@ let policyTemplates: [PolicyTemplate] = [
         }
         tree["grants"] = .array(grants)
     },
+    PolicyTemplate(
+        id: "jit", title: "Just-in-time access",
+        detail: "Access a device holds only for a few hours. A posture checks one custom attribute, and grants to the given destinations then require it. Give a device the attribute under Server ▸ Temporary access; Tailscale removes it when the time is up. Needs Tailscale with device posture. Check the push review: until someone is granted access, these grants let nobody through.",
+        fields: [.init(key: "posture", label: "Posture name", defaultValue: "posture:jit-access"),
+                 .init(key: "attribute", label: "Custom attribute", defaultValue: "custom:jitAccess"),
+                 .init(key: "destinations", label: "Require it for grants to (comma-separated, e.g. tag:prod)", defaultValue: "")]
+    ) { tree, v in
+        var posture = v["posture"].flatMap { $0.isEmpty ? nil : $0 } ?? "posture:jit-access"
+        if !posture.hasPrefix("posture:") { posture = "posture:" + posture }
+        let attribute = v["attribute"].flatMap { isCustomAttributeKey($0) ? $0 : nil } ?? "custom:jitAccess"
+        ensure(&tree, "postures", posture, strings(["\(attribute) == true"]))
+        // Like the Huntress template: grants that already require a posture keep theirs.
+        let destinations = Set(list(v["destinations"]))
+        guard !destinations.isEmpty, var grants = tree["grants"]?.elements else { return }
+        for i in grants.indices where grants[i].value["srcPosture"] == nil
+            && !destinations.isDisjoint(with: grants[i].value["dst"]?.stringArray ?? []) {
+            grants[i].value["srcPosture"] = strings([posture])
+        }
+        tree["grants"] = .array(grants)
+    },
 ]

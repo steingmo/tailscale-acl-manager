@@ -152,8 +152,11 @@ extension PolicyStore {
         let workspace = currentWorkspaceID
         var nodes = try await client.listNodes()
         // Keep the attributes already loaded until fresh ones arrive.
-        let known = Dictionary(headscaleNodes.map { ($0.id, $0.attributes) }, uniquingKeysWith: { a, _ in a })
-        for i in nodes.indices { nodes[i].attributes = known[nodes[i].id] ?? nil }
+        let known = Dictionary(headscaleNodes.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        for i in nodes.indices {
+            nodes[i].attributes = known[nodes[i].id]?.attributes
+            nodes[i].attributeExpiries = known[nodes[i].id]?.attributeExpiries
+        }
         if workspace == currentWorkspaceID { headscaleNodes = nodes }
         var users: ServerUsers?
         var usersError: Error?
@@ -179,14 +182,14 @@ extension PolicyStore {
     /// custom:…), so a few run at a time. Without the scope, devices keep
     /// no attributes and posture-gated rules stay conditional.
     func loadPostureAttributes(_ client: PolicyServer, nodes: [HeadscaleNode], workspace: UUID) async {
-        var loaded: [String: [String: String]] = [:]
+        var loaded: [String: DevicePosture] = [:]
         var failure: Error?
-        await withTaskGroup(of: (String, Result<[String: String]?, Error>).self) { group in
+        await withTaskGroup(of: (String, Result<DevicePosture?, Error>).self) { group in
             // The plain next()/addTask loop: an earlier version added tasks from a
             // nested function while iterating with for-await, and release builds
             // aborted when a request outlived the group (1.26.0–1.26.1).
             var pending = nodes.map(\.id).makeIterator()
-            func request(_ id: String) -> @Sendable () async -> (String, Result<[String: String]?, Error>) {
+            func request(_ id: String) -> @Sendable () async -> (String, Result<DevicePosture?, Error>) {
                 { do { return (id, .success(try await client.postureAttributes(nodeID: id))) } catch { return (id, .failure(error)) } }
             }
             for _ in 0..<6 { if let id = pending.next() { group.addTask(operation: request(id)) } }
@@ -210,7 +213,10 @@ extension PolicyStore {
         postureAttributesError = nil
         headscaleNodes = headscaleNodes.map { n in
             var n = n
-            if let attrs = loaded[n.id] { n.attributes = attrs }
+            if let posture = loaded[n.id] {
+                n.attributes = posture.attributes
+                n.attributeExpiries = posture.expiries
+            }
             return n
         }
     }

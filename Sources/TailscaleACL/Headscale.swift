@@ -27,6 +27,9 @@ struct HeadscaleNode: Codable, Identifiable {
     /// Tailscale: every posture attribute (node:, huntress:, custom:…), when
     /// loaded; then the set is complete and a missing attribute is unset.
     var attributes: [String: String]? = nil
+    /// When the temporary ones among `attributes` end (ISO 8601), e.g.
+    /// just-in-time access.
+    var attributeExpiries: [String: String]? = nil
 
     var displayName: String {
         if let g = givenName, !g.isEmpty { return g }

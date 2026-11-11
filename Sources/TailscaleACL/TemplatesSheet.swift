@@ -8,6 +8,11 @@ struct TemplatesSheet: View {
     @State private var values: [String: String] = [:]
     @State private var copyingTemplate = false
 
+    /// Opens on the template with this id, when given.
+    init(initial: String? = nil) {
+        _selected = State(initialValue: policyTemplates.first { $0.id == initial }?.id ?? policyTemplates[0].id)
+    }
+
     private var template: PolicyTemplate { policyTemplates.first { $0.id == selected } ?? policyTemplates[0] }
 
     var body: some View {

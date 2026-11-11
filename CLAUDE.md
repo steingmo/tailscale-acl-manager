@@ -173,6 +173,15 @@ Swift Package (no Xcode project). All source in `Sources/TailscaleACL/`:
   not in `dataFiles`; `runIfDue` on open and on becoming active, no timer);
   `Workspace.color` → `workspacePalette` (menu dot, push review header).
   The window title is workspace — server.
+- `JIT.swift`: just-in-time access, Tailscale only. A JIT posture is one
+  with exactly one condition `custom:<key> == <value>` (`jitPostures`);
+  rules require it via `srcPosture`. `PolicyServer.setPostureAttribute`
+  (POST `device/{id}/attributes/{key}` with `expiry` — Tailscale removes it
+  then; scope `devices:posture_attributes`) / `removePostureAttribute`;
+  `postureAttributes` returns `DevicePosture` (attributes + `expiries`,
+  kept on `HeadscaleNode.attributeExpiries`). The key goes into the request
+  path, so `isCustomAttributeKey` gates it. `JITPanel` (Server screen),
+  `JITSheet` (also from a device's menu), template "jit".
 - `Explain.swift`: `ruleExplanation` — one sentence per rule (Access Map
   pill tooltip, live in `RuleSheet`'s preview).
 - `WeeklyHealth.swift`: `weeklyHealth` (new problems vs the snapshot from a

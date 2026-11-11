@@ -28,7 +28,12 @@ protocol PolicyServer: AnyObject {
     /// Expire the device's key now: it must log in again to reconnect.
     func expireNode(nodeID: String) async throws
     /// The device's posture attributes; nil when the server keeps none (Headscale).
-    func postureAttributes(nodeID: String) async throws -> [String: String]?
+    func postureAttributes(nodeID: String) async throws -> DevicePosture?
+    /// Set a custom: posture attribute on a device — until `expiry`, when the
+    /// server removes it by itself (just-in-time access). Tailscale only.
+    func setPostureAttribute(nodeID: String, key: String, value: PostureValue, expiry: Date?,
+                             comment: String) async throws -> DevicePosture
+    func removePostureAttribute(nodeID: String, key: String) async throws
     /// Turn the device's key expiry off or back on (Tailscale only).
     func setKeyExpiry(nodeID: String, disabled: Bool) async throws
     /// Remove the device from the tailnet.
@@ -123,8 +128,52 @@ extension PolicyServer {
     func restoreUser(id: String) async throws { throw unsupported("suspending users") }
     func flowRecords(from: Date, to: Date) async throws -> [FlowRecord]? { nil }
     func setKeyExpiry(nodeID: String, disabled: Bool) async throws { throw unsupported("turning key expiry off") }
-    func postureAttributes(nodeID: String) async throws -> [String: String]? { nil }
+    func postureAttributes(nodeID: String) async throws -> DevicePosture? { nil }
+    func setPostureAttribute(nodeID: String, key: String, value: PostureValue, expiry: Date?,
+                             comment: String) async throws -> DevicePosture {
+        throw unsupported("temporary access (it works through Tailscale's device posture attributes)")
+    }
+    func removePostureAttribute(nodeID: String, key: String) async throws {
+        throw unsupported("temporary access (it works through Tailscale's device posture attributes)")
+    }
     func credentialInfo() async throws -> CredentialInfo? { nil }
+}
+
+/// A device's posture attributes, and when the temporary ones end (ISO 8601).
+struct DevicePosture: Equatable {
+    var attributes: [String: String]
+    var expiries: [String: String] = [:]
+}
+
+/// A posture attribute's value, typed as the policy writes it: Tailscale
+/// fixes an attribute's type at its first write.
+enum PostureValue: Equatable {
+    case bool(Bool), number(Int), string(String)
+
+    /// As a posture condition's operand: `true`, `3`, `'prod'`.
+    init(operand: String) {
+        let t = operand.trimmingCharacters(in: .whitespaces)
+        if t == "true" || t == "false" { self = .bool(t == "true") }
+        else if let n = Int(t) { self = .number(n) }
+        else { self = .string(t.trimmingCharacters(in: CharacterSet(charactersIn: "'\""))) }
+    }
+
+    var json: Any {
+        switch self {
+        case .bool(let b): return b
+        case .number(let n): return n
+        case .string(let s): return s
+        }
+    }
+
+    /// As device attributes are compared ("true", "3", "prod").
+    var text: String {
+        switch self {
+        case .bool(let b): return b ? "true" : "false"
+        case .number(let n): return String(n)
+        case .string(let s): return s
+        }
+    }
 }
 
 struct PolicyChange: Identifiable, Codable {
@@ -339,14 +388,45 @@ final class TailscaleClient: PolicyServer {
 
     /// Needs the devices:posture_attributes:read scope. Numbers and booleans
     /// become strings ("80", "true"), as posture conditions compare them.
-    func postureAttributes(nodeID: String) async throws -> [String: String]? {
+    func postureAttributes(nodeID: String) async throws -> DevicePosture? {
         let (data, _) = try await request("GET", "device/\(nodeID)/attributes")
-        let attrs = (try JSONSerialization.jsonObject(with: data) as? [String: Any])?["attributes"] as? [String: Any] ?? [:]
-        return attrs.mapValues { v in
+        return try Self.devicePosture(data)
+    }
+
+    private static func devicePosture(_ data: Data) throws -> DevicePosture {
+        let object = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        let attrs = object?["attributes"] as? [String: Any] ?? [:]
+        return DevicePosture(attributes: attrs.mapValues { v in
             if let b = v as? Bool, CFGetTypeID(v as CFTypeRef) == CFBooleanGetTypeID() { return b ? "true" : "false" }
             if let n = v as? NSNumber { return n.stringValue }
             return "\(v)"
+        }, expiries: object?["expiries"] as? [String: String] ?? [:])
+    }
+
+    /// Needs the devices:posture_attributes scope (and a plan with device
+    /// posture). The comment goes to Tailscale's audit log.
+    func setPostureAttribute(nodeID: String, key: String, value: PostureValue, expiry: Date?,
+                             comment: String) async throws -> DevicePosture {
+        var body: [String: Any] = ["value": value.json]
+        if let expiry { body["expiry"] = ISO8601DateFormatter().string(from: expiry) }
+        if !comment.isEmpty { body["comment"] = comment }
+        let (data, _) = try await request("POST", "device/\(nodeID)/attributes/\(try Self.attributePath(key))",
+                                          body: try JSONSerialization.data(withJSONObject: body),
+                                          headers: ["Content-Type": "application/json"])
+        return try Self.devicePosture(data)
+    }
+
+    func removePostureAttribute(nodeID: String, key: String) async throws {
+        _ = try await request("DELETE", "device/\(nodeID)/attributes/\(try Self.attributePath(key))")
+    }
+
+    /// The key goes into the request path, and comes from the policy text:
+    /// only what Tailscale allows in a custom attribute name gets there.
+    private static func attributePath(_ key: String) throws -> String {
+        guard isCustomAttributeKey(key) else {
+            throw ServerError(status: 0, message: "\u{201C}\(key)\u{201D} isn't a custom attribute name (custom: then letters, numbers, underscores, and colons).")
         }
+        return key
     }
 
     /// Turning expiry back on restores the original expiry time, which may have passed.
