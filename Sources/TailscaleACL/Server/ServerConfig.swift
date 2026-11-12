@@ -158,10 +158,14 @@ func secret(_ inline: String?, file: String?) throws -> String {
     return text.trimmingCharacters(in: .whitespacesAndNewlines)
 }
 
-/// Paths among the config's files that other accounts on the machine can read.
-func readableByOthers(_ paths: [String]) -> [String] {
+/// Paths among the config's files that other accounts on the machine can
+/// read: anyone at all, or a group other than this process's own (root
+/// owning a file the service's group reads is the intended layout).
+func readableByOthers(_ paths: [String], ownGroup: UInt32 = UInt32(getegid())) -> [String] {
     paths.filter { path in
-        guard let mode = (try? FileManager.default.attributesOfItem(atPath: path))?[.posixPermissions] as? NSNumber else { return false }
-        return mode.intValue & 0o077 != 0
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: path),
+              let mode = (attributes[.posixPermissions] as? NSNumber)?.intValue else { return false }
+        let group = (attributes[.groupOwnerAccountID] as? NSNumber)?.uint32Value
+        return mode & 0o007 != 0 || (mode & 0o070 != 0 && group != ownGroup)
     }
 }

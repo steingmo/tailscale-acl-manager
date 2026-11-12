@@ -49,6 +49,10 @@ final class AuditLog: @unchecked Sendable {
         guard var line = try? encoder.encode(Entry(time: time, event: event, user: user, detail: detail, from: from)) else { return }
         line.append(0x0A)
         lock.withLock {
+            // Rotated away (logrotate) or deleted: start a new file rather than lose the entry.
+            if !FileManager.default.fileExists(atPath: url.path) {
+                _ = FileManager.default.createFile(atPath: url.path, contents: nil, attributes: [.posixPermissions: 0o600])
+            }
             guard let handle = try? FileHandle(forWritingTo: url) else { return }
             defer { try? handle.close() }
             _ = try? handle.seekToEnd()

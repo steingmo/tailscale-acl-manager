@@ -65,6 +65,35 @@ tailscale-acl serve --config /etc/tailscale-acl/server.json --check   # check th
 tailscale-acl serve --config /etc/tailscale-acl/server.json
 ```
 
+## Installing on Ubuntu
+
+Tested on Ubuntu 26.04 (a Proxmox LXC container, 2 cores, 2 GB RAM).
+
+1. Install Swift for your Ubuntu from swift.org (check the signature), and
+   copy or clone this repository onto the server.
+2. As root, from the repository: `deploy/install.sh`. It builds a release
+   binary (several minutes the first time) with Swift's libraries linked in,
+   installs `/usr/local/bin/tailscale-acl`, creates the `tailscale-acl`
+   account, `/etc/tailscale-acl/` (root-owned, readable by that account
+   only), the systemd unit, and monthly rotation of the audit log. Run it
+   again to update.
+3. Write `/etc/tailscale-acl/server.json` from `server.json.example`, and the
+   secret files it names, each `0640 root:tailscale-acl`. Check it:
+   `tailscale-acl serve --config /etc/tailscale-acl/server.json --check`.
+4. `systemctl enable --now tailscale-acl`. It listens on 127.0.0.1:8080.
+5. HTTPS in front. With a Tailscale tailnet: join the server to it, turn on
+   HTTPS certificates for the tailnet (admin console ▸ DNS), and
+   `tailscale serve --bg 8080`; the address is
+   `https://<machine>.<tailnet>.ts.net`, which goes into `publicURL` and the
+   Entra redirect URI. (Headscale can't issue those certificates; use a
+   reverse proxy with a certificate of your own there.)
+
+The unit is locked down (`systemd-analyze security tailscale-acl` rates it
+1.4, "OK"): its own account, no capabilities, a read-only system except
+`/var/lib/tailscale-acl`, IP and Unix sockets only, a system-call filter.
+Back up `/var/lib/tailscale-acl` (the audit log) and `/etc/tailscale-acl`
+— on Proxmox, the container's scheduled backup covers both.
+
 ## How signing in works
 
 OpenID Connect authorization code flow with PKCE, as a confidential client.

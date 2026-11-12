@@ -1,0 +1,15 @@
+{
+  "listen": "127.0.0.1:8080",
+  "publicURL": "https://acl.example-tailnet.ts.net",
+  "dataDir": "/var/lib/tailscale-acl",
+  "entra": {
+    "tenant": "00000000-0000-0000-0000-000000000000",
+    "clientID": "00000000-0000-0000-0000-000000000000",
+    "clientSecretFile": "/etc/tailscale-acl/entra-secret"
+  },
+  "roles": { "viewer": ["Viewer"], "approver": ["Approver"] },
+  "sources": [
+    { "id": "prod", "name": "Production", "kind": "tailscale", "tailnet": "-",
+      "credentialFile": "/etc/tailscale-acl/prod-key" }
+  ]
+}

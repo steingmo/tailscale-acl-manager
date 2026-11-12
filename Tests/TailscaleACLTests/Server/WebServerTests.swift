@@ -85,9 +85,14 @@ final class WebServerTests: XCTestCase {
         XCTAssertEqual(try secret("inline", file: nil), "inline")
         XCTAssertThrowsError(try secret(nil, file: dir.appendingPathComponent("missing").path))
         try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: file.path)
-        XCTAssertEqual(readableByOthers([file.path]), [file.path])
+        XCTAssertEqual(readableByOthers([file.path]), [file.path], "everyone can read it")
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
         XCTAssertEqual(readableByOthers([file.path]), [])
+        // root:tailscale-acl 0640 is the intended layout; the same mode with another group isn't.
+        let group = try XCTUnwrap(FileManager.default.attributesOfItem(atPath: file.path)[.groupOwnerAccountID] as? NSNumber).uint32Value
+        try FileManager.default.setAttributes([.posixPermissions: 0o640], ofItemAtPath: file.path)
+        XCTAssertEqual(readableByOthers([file.path], ownGroup: group), [])
+        XCTAssertEqual(readableByOthers([file.path], ownGroup: group &+ 1), [file.path])
     }
 
     // MARK: - ID token and roles
@@ -453,6 +458,16 @@ final class WebServerTests: XCTestCase {
             XCTAssertEqual(response.status, .badGateway)
             XCTAssertFalse(String(buffer: response.body).contains("internal detail"))
         }
+    }
+
+    func testAuditLogSurvivesRotation() throws {
+        let log = try AuditLog(directory: dir.path)
+        log.record("login", user: "a@example.com", detail: "first")
+        try FileManager.default.moveItem(at: log.url, to: dir.appendingPathComponent("audit.jsonl.1"))
+        log.record("login", user: "b@example.com", detail: "after rotation")
+        XCTAssertEqual(log.entries().map(\.detail), ["after rotation"])
+        let mode = try XCTUnwrap(FileManager.default.attributesOfItem(atPath: log.url.path)[.posixPermissions] as? NSNumber)
+        XCTAssertEqual(mode.intValue & 0o077, 0)
     }
 
     func testDevelopmentLoginOnlyWhenAskedFor() async throws {

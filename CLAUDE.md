@@ -58,7 +58,12 @@ Swift Package (no Xcode project), one module, two layers:
   Views: map (`/api/…/map`, built on `ruleSummaries`/`routeAccess`/
   `entitySubtitle`, like the Mac Access Map), simulate, problems (with
   `lintNodes`/`lintUsers` like the app), policy, devices. Check UI changes
-  in the browser with the dev login and `scripts/fake_headscale.py`. Tests drive it in-process
+  in the browser with the dev login and `scripts/fake_headscale.py`.
+  Deployment: `deploy/install.sh` (builds with `--static-swift-stdlib`,
+  installs the binary, account, `/etc/tailscale-acl`, the hardened systemd
+  unit `deploy/tailscale-acl.service`, logrotate). The unit's syscall filter
+  must allow `@resources` (Foundation calls setpriority) — tested in an
+  unprivileged Proxmox LXC. Tests drive it in-process
   (`HummingbirdTesting`) with Microsoft and the tailnet stubbed by
   `StubProtocol`.
 

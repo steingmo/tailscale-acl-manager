@@ -1,0 +1,53 @@
+# tailscale-acl serve as a systemd service. Installed by deploy/install.sh;
+# see docs/web-service.md.
+[Unit]
+Description=Tailscale ACL web service (read-only)
+Documentation=https://github.com/steingmo/tailscale-acl-manager/blob/main/docs/web-service.md
+After=network-online.target
+Wants=network-online.target
+# Nothing to run until the config is written.
+ConditionPathExists=/etc/tailscale-acl/server.json
+
+[Service]
+Type=simple
+User=tailscale-acl
+Group=tailscale-acl
+ExecStartPre=/usr/local/bin/tailscale-acl serve --config /etc/tailscale-acl/server.json --check
+ExecStart=/usr/local/bin/tailscale-acl serve --config /etc/tailscale-acl/server.json
+Restart=on-failure
+RestartSec=5
+# /var/lib/tailscale-acl: the audit log. The only place it may write.
+StateDirectory=tailscale-acl
+StateDirectoryMode=0700
+UMask=0077
+
+# It needs to read its config, talk HTTP, and write the audit log; nothing else.
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged
+# A blocked call fails instead of killing the service. (@resources stays
+# allowed: Foundation sets thread priorities with setpriority.)
+SystemCallErrorNumber=EPERM
+
+[Install]
+WantedBy=multi-user.target
