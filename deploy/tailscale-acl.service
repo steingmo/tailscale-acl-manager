@@ -7,6 +7,10 @@ After=network-online.target
 Wants=network-online.target
 # Nothing to run until the config is written.
 ConditionPathExists=/etc/tailscale-acl/server.json
+# A config the check refuses fails a few times, then stops (systemctl status
+# says why) instead of retrying every 5 seconds forever.
+StartLimitIntervalSec=120
+StartLimitBurst=4
 
 [Service]
 Type=simple
