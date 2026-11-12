@@ -161,6 +161,7 @@ final class ServerState: Sendable {
     let sessions = SessionStore()
     let sources: [PolicySource]
     let audit: AuditLog
+    let drafts: DraftStore
 
     var sessionCookie: String { secure ? "__Host-tsacl_session" : "tsacl_session" }
     var loginCookie: String { secure ? "__Host-tsacl_login" : "tsacl_login" }
@@ -171,6 +172,7 @@ final class ServerState: Sendable {
         secure = config.isSecure
         roles = config.roles
         audit = try AuditLog(directory: config.dataDir, create: !checkOnly)
+        drafts = try DraftStore(dataDir: config.dataDir, create: !checkOnly)
         local = config.localUsers.map(LocalLogin.init)
         if let dev = config.devLogin {
             devUser = SignedInUser(id: "dev", login: dev.login.lowercased(), name: dev.login, roles: Set(dev.roles.compactMap(Role.init(rawValue:))))
@@ -206,8 +208,17 @@ final class ServerState: Sendable {
 }
 
 extension ServerState {
-    /// The tailnet named in the route's `:source`, read (or cached).
+    /// The tailnet named in the route's `:source` — with the signed-in
+    /// person's draft as its policy when the request asked for it (?draft=1).
     func snapshot(_ context: AppContext) async throws -> PolicySource.Snapshot {
+        let live = try await liveSnapshot(context)
+        guard context.useDraft, let user = context.user,
+              let draft = drafts.load(user, try context.parameters.require("source")) else { return live }
+        return draftSnapshot(live, draft)
+    }
+
+    /// The tailnet named in the route's `:source`, read (or cached).
+    func liveSnapshot(_ context: AppContext) async throws -> PolicySource.Snapshot {
         let id = try context.parameters.require("source")
         guard let source = sources.first(where: { $0.config.id == id }) else { throw HTTPError(.notFound, message: "No such tailnet.") }
         do {
@@ -228,6 +239,8 @@ func requireModel(_ snapshot: PolicySource.Snapshot) throws -> PolicyModel {
 struct AppContext: RequestContext {
     var coreContext: CoreRequestContextStorage
     var user: SignedInUser?
+    /// Answer for the person's draft rather than the live policy (?draft=1).
+    var useDraft = false
 
     init(source: ApplicationRequestContextSource) {
         coreContext = .init(source: source)
@@ -291,8 +304,14 @@ struct RequireRole: RouterMiddleware {
             state.audit.record("denied", user: user.login, detail: what, from: forwardedFor(request))
             throw HTTPError(.forbidden, message: "Your account isn't allowed to do this.")
         }
+        // Changes (drafts) only from this site's own pages; the cookie is SameSite=Lax as well.
+        if request.method != .get && request.method != .head && !postedFromThisSite(request, origin: state.origin) {
+            state.audit.record("denied", user: user.login, detail: "\(what) from another site", from: forwardedFor(request))
+            throw HTTPError(.forbidden, message: "Changes are only accepted from this site's own pages.")
+        }
         var context = context
         context.user = user
+        context.useDraft = request.uri.queryParameters.get("draft") == "1"
         do {
             let response = try await next(request, context)
             state.audit.record("request", user: user.login, detail: "\(what) → \(response.status.code)", from: forwardedFor(request))
@@ -642,6 +661,7 @@ func buildRouter(_ state: ServerState) -> Router<AppContext> {
     }
 
     addViewRoutes(to: api, state: state)
+    addDraftRoutes(to: api, state: state)
 
     // The web interface: the page for signed-in people, the files for everyone (they hold no data).
     @Sendable func page(_ request: Request) async -> Response {

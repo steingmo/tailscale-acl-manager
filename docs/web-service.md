@@ -4,8 +4,18 @@
 platform: they sign in and see a tailnet's Access Map and Visual Builder,
 run the Simulator, and read its SSH rules, routes, problems, tests, policy,
 and devices, with ⌘K (Ctrl K) search across all of it, IP addresses
-included. It never changes a policy — editing and pushing stay in the Mac
-app.
+included.
+
+To change a policy, each person edits their own **draft**: a copy of the
+live policy, kept on the server. A bar on every view switches between the
+live policy and the draft, so the map, simulator, problems, and tests can
+all be checked against the draft before it goes anywhere. **Review &
+export** shows the changed lines, who gains or loses access on the real
+devices, new problems, and failing tests — and warns when someone changed
+the live policy after the draft started, since importing replaces the
+whole policy. Then download the file (or copy it) and paste it into the
+Tailscale admin console (Access controls ▸ JSON editor). The server never
+writes to the tailnet: its credential only needs read access.
 
 Every view has its own address (`/s/<tailnet>/map?focus=group:eng`,
 `/s/<tailnet>/simulate?src=…&dst=…&port=443`, `/s/<tailnet>/policy?line=23`),
@@ -152,7 +162,7 @@ The ID token's signature is not verified: the token is only ever received
 directly from Microsoft's token endpoint over TLS, for which OpenID Connect
 Core (§3.1.3.7) permits relying on TLS instead. See `EntraLogin.validate`.
 
-## API (signed in, role viewer)
+## API (signed in)
 
 | | |
 |---|---|
@@ -169,6 +179,13 @@ Core (§3.1.3.7) permits relying on TLS instead. See `EntraLogin.validate`.
 | `GET /api/sources/{id}/tests` | the policy's tests and SSH tests, run, with why failures fail |
 | `GET /api/sources/{id}/routes` | auto-approvers, routed grants, node attributes, advertised routes |
 | `GET /api/sources/{id}/connections` | the Visual Builder's lines and rules |
+| `GET/POST/PUT/DELETE /api/sources/{id}/draft` | your draft: read, start from live, save `{"text": …}`, discard |
+| `GET /api/sources/{id}/draft/review` | live → draft: lines, access changes, new problems, tests |
+| `GET /api/sources/{id}/draft/export` | the draft as a `.hujson` download |
+
+Any view's request with `?draft=1` answers for your draft instead of the
+live policy (devices stay the live ones). Requests that change a draft are
+only accepted from the site's own pages.
 
 A tailnet's policy and devices are read at most once a minute.
 

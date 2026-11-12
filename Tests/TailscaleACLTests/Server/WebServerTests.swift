@@ -453,6 +453,105 @@ final class WebServerTests: XCTestCase {
         }
     }
 
+    func testDrafts() async throws {
+        stub()
+        let (app, state) = try app(config())
+        let site = "https://acl.example.ts.net"
+        try await app.test(.router) { client in
+            let signedIn = try await self.signIn(client, state)
+            let session = try XCTUnwrap(signedIn.cookie)
+            func call(_ method: HTTPRequest.Method, _ path: String, json body: [String: String]? = nil,
+                      from foreign: String? = nil) async throws -> (status: HTTPResponse.Status, json: [String: Any]?, raw: TestResponse) {
+                var headers: HTTPFields = [.cookie: session]
+                headers[.origin] = foreign ?? site
+                if body != nil { headers[.contentType] = "application/json" }
+                let response = try await client.execute(uri: path, method: method, headers: headers,
+                                                         body: try body.map { ByteBuffer(data: try JSONSerialization.data(withJSONObject: $0)) })
+                return (response.status, try? JSONSerialization.jsonObject(with: Data(buffer: response.body)) as? [String: Any], response)
+            }
+
+            let none = try await call(.get, "/api/sources/prod/draft")
+            XCTAssertEqual(none.json?["exists"] as? Bool, false)
+            // Changes only from this site's pages.
+            let foreign = try await call(.post, "/api/sources/prod/draft", from: "https://evil.example")
+            XCTAssertEqual(foreign.status, .forbidden)
+
+            let started = try await call(.post, "/api/sources/prod/draft")
+            XCTAssertEqual(started.json?["exists"] as? Bool, true)
+            XCTAssertEqual(started.json?["changed"] as? Bool, false)
+            let live = try XCTUnwrap(started.json?["text"] as? String)
+
+            // Alice may now SSH to the web servers, in the draft only.
+            let edited = live.replacingOccurrences(of: #""ip": ["tcp:443"]"#, with: #""ip": ["tcp:443", "tcp:22"]"#)
+            XCTAssertNotEqual(edited, live)
+            let saved = try await call(.put, "/api/sources/prod/draft", json: ["text": edited])
+            XCTAssertEqual(saved.json?["valid"] as? Bool, true)
+            XCTAssertEqual(saved.json?["changed"] as? Bool, true)
+            let inDraft = try await call(.get, "/api/sources/prod/simulate?src=alice@example.com&dst=tag:web&port=22&draft=1")
+            XCTAssertEqual(inDraft.json?["allowed"] as? Bool, true)
+            let inLive = try await call(.get, "/api/sources/prod/simulate?src=alice@example.com&dst=tag:web&port=22")
+            XCTAssertEqual(inLive.json?["allowed"] as? Bool, false, "the live policy is untouched")
+
+            // The review: the changed line, who gains what on real devices, and the tests.
+            let reviewed = try await call(.get, "/api/sources/prod/draft/review")
+            let review = try XCTUnwrap(reviewed.json)
+            let diff = try XCTUnwrap(review["diff"] as? [[String: String]])
+            XCTAssertTrue(diff.contains { $0["kind"] == "added" && $0["text"]?.contains("tcp:22") == true })
+            XCTAssertTrue(diff.contains { $0["kind"] == "removed" })
+            let access = try XCTUnwrap(review["access"] as? [[String: Any]])
+            XCTAssertEqual(access.first?["src"] as? String, "alice-mbp")
+            XCTAssertEqual(access.first?["dst"] as? String, "web-1")
+            XCTAssertEqual(access.first?["gained"] as? [String], ["22"])
+            XCTAssertEqual(review["testsTotal"] as? Int, 2)
+            XCTAssertEqual(review["testsFailing"] as? Int, 1, "the deny-22 test now fails; the allow-22 one now passes")
+            XCTAssertEqual((review["liveDiff"] as? [Any])?.count, 0)
+
+            let export = try await call(.get, "/api/sources/prod/draft/export")
+            XCTAssertEqual(export.status, .ok)
+            XCTAssertTrue(export.raw.headers[.contentDisposition]?.hasPrefix(#"attachment; filename="prod-policy-"#) == true)
+            XCTAssertEqual(String(buffer: export.raw.body), edited)
+
+            // A syntax error: saved, flagged, not exportable.
+            let broken = try await call(.put, "/api/sources/prod/draft", json: ["text": "{\n  \"groups\": {\n"])
+            XCTAssertEqual(broken.json?["valid"] as? Bool, false)
+            XCTAssertNotNil((broken.json?["error"] as? [String: Any])?["line"] as? Int)
+            let refused = try await call(.get, "/api/sources/prod/draft/export")
+            XCTAssertEqual(refused.status, .conflict)
+            _ = try await call(.put, "/api/sources/prod/draft", json: ["text": edited])
+
+            // Someone else's draft is theirs.
+            self.stub(claims: ["roles": ["Viewer"], "oid": "user-2", "preferred_username": "bo@example.com"])
+            let otherSignIn = try await self.signIn(client, state)
+            let other = try XCTUnwrap(otherSignIn.cookie)
+            let theirs = try await client.execute(uri: "/api/sources/prod/draft", method: .get, headers: [.cookie: other])
+            XCTAssertEqual((try JSONSerialization.jsonObject(with: Data(buffer: theirs.body)) as? [String: Any])?["exists"] as? Bool, false)
+        }
+
+        // The live policy changes after the draft started: the review says so.
+        stub()
+        StubProtocol.handler = { [handler = StubProtocol.handler] request, body in
+            guard request.url?.path.hasSuffix("/acl") == true else { return handler(request, body) }
+            return .init(body: Data(#"{"groups": {"group:eng": ["alice@example.com"], "group:new": ["dave@example.com"]}, "grants": []}"#.utf8))
+        }
+        let (later, laterState) = try self.app(config())
+        try await later.test(.router) { client in
+            let laterSignIn = try await self.signIn(client, laterState)
+            let session = try XCTUnwrap(laterSignIn.cookie)
+            let review = try await client.execute(uri: "/api/sources/prod/draft/review", method: .get, headers: [.cookie: session])
+            let json = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(buffer: review.body)) as? [String: Any])
+            XCTAssertGreaterThan((json["liveDiff"] as? [Any])?.count ?? 0, 0, "the draft would undo someone's change")
+            let draft = try await client.execute(uri: "/api/sources/prod/draft", method: .get, headers: [.cookie: session])
+            XCTAssertEqual((try JSONSerialization.jsonObject(with: Data(buffer: draft.body)) as? [String: Any])?["liveChanged"] as? Bool, true)
+            let gone = try await client.execute(uri: "/api/sources/prod/draft", method: .delete,
+                                               headers: [.cookie: session, .origin: "https://acl.example.ts.net"])
+            XCTAssertEqual(gone.status, .noContent)
+            let after = try await client.execute(uri: "/api/sources/prod/draft", method: .get, headers: [.cookie: session])
+            XCTAssertEqual((try JSONSerialization.jsonObject(with: Data(buffer: after.body)) as? [String: Any])?["exists"] as? Bool, false)
+        }
+        let files = try FileManager.default.contentsOfDirectory(atPath: dir.appendingPathComponent("drafts").path)
+        XCTAssertTrue(files.allSatisfy { !$0.contains("@") && !$0.contains("user") }, "no names in file names: \(files)")
+    }
+
     func testWhoIsKeptOut() async throws {
         // Signed in to Microsoft, but with no role here.
         stub(claims: ["roles": ["SomethingElse"]])

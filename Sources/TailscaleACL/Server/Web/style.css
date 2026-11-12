@@ -307,3 +307,44 @@ button.link.inline { display: inline; padding: 0; color: var(--blue); font: inhe
 .map.builder svg.wires path.line.dim { opacity: 0.08; }
 .map.builder svg.wires path.line.hover { stroke-width: 3; opacity: 1; }
 .map.builder svg.wires path.hit { fill: none; stroke: transparent; stroke-width: 16; pointer-events: stroke; cursor: pointer; }
+
+/* Drafts */
+.draft-bar {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: -6px 0 14px; padding: 8px 12px; border-radius: 9px;
+  background: color-mix(in srgb, var(--purple) 14%, transparent); border: 1px solid color-mix(in srgb, var(--purple) 40%, var(--border));
+}
+.draft-bar.live { background: var(--panel); border-color: var(--border); color: var(--muted); }
+.draft-bar svg { width: 16px; height: 16px; flex: none; color: var(--purple); }
+.draft-bar .spacer { flex: 1; }
+a.button { display: inline-block; padding: 6px 12px; border-radius: 7px; border: 1px solid var(--border); background: var(--panel-2); color: var(--text); }
+a.button:hover { text-decoration: none; background: var(--selected); }
+a.button.primary { background: var(--blue); border-color: transparent; color: #fff; font-weight: 600; }
+button.danger { color: var(--red); }
+.save-status { font-size: 12px; }
+
+.editor { display: flex; padding: 10px 0; }
+.editor .gutter { width: 56px; flex: none; text-align: right; padding-right: 14px; color: var(--muted); opacity: 0.6; user-select: none; }
+.editor .gutter .err { color: var(--red); opacity: 1; font-weight: 700; }
+.editor .layers { position: relative; flex: 1; min-width: 0; }
+.editor .paint, .editor textarea.source {
+  margin: 0; padding: 0 16px 0 0; border: 0; font: inherit; line-height: inherit; tab-size: 2; white-space: pre; letter-spacing: normal;
+}
+.editor .paint { position: absolute; inset: 0; overflow: hidden; pointer-events: none; }
+.editor textarea.source {
+  position: relative; display: block; width: 100%; min-height: 200px; resize: none; overflow-x: auto; overflow-y: hidden;
+  background: transparent; color: transparent; caret-color: var(--text); outline: none;
+}
+.editor textarea.source::selection { background: color-mix(in srgb, var(--blue) 35%, transparent); color: transparent; }
+
+.diff .ln.added { background: color-mix(in srgb, var(--green) 13%, transparent); }
+.diff .ln.removed { background: color-mix(in srgb, var(--red) 13%, transparent); }
+.diff .ln.skipped { color: var(--muted); font-style: italic; }
+.diff .ln.added .num { color: var(--green); opacity: 1; }
+.diff .ln.removed .num { color: var(--red); opacity: 1; }
+.chips.summary { margin-bottom: 14px; }
+.card.export ol { margin: 6px 0 12px; padding-left: 20px; }
+.card.export li { margin: 3px 0; }
+.card.export .actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+details summary { cursor: pointer; margin: 4px 0 8px; color: var(--muted); }
+.card.export h2 { margin-top: 0; }
+a.plain:hover { text-decoration: none; filter: brightness(1.15); }

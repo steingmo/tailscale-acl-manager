@@ -14,6 +14,7 @@ const VIEWS = [
   { id: "tests", label: "Tests", icon: "check", group: "Check" },
   { id: "policy", label: "Policy", icon: "doc", group: "Tailnet" },
   { id: "devices", label: "Devices", icon: "device", group: "Tailnet" },
+  { id: "review", label: "Review & export", icon: "export", group: "Draft", draftOnly: true },
 ];
 
 // Stroke icons, 24×24.
@@ -39,6 +40,8 @@ const ICONS = {
   terminal: "M4 5h16v14H4zM8 10l3 2-3 2M13 15h3",
   routes: "M7 21V12a5 5 0 0 1 5-5h5M14 4l3 3-3 3M7 12V3",
   search: "M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14zM20 20l-4-4",
+  export: "M12 3v12M7 10l5 5 5-5M5 21h14",
+  edit: "M4 20h4L19 9l-4-4L4 16zM14 6l4 4",
 };
 
 // MARK: - Helpers
@@ -110,14 +113,21 @@ function ago(date) {
 
 class SignedOut extends Error {}
 
-async function api(path) {
-  const response = await fetch(path, { headers: { Accept: "application/json" }, credentials: "same-origin" });
+async function api(path, options = {}) {
+  const m = path.match(/^\/api\/sources\/([a-z0-9-]+)\/(?!draft)/);
+  if (m && (options.method || "GET") === "GET" && inDraft(m[1])) path += (path.includes("?") ? "&" : "?") + "draft=1";
+  const response = await fetch(path, {
+    method: options.method || "GET",
+    headers: { Accept: "application/json", ...(options.body !== undefined ? { "Content-Type": "application/json" } : {}) },
+    body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
+    credentials: "same-origin",
+  });
   if (response.status === 401) {
     location.assign("/login?return=" + encodeURIComponent(location.pathname + location.search));
     throw new SignedOut();
   }
   let body = null;
-  try { body = await response.json(); } catch { /* not JSON */ }
+  if (response.status !== 204) { try { body = await response.json(); } catch { /* not JSON */ } }
   if (!response.ok) {
     const error = new Error((body && body.error && body.error.message) || `The server answered ${response.status}.`);
     error.status = response.status;
@@ -128,7 +138,27 @@ async function api(path) {
 
 // MARK: - State and routing
 
-const state = { me: null, sources: [], problemCount: {}, failingTests: {} };
+const state = { me: null, sources: [], problemCount: {}, failingTests: {}, draft: {} };
+
+/// Draft mode is remembered per tailnet in this browser, and only counts while a draft exists.
+function inDraft(source) {
+  let on = false;
+  try { on = localStorage.getItem(`tsacl-draft:${source}`) === "1"; } catch { /* private window */ }
+  return on && Boolean(state.draft[source] && state.draft[source].exists);
+}
+function setDraftMode(source, on) {
+  try { localStorage.setItem(`tsacl-draft:${source}`, on ? "1" : "0"); } catch { /* private window */ }
+}
+/// Caches and badges are kept apart for the live policy and the draft.
+function key(source) { return inDraft(source) ? `${source}:draft` : source; }
+/// After the draft changed: forget what was worked out from it.
+function draftChanged(source) {
+  const k = `${source}:draft`;
+  entityCache.delete(k);
+  searchIndexes.delete(k);
+  delete state.problemCount[k];
+  delete state.failingTests[k];
+}
 let renderToken = 0;
 
 function route() {
@@ -188,19 +218,19 @@ function renderNav(source, view) {
   const nav = document.getElementById("nav");
   const badge = (v) => {
     if (v.id === "problems") {
-      const n = state.problemCount[source];
+      const n = state.problemCount[key(source)];
       return n === undefined ? null : n === 0 ? h("span", { class: "badge c-green", title: "No problems" }, "✓")
         : h("span", { class: "badge c-orange" }, n);
     }
     if (v.id === "tests") {
-      const t = state.failingTests[source];
+      const t = state.failingTests[key(source)];
       return !t || !t.total ? null : t.failing === 0 ? h("span", { class: "badge c-green", title: `All ${t.total} tests pass` }, "✓")
         : h("span", { class: "badge c-red", title: `${t.failing} of ${t.total} tests fail` }, t.failing);
     }
     return null;
   };
   let group = null;
-  nav.replaceChildren(...VIEWS.flatMap((v) => {
+  nav.replaceChildren(...VIEWS.filter((v) => !v.draftOnly || (state.draft[source] && state.draft[source].exists)).flatMap((v) => {
     const out = [];
     if (v.group !== group) { group = v.group; out.push(h("div", { class: "nav-group" }, group)); }
     out.push(h("a", { href: href(source, v.id), "aria-current": v.id === view ? "page" : null }, icon(v.icon), v.label, badge(v)));
@@ -220,6 +250,13 @@ async function render() {
     return;
   }
   document.getElementById("source").value = source;
+  if (state.draft[source] === undefined) {
+    try { state.draft[source] = await api(`/api/sources/${source}/draft`); } catch (error) {
+      if (error instanceof SignedOut) return;
+      state.draft[source] = { exists: false };
+    }
+    if (token !== renderToken) return;
+  }
   renderNav(source, view);
   const sourceName = state.sources.find((s) => s.id === source).name;
   document.title = `${VIEWS.find((v) => v.id === view).label} · ${sourceName} · Tailscale ACL`;
@@ -230,26 +267,26 @@ async function render() {
   try {
     const content = await VIEW_RENDERERS[view](source, params, stillCurrent);
     if (!stillCurrent()) return;
-    main.replaceChildren(h("div", { class: "view" }, content));
+    main.replaceChildren(h("div", { class: "view" }, draftBar(source, view), content));
     main.focus({ preventScroll: true });
     afterRender.splice(0).forEach((fn) => fn());
   } catch (error) {
     if (error instanceof SignedOut || !stillCurrent()) return;
-    main.replaceChildren(errorState(error, source));
+    main.replaceChildren(h("div", { class: "view" }, draftBar(source, view), errorState(error, source)));
   } finally {
     if (stillCurrent()) main.removeAttribute("aria-busy");
   }
   // The problem and failing-test counts in the sidebar, once per tailnet.
-  if (state.problemCount[source] === undefined) {
+  if (state.problemCount[key(source)] === undefined) {
     api(`/api/sources/${source}/problems`).then((r) => {
-      state.problemCount[source] = r.problems.length;
+      state.problemCount[key(source)] = r.problems.length;
       if (route().source === source) renderNav(source, route().view);
     }).catch(() => {});
   }
-  if (state.failingTests[source] === undefined) {
+  if (state.failingTests[key(source)] === undefined) {
     api(`/api/sources/${source}/tests`).then((r) => {
       const all = [...r.tests, ...r.sshTests];
-      state.failingTests[source] = { total: all.length, failing: all.filter((t) => !t.passed).length };
+      state.failingTests[key(source)] = { total: all.length, failing: all.filter((t) => !t.passed).length };
       if (route().source === source) renderNav(source, route().view);
     }).catch(() => {});
   }
@@ -291,7 +328,7 @@ function errorState(error, source) {
 
 async function viewProblems(source) {
   const { problems, stale } = await api(`/api/sources/${source}/problems`);
-  state.problemCount[source] = problems.length;
+  state.problemCount[key(source)] = problems.length;
   const errors = problems.filter((p) => p.severity === "error").length;
   const security = problems.filter((p) => p.security);
   const other = problems.filter((p) => !p.security);
@@ -341,6 +378,15 @@ function highlight(text) {
 }
 
 async function viewPolicy(source, params) {
+  // In your draft: the editor.
+  if (inDraft(source)) {
+    const { editor, status } = policyEditor(source, state.draft[source], Number(params.get("line")) || 0);
+    return [
+      head("Policy — your draft", "Edits save as you type, and every view checks them while you're in your draft.", status,
+        h("a", { class: "button", href: href(source, "review") }, "Review & export")),
+      editor,
+    ];
+  }
   const [policy, problemsReply] = await Promise.all([
     api(`/api/sources/${source}/policy`),
     api(`/api/sources/${source}/problems`).catch(() => ({ problems: [] })),
@@ -386,8 +432,11 @@ async function viewPolicy(source, params) {
     },
   }, "Download");
 
+  const edit = h("button", { type: "button", class: "primary", onclick: async () => {
+    try { await startDraft(source); go(href(source, "policy")); } catch (error) { if (!(error instanceof SignedOut)) alert(error.message); }
+  } }, state.draft[source] && state.draft[source].exists ? "Open your draft" : "Edit in a draft");
   return [
-    head("Policy", `As on the server, read ${ago(policy.fetched)}. Read-only — changes are made in the Mac app.`, copy, download),
+    head("Policy", `As on the server, read ${ago(policy.fetched)}. To change it, edit a draft, then export it and import it into the tailnet.`, edit, copy, download),
     staleBanner(policy.stale),
     policy.error ? h("div", { class: "banner error" }, icon("x"),
       h("div", { class: "text" }, h("strong", {}, `Line ${policy.error.line}: `), policy.error.message)) : null,
@@ -400,13 +449,14 @@ async function viewPolicy(source, params) {
 const entityCache = new Map();
 
 async function entities(source) {
-  if (!entityCache.has(source)) {
-    entityCache.set(source, Promise.all([
+  const k = key(source);
+  if (!entityCache.has(k)) {
+    entityCache.set(k, Promise.all([
       api(`/api/sources/${source}/entities`),
       api(`/api/sources/${source}/devices`).catch(() => ({ devices: [] })),
-    ]).then(([e, d]) => ({ ...e, devices: d.devices })).catch((error) => { entityCache.delete(source); throw error; }));
+    ]).then(([e, d]) => ({ ...e, devices: d.devices })).catch((error) => { entityCache.delete(k); throw error; }));
   }
-  return entityCache.get(source);
+  return entityCache.get(k);
 }
 
 function deviceLabel(d) { return d.name + (d.user ? ` (${d.user})` : d.tags.length ? ` (${d.tags.join(", ")})` : ""); }
@@ -735,7 +785,7 @@ async function viewTests(source) {
   const { tests, sshTests } = await api(`/api/sources/${source}/tests`);
   const all = [...tests, ...sshTests];
   const failing = all.filter((t) => !t.passed).length;
-  state.failingTests[source] = { total: all.length, failing };
+  state.failingTests[key(source)] = { total: all.length, failing };
   const out = [head("Tests", all.length ? `${all.length - failing} of ${all.length} passing` : "The policy's tests, run against the policy as it is now.")];
   if (!all.length) {
     out.push(empty("check", "No tests in the policy", "Tests lock in the access you expect. They're written in the policy (\"tests\" and \"sshTests\"); the Mac app can generate them from current access."));
@@ -974,11 +1024,12 @@ async function openSearch() {
   list.replaceChildren(h("li", { class: "muted pad" }, "Loading…"));
   dialog.showModal();
   input.focus();
-  if (!searchIndexes.has(source)) {
-    searchIndexes.set(source, api(`/api/sources/${source}/search-index`).then((r) => r.items).catch((e) => { searchIndexes.delete(source); throw e; }));
+  const k = key(source);
+  if (!searchIndexes.has(k)) {
+    searchIndexes.set(k, api(`/api/sources/${source}/search-index`).then((r) => r.items).catch((e) => { searchIndexes.delete(k); throw e; }));
   }
   let items;
-  try { items = await searchIndexes.get(source); } catch (error) {
+  try { items = await searchIndexes.get(k); } catch (error) {
     list.replaceChildren(h("li", { class: "c-red pad" }, error.message));
     return;
   }
@@ -1035,9 +1086,187 @@ document.addEventListener("keydown", (event) => {
   if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") { event.preventDefault(); openSearch(); }
 });
 
+// MARK: - Drafts
+
+/// The strip above every view: which policy you're looking at, and the way to the other.
+function draftBar(source, view) {
+  const d = state.draft[source];
+  if (!d || !d.exists) return null;
+  if (!inDraft(source)) {
+    return h("div", { class: "draft-bar live" }, icon("edit"),
+      h("span", {}, "You have a draft of this policy."),
+      h("button", { type: "button", class: "link inline", onclick: () => { setDraftMode(source, true); render(); } }, "Open your draft"));
+  }
+  return [
+    h("div", { class: "draft-bar" }, icon("edit"),
+      h("span", {}, h("strong", {}, "Your draft"), ` — the live policy is unchanged. ${d.changed ? `Edited ${ago(d.updated)}.` : "No changes yet."}`),
+      h("span", { class: "spacer" }),
+      view !== "review" ? h("a", { href: href(source, "review") }, "Review & export") : null,
+      h("button", { type: "button", class: "link inline", onclick: () => { setDraftMode(source, false); render(); } }, "Back to live")),
+    d.liveChanged ? h("div", { class: "banner warn" }, icon("warn"), h("div", { class: "text" },
+      "Someone changed the live policy after your draft started. Importing the draft as it is would undo their change — ",
+      h("a", { href: href(source, "review") }, "see what changed"), ".")) : null,
+  ];
+}
+
+/// A link that opens a view on the draft.
+function draftLink(source, view, content) {
+  return h("a", { href: href(source, view), class: "plain", title: "Show it in your draft",
+    onclick: () => setDraftMode(source, true) }, content);
+}
+
+async function startDraft(source) {
+  state.draft[source] = await api(`/api/sources/${source}/draft`, { method: "POST" });
+  setDraftMode(source, true);
+  draftChanged(source);
+}
+
+/// The policy as an editable text box over its coloured copy, saved as you type.
+function policyEditor(source, d, wanted) {
+  const gutter = h("div", { class: "gutter", "aria-hidden": "true" });
+  const paint = h("pre", { class: "paint", "aria-hidden": "true" });
+  const box = h("textarea", { class: "source", spellcheck: "false", autocapitalize: "off", autocomplete: "off", wrap: "off",
+    "aria-label": "Policy (your draft)" });
+  box.value = d.text;
+  const status = h("span", { class: "save-status muted" });
+  let errorLine = d.valid ? 0 : (d.error && d.error.line) || 0;
+
+  const repaint = () => {
+    const lines = highlight(box.value);
+    fill(paint, lines.map((pieces) => h("div", {}, pieces.length ? pieces.map(([cls, t]) => cls ? h("span", { class: cls }, t) : t) : "\u200b")));
+    fill(gutter, lines.map((_, i) => h("div", { class: i + 1 === errorLine ? "err" : null }, i + 1)));
+    box.style.height = "0px";
+    box.style.height = box.scrollHeight + "px";
+  };
+  const showStatus = () => {
+    const now = state.draft[source];
+    fill(status, now.valid
+      ? h("span", { class: "c-green" }, "Saved")
+      : h("span", { class: "c-red" }, `Not valid — line ${now.error.line}: ${now.error.message}`));
+  };
+  let timer, saving = Promise.resolve();
+  const save = () => {
+    clearTimeout(timer);
+    saving = saving.then(async () => {
+      try {
+        state.draft[source] = await api(`/api/sources/${source}/draft`, { method: "PUT", body: { text: box.value } });
+        errorLine = state.draft[source].valid ? 0 : state.draft[source].error.line;
+        draftChanged(source);
+        showStatus();
+        repaint();
+        renderNav(source, "policy");
+      } catch (error) {
+        if (!(error instanceof SignedOut)) fill(status, h("span", { class: "c-red" }, `Not saved: ${error.message}`));
+      }
+    });
+  };
+  box.addEventListener("input", () => {
+    fill(status, h("span", { class: "muted" }, "Editing…"));
+    requestAnimationFrame(repaint);
+    clearTimeout(timer);
+    timer = setTimeout(save, 700);
+  });
+  box.addEventListener("scroll", () => { paint.scrollLeft = box.scrollLeft; });
+  box.addEventListener("keydown", (event) => {
+    if (event.key === "Tab" && !event.shiftKey && !event.metaKey && !event.ctrlKey) {
+      event.preventDefault();
+      box.setRangeText("  ", box.selectionStart, box.selectionEnd, "end");
+      box.dispatchEvent(new Event("input"));
+    }
+  });
+  // Leaving the page within the save delay: save now.
+  window.addEventListener("pagehide", () => { if (timer) save(); }, { once: true });
+  afterRender.push(() => {
+    repaint();
+    showStatus();
+    if (wanted) {
+      const top = box.getBoundingClientRect().top + window.scrollY + (wanted - 1) * parseFloat(getComputedStyle(box).lineHeight);
+      window.scrollTo({ top: Math.max(top - window.innerHeight / 3, 0) });
+    }
+  });
+  return { editor: h("div", { class: "editor code" }, gutter, h("div", { class: "layers" }, paint, box)), status };
+}
+
+async function viewReview(source) {
+  const d = state.draft[source];
+  if (!d || !d.exists) return [head("Review & export"), empty("export", "No draft", "Start one from the Policy view.")];
+  const r = await api(`/api/sources/${source}/draft/review`);
+  const diffView = (diff) => h("div", { class: "code diff" }, diff.map((l) => h("div", { class: `ln ${l.kind}` },
+    h("span", { class: "num" }, l.kind === "added" ? "+" : l.kind === "removed" ? "−" : l.kind === "skipped" ? "…" : ""),
+    h("span", { class: "src" }, l.kind === "skipped" ? `${l.text} unchanged lines` : l.text))));
+  const changed = r.diff.some((l) => l.kind === "added" || l.kind === "removed");
+  const out = [head("Review & export", "What importing your draft into the tailnet would change. The server never changes the tailnet itself.")];
+  if (!r.valid) {
+    out.push(h("div", { class: "banner error" }, icon("x"), h("div", { class: "text" },
+      `The draft has a syntax error on line ${r.error.line}: ${r.error.message} `, h("a", { href: href(source, "policy", { line: r.error.line }) }, "Fix it"))));
+  }
+  if (r.liveDiff.length) {
+    out.push(h("div", { class: "banner warn" }, icon("warn"), h("div", { class: "text" },
+      h("strong", {}, "The live policy changed after your draft started. "),
+      "Importing your draft replaces the whole policy, so these changes would be undone unless you add them to your draft:")));
+    out.push(h("details", { class: "narrow" }, h("summary", {}, "Changes made to the live policy since your draft started"), diffView(r.liveDiff)));
+  }
+  if (!changed) {
+    out.push(empty("check", "Your draft is the same as the live policy", "Edit it in the Policy view; every view checks the draft while you're in it.", "c-green"));
+    return out;
+  }
+  // Summary
+  const gained = r.access.filter((c) => c.gained.length || c.sshGained.length).length;
+  const lost = r.access.filter((c) => c.lost.length || c.sshLost.length).length;
+  out.push(h("div", { class: "chips summary" },
+    r.devicesCompared ? h("span", { class: "chip c-green" }, `${gained} device pair${gained === 1 ? "" : "s"} gain access`) : null,
+    r.devicesCompared ? h("span", { class: `chip ${lost ? "c-red" : "c-muted"}` }, `${lost} lose access`) : null,
+    draftLink(source, "problems", h("span", { class: `chip ${r.newProblems.length ? "c-orange" : "c-muted"}` }, `${plural(r.newProblems.length, "new problem")}`)),
+    r.fixedProblems ? h("span", { class: "chip c-green" }, `${r.fixedProblems} fixed`) : null,
+    r.testsTotal ? draftLink(source, "tests", h("span", { class: `chip ${r.testsFailing ? "c-red" : "c-green"}` },
+      r.testsFailing ? `${r.testsFailing} of ${r.testsTotal} tests fail` : `all ${r.testsTotal} tests pass`)) : null));
+
+  const download = h("a", { class: "button primary", href: `/api/sources/${source}/draft/export`, download: "" }, "Download policy file");
+  const copy = h("button", { type: "button", onclick: async () => {
+    try { await navigator.clipboard.writeText(state.draft[source].text); copy.textContent = "Copied"; } catch { copy.textContent = "Couldn't copy"; }
+    setTimeout(() => { copy.textContent = "Copy policy"; }, 1500);
+  } }, "Copy policy");
+  const discard = h("button", { type: "button", class: "danger", onclick: async () => {
+    if (!confirm("Discard your draft? Your edits are deleted; the live policy is unchanged.")) return;
+    await api(`/api/sources/${source}/draft`, { method: "DELETE" });
+    state.draft[source] = { exists: false };
+    setDraftMode(source, false);
+    draftChanged(source);
+    go(href(source, "policy"));
+  } }, "Discard draft");
+  out.push(h("div", { class: "card export narrow" },
+    h("h2", {}, "Import it into your tailnet"),
+    h("ol", {},
+      h("li", {}, "Download or copy the policy file."),
+      h("li", {}, "In the Tailscale admin console, open Access controls, switch to the JSON editor, select everything, and paste it over the old policy."),
+      h("li", {}, "Save. Tailscale checks it and its tests before applying it.")),
+    h("div", { class: "actions" }, r.valid ? [download, copy] : h("span", { class: "c-red" }, "Fix the syntax error to export."), discard)));
+
+  if (r.access.length) {
+    out.push(h("h2", {}, "Who gains or loses access"));
+    out.push(h("div", { class: "stack narrow" }, r.access.map((c) => h("div", { class: "card access-change" },
+      h("div", { class: "mono" }, `${c.src} → ${c.dst}`),
+      h("div", { class: "chips flow" },
+        c.gained.map((x) => h("span", { class: "chip c-green" }, `+ ${x}`)), c.sshGained.map((x) => h("span", { class: "chip c-green" }, `+ SSH as ${x}`)),
+        c.lost.map((x) => h("span", { class: "chip c-red" }, `− ${x}`)), c.sshLost.map((x) => h("span", { class: "chip c-red" }, `− SSH as ${x}`)))))));
+  } else if (r.devicesCompared) {
+    out.push(h("p", { class: "muted" }, `No access changes between your ${r.devicesCompared} devices.`));
+  }
+  if (r.newProblems.length) {
+    out.push(h("h2", {}, "New problems"));
+    out.push(h("div", { class: "stack narrow" }, r.newProblems.map((p) => h("div", { class: `card problem ${p.severity}` },
+      icon(p.severity === "error" ? "x" : "warn", p.severity === "error" ? "c-red" : "c-orange"),
+      h("div", { class: "title" }, p.title, p.line ? h("a", { href: href(source, "policy", { line: p.line }) }, `Line ${p.line}`) : null),
+      h("div", { class: "detail" }, p.detail)))));
+  }
+  out.push(h("h2", {}, "Changed lines"));
+  out.push(diffView(r.diff));
+  return out;
+}
+
 const VIEW_RENDERERS = {
   map: viewMap, builder: viewBuilder, simulate: viewSimulate, ssh: viewSSH, routes: viewRoutes,
-  problems: viewProblems, tests: viewTests, policy: viewPolicy, devices: viewDevices,
+  problems: viewProblems, tests: viewTests, policy: viewPolicy, devices: viewDevices, review: viewReview,
 };
 
 start();

@@ -67,7 +67,17 @@ Swift Package (no Xcode project), one module, two layers:
   `ipLookup`, now in Impact.swift). The extra endpoints are in
   `Server/ViewRoutes.swift`; `ServerState.snapshot(_:)`/`requireModel`
   give any route its tailnet. In app.js use `fill()` (or `h()`), not
-  `replaceChildren` with lists or nulls. Check UI changes
+  `replaceChildren` with lists or nulls.
+  Drafts (`Server/Drafts.swift`): each person's copy per tailnet in
+  `<dataDir>/drafts/<sha256(user id + source)>.json` (base = live text when
+  started → "liveChanged" warning). `RequireRole` sets
+  `AppContext.useDraft` from `?draft=1`, and `ServerState.snapshot(_:)`
+  then swaps in the draft (`liveSnapshot` for the real one); it also
+  refuses non-GET requests not posted from the site (`postedFromThisSite`).
+  Review uses `lineDiff`, `accessChanges`, lint, and the tests; export is a
+  download. The server never writes to the tailnet. In app.js, draft mode
+  is per tailnet in localStorage (`inDraft`), `api()` adds `draft=1`, and
+  caches/badges are keyed by `key(source)`; `draftChanged` clears them. Check UI changes
   in the browser with the dev login and `scripts/fake_headscale.py`.
   Deployment: `deploy/install.sh` (builds with `--static-swift-stdlib`,
   installs the binary, account, `/etc/tailscale-acl`, the hardened systemd
