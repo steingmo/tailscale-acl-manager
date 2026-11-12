@@ -171,7 +171,12 @@ final class TrafficLoadingTests: XCTestCase {
         let store = PolicyStore()
         let c = client("cancel-test")
         let task = Task { try await store.loadTraffic(days: 1, client: c) }
-        try await Task.sleep(nanoseconds: 700_000_000)
+        // Cancel once the three answered hours are in, however slow the machine
+        // (a fixed 0.7 s wait failed on a busy CI runner).
+        for _ in 0..<200 where store.trafficProgress?.hasPrefix("Hour 3 of") != true {
+            try await Task.sleep(nanoseconds: 25_000_000)
+        }
+        XCTAssertEqual(store.trafficProgress?.hasPrefix("Hour 3 of"), true)
         task.cancel()
         let hours = try await task.value
         XCTAssertEqual(hours, 3)

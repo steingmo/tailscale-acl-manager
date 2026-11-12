@@ -59,7 +59,11 @@ final class DraftStore: @unchecked Sendable {
             guard FileManager.default.createFile(atPath: temporary.path, contents: data, attributes: [.posixPermissions: 0o600]) else {
                 throw ConfigError("\(temporary.path): cannot write the draft")
             }
-            _ = try FileManager.default.replaceItemAt(target, withItemAt: temporary)
+            // rename(2) replaces atomically whether or not there's a draft yet
+            // (FileManager.replaceItemAt fails on Linux when there isn't).
+            guard rename(temporary.path, target.path) == 0 else {
+                throw ConfigError("\(target.path): cannot save the draft (\(String(cString: strerror(errno))))")
+            }
         }
     }
 
