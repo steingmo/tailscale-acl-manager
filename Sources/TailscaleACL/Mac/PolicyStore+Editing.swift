@@ -62,139 +62,35 @@ extension PolicyStore {
     // MARK: - Rule editing (used by the visual builder)
 
     func addRule(src: String, dstTarget: String, ports: String, proto: String?) {
-        mutate { tree in
-            var members: [JSON.Member] = [
-                .init(comments: [], key: "action", value: .string("accept")),
-                .init(comments: [], key: "src", value: stringArrayJSON([src])),
-                .init(comments: [], key: "dst",
-                      value: stringArrayJSON([DestSpec(target: dstTarget, ports: ports).spec])),
-            ]
-            if let proto, !proto.isEmpty, proto != "any" {
-                members.insert(.init(comments: [], key: "proto", value: .string(proto)), at: 1)
-            }
-            var acls = tree["acls"]?.elements ?? []
-            acls.append(JSON.Element(comments: [], value: .object(members)))
-            if tree["acls"] == nil {
-                tree["acls"] = .array(acls)
-            } else {
-                tree["acls"]?.elements = acls
-            }
-        }
+        mutate { PolicyEdit.addRule(&$0, src: src, dstTarget: dstTarget, ports: ports, proto: proto) }
     }
 
     /// Replace one dst entry of a rule (edit ports/protocol of a connection).
     func updateConnection(ruleIndex: Int, oldDst: String, newPorts: String, proto: String?) {
-        mutate { tree in
-            guard var acls = tree["acls"]?.elements, acls.indices.contains(ruleIndex) else { return }
-            var rule = acls[ruleIndex].value
-            var dst = rule["dst"]?.stringArray ?? []
-            if let i = dst.firstIndex(of: oldDst) {
-                dst[i] = DestSpec(target: DestSpec(oldDst).target, ports: newPorts).spec
-            }
-            rule["dst"] = stringArrayJSON(dst)
-            if let proto, !proto.isEmpty, proto != "any" {
-                rule["proto"] = .string(proto)
-            } else {
-                rule["proto"] = nil
-            }
-            acls[ruleIndex].value = rule
-            tree["acls"]?.elements = acls
-        }
+        mutate { PolicyEdit.updateConnection(&$0, ruleIndex: ruleIndex, oldDst: oldDst, newPorts: newPorts, proto: proto) }
     }
 
     /// Remove one dst entry; removes the whole rule if it was the last dst.
     func removeConnection(ruleIndex: Int, dst dstSpec: String) {
-        mutate { tree in
-            guard var acls = tree["acls"]?.elements, acls.indices.contains(ruleIndex) else { return }
-            var rule = acls[ruleIndex].value
-            var dst = rule["dst"]?.stringArray ?? []
-            dst.removeAll { $0 == dstSpec }
-            if dst.isEmpty {
-                acls.remove(at: ruleIndex)
-            } else {
-                rule["dst"] = stringArrayJSON(dst)
-                acls[ruleIndex].value = rule
-            }
-            tree["acls"]?.elements = acls
-        }
+        mutate { PolicyEdit.removeConnection(&$0, ruleIndex: ruleIndex, dst: dstSpec) }
     }
 
     // MARK: - Grant editing (modern syntax)
 
-    /// Build grant `ip` entries from a ports string and protocol
-    /// ("22,80" + tcp → ["tcp:22", "tcp:80"]).
-    nonisolated static func ipEntries(ports: String, proto: String?) -> [String] {
-        let parts = ports == "*"
-            ? ["*"]
-            : ports.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
-        guard let proto, proto != "any", !proto.isEmpty else { return parts }
-        return parts.map { "\(proto):\($0)" }
-    }
-
-    /// Derive (proto, ports) UI fields from grant `ip` entries.
-    nonisolated static func splitIPEntries(_ entries: [String]) -> (proto: String, ports: String) {
-        var protos = Set<String>()
-        var ports: [String] = []
-        for e in entries {
-            if let colon = e.firstIndex(of: ":") {
-                protos.insert(String(e[..<colon]).lowercased())
-                ports.append(String(e[e.index(after: colon)...]))
-            } else {
-                protos.insert("any")
-                ports.append(e)
-            }
-        }
-        let proto = protos.count == 1 ? protos.first! : "any"
-        return (["tcp", "udp", "any"].contains(proto) ? proto : "any",
-                ports.joined(separator: ","))
-    }
+    nonisolated static func ipEntries(ports: String, proto: String?) -> [String] { PolicyEdit.ipEntries(ports: ports, proto: proto) }
+    nonisolated static func splitIPEntries(_ entries: [String]) -> (proto: String, ports: String) { PolicyEdit.splitIPEntries(entries) }
 
     func addGrant(src: String, dstTarget: String, ports: String, proto: String?) {
-        let entries = Self.ipEntries(ports: ports, proto: proto)
-        mutate { tree in
-            let members: [JSON.Member] = [
-                .init(comments: [], key: "src", value: stringArrayJSON([src])),
-                .init(comments: [], key: "dst", value: stringArrayJSON([dstTarget])),
-                .init(comments: [], key: "ip", value: stringArrayJSON(entries)),
-            ]
-            var grants = tree["grants"]?.elements ?? []
-            grants.append(JSON.Element(comments: [], value: .object(members)))
-            if tree["grants"] == nil {
-                tree["grants"] = .array(grants)
-            } else {
-                tree["grants"]?.elements = grants
-            }
-        }
+        mutate { PolicyEdit.addGrant(&$0, src: src, dstTarget: dstTarget, ports: ports, proto: proto) }
     }
 
     func updateGrantIP(grantIndex: Int, ports: String, proto: String?) {
-        let entries = Self.ipEntries(ports: ports, proto: proto)
-        mutate { tree in
-            guard var grants = tree["grants"]?.elements,
-                  grants.indices.contains(grantIndex) else { return }
-            var grant = grants[grantIndex].value
-            grant["ip"] = stringArrayJSON(entries)
-            grants[grantIndex].value = grant
-            tree["grants"]?.elements = grants
-        }
+        mutate { PolicyEdit.updateGrantIP(&$0, grantIndex: grantIndex, ports: ports, proto: proto) }
     }
 
     /// Remove one dst from a grant; removes the grant when no dst remains.
     func removeGrantConnection(grantIndex: Int, dst dstName: String) {
-        mutate { tree in
-            guard var grants = tree["grants"]?.elements,
-                  grants.indices.contains(grantIndex) else { return }
-            var grant = grants[grantIndex].value
-            var dst = grant["dst"]?.stringArray ?? []
-            dst.removeAll { $0 == dstName }
-            if dst.isEmpty {
-                grants.remove(at: grantIndex)
-            } else {
-                grant["dst"] = stringArrayJSON(dst)
-                grants[grantIndex].value = grant
-            }
-            tree["grants"]?.elements = grants
-        }
+        mutate { PolicyEdit.removeGrantConnection(&$0, grantIndex: grantIndex, dst: dstName) }
     }
 
     // MARK: - SSH rules
@@ -351,166 +247,31 @@ extension PolicyStore {
 
     // MARK: - Entity editing
 
-    enum EntityKind: String, CaseIterable, Identifiable {
-        case group = "Group"
-        case tag = "Tag"
-        case host = "Host"
-        case ipSet = "IP set"
-        var id: String { rawValue }
-    }
+    typealias EntityKind = PolicyEntityKind
 
     func addEntity(kind: EntityKind, name: String, address: String) {
-        let fullName: String
-        switch kind {
-        case .group: fullName = name.hasPrefix("group:") ? name : "group:\(name)"
-        case .tag: fullName = name.hasPrefix("tag:") ? name : "tag:\(name)"
-        case .ipSet: fullName = name.hasPrefix("ipset:") ? name : "ipset:\(name)"
-        case .host: fullName = name
-        }
-        mutate { tree in
-            switch kind {
-            case .group:
-                appendMember(&tree, section: "groups", key: fullName, value: .array([]))
-            case .tag:
-                appendMember(&tree, section: "tagOwners", key: fullName, value: .array([]))
-            case .host:
-                appendMember(&tree, section: "hosts", key: fullName, value: .string(address))
-            case .ipSet:
-                appendMember(&tree, section: "ipsets", key: fullName,
-                             value: .array([JSON.Element(comments: [], value: .string(address))]))
-            }
-        }
+        mutate { PolicyEdit.addEntity(&$0, kind: kind, name: name, address: address) }
     }
 
     /// Replace the string list of a groups/tagOwners entry (members / owners).
     func setEntityList(section: String, key: String, values: [String]) {
-        mutate { tree in
-            guard var members = tree[section]?.members,
-                  let i = members.firstIndex(where: { $0.key == key }) else { return }
-            members[i].value = stringArrayJSON(values)
-            tree[section] = .object(members)
-        }
+        mutate { PolicyEdit.setEntityList(&$0, section: section, key: key, values: values) }
     }
 
     /// Change a host's IP address or CIDR.
     func setHostAddress(name: String, address: String) {
-        mutate { tree in
-            guard var members = tree["hosts"]?.members,
-                  let i = members.firstIndex(where: { $0.key == name }) else { return }
-            members[i].value = .string(address)
-            tree["hosts"] = .object(members)
-        }
+        mutate { PolicyEdit.setHostAddress(&$0, name: name, address: address) }
     }
 
     /// Rename an entity everywhere: section keys, tag owners, src/dst specs, tests.
     func renameEntity(from oldName: String, to newName: String) {
-        guard oldName != newName, !newName.isEmpty else { return }
-        mutate { tree in
-            rewriteNames(&tree, from: oldName, to: newName)
-        }
+        guard oldName != newName, !newName.isEmpty else { return }  // no rewrite of the text for nothing
+        mutate { PolicyEdit.renameEntity(&$0, from: oldName, to: newName) }
     }
 
     /// Delete an entity and clean up every rule/test that references it.
     func deleteEntity(_ name: String) {
-        mutate { tree in
-            for section in ["groups", "tagOwners", "hosts", "ipsets"] {
-                if var members = tree[section]?.members {
-                    members.removeAll { $0.key == name }
-                    tree[section]?.elements = nil
-                    tree[section] = .object(members)
-                }
-            }
-            // Drop the entity from tagOwners owner lists and group members.
-            for section in ["groups", "tagOwners"] {
-                if var members = tree[section]?.members {
-                    for i in members.indices {
-                        var values = members[i].value.stringArray
-                        values.removeAll { $0 == name }
-                        members[i].value = stringArrayJSON(values)
-                    }
-                    tree[section] = .object(members)
-                }
-            }
-            // Clean acls.
-            if var acls = tree["acls"]?.elements {
-                for i in acls.indices {
-                    var rule = acls[i].value
-                    var src = rule["src"]?.stringArray ?? []
-                    src.removeAll { $0 == name || $0 == "host:\(name)" }
-                    var dst = rule["dst"]?.stringArray ?? []
-                    dst.removeAll {
-                        let t = DestSpec($0).target
-                        return t == name || t == "host:\(name)"
-                    }
-                    rule["src"] = stringArrayJSON(src)
-                    rule["dst"] = stringArrayJSON(dst)
-                    acls[i].value = rule
-                }
-                acls.removeAll {
-                    ($0.value["src"]?.stringArray.isEmpty ?? true)
-                        || ($0.value["dst"]?.stringArray.isEmpty ?? true)
-                }
-                tree["acls"] = .array(acls)
-            }
-            // Clean grants (dst entries are bare targets; via lists too).
-            if var grants = tree["grants"]?.elements {
-                for i in grants.indices {
-                    var grant = grants[i].value
-                    for key in ["src", "dst", "via"] where grant[key] != nil {
-                        var values = grant[key]?.stringArray ?? []
-                        values.removeAll { $0 == name || $0 == "host:\(name)" }
-                        if key == "via" && values.isEmpty {
-                            grant[key] = nil
-                        } else {
-                            grant[key] = stringArrayJSON(values)
-                        }
-                    }
-                    grants[i].value = grant
-                }
-                grants.removeAll {
-                    ($0.value["src"]?.stringArray.isEmpty ?? true)
-                        || ($0.value["dst"]?.stringArray.isEmpty ?? true)
-                }
-                tree["grants"] = .array(grants)
-            }
-            // Clean ssh rules.
-            if var ssh = tree["ssh"]?.elements {
-                for i in ssh.indices {
-                    var rule = ssh[i].value
-                    for key in ["src", "dst"] where rule[key] != nil {
-                        var values = rule[key]?.stringArray ?? []
-                        values.removeAll { $0 == name || $0 == "host:\(name)" }
-                        rule[key] = stringArrayJSON(values)
-                    }
-                    ssh[i].value = rule
-                }
-                ssh.removeAll {
-                    ($0.value["src"]?.stringArray.isEmpty ?? true)
-                        || ($0.value["dst"]?.stringArray.isEmpty ?? true)
-                }
-                tree["ssh"] = .array(ssh)
-            }
-            // Clean tests.
-            if var tests = tree["tests"]?.elements {
-                for i in tests.indices {
-                    var test = tests[i].value
-                    for key in ["accept", "deny"] {
-                        if test[key] != nil {
-                            var entries = test[key]?.stringArray ?? []
-                            entries.removeAll { DestSpec($0).target == name }
-                            if entries.isEmpty {
-                                test[key] = nil
-                            } else {
-                                test[key] = stringArrayJSON(entries)
-                            }
-                        }
-                    }
-                    tests[i].value = test
-                }
-                tests.removeAll { $0.value["src"]?.stringValue == name }
-                tree["tests"] = .array(tests)
-            }
-        }
+        mutate { PolicyEdit.deleteEntity(&$0, name) }
     }
 
     // MARK: - Tests
@@ -546,51 +307,6 @@ extension PolicyStore {
 }
 
 // MARK: - Tree helpers
-
-private func appendMember(_ tree: inout JSON, section: String, key: String, value: JSON) {
-    if var members = tree[section]?.members {
-        guard !members.contains(where: { $0.key == key }) else { return }
-        members.append(JSON.Member(comments: [], key: key, value: value))
-        tree[section] = .object(members)
-    } else {
-        tree[section] = .object([JSON.Member(comments: [], key: key, value: value)])
-    }
-}
-
-/// Recursively rewrite entity names in keys and string values.
-/// Handles bare names ("group:eng") and dst specs with ports ("tag:server:22").
-private func rewriteNames(_ tree: inout JSON, from oldName: String, to newName: String) {
-    func rewriteString(_ s: String) -> String {
-        if s == oldName { return newName }
-        if s == "host:\(oldName)" { return "host:\(newName)" }
-        let d = DestSpec(s)
-        if d.target == oldName && s != d.target {
-            return DestSpec(target: newName, ports: d.ports).spec
-        }
-        if d.target == "host:\(oldName)" && s != d.target {
-            return DestSpec(target: "host:\(newName)", ports: d.ports).spec
-        }
-        return s
-    }
-    func walk(_ node: inout JSON) {
-        switch node {
-        case .string(let s):
-            node = .string(rewriteString(s))
-        case .array(var elements):
-            for i in elements.indices { walk(&elements[i].value) }
-            node = .array(elements)
-        case .object(var members):
-            for i in members.indices {
-                if members[i].key == oldName { members[i].key = newName }
-                walk(&members[i].value)
-            }
-            node = .object(members)
-        default:
-            break
-        }
-    }
-    walk(&tree)
-}
 
 /// Create (index nil) or update one rule in `tree`: its fields (nil removes a
 /// key), its name (first comment), and its expiry comment. Pure, so the rule

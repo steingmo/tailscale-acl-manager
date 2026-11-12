@@ -511,6 +511,13 @@ final class WebServerTests: XCTestCase {
             XCTAssertTrue(export.raw.headers[.contentDisposition]?.hasPrefix(#"attachment; filename="prod-policy-"#) == true)
             XCTAssertEqual(String(buffer: export.raw.body), edited)
 
+            // A save from a page that loaded an older copy is refused.
+            let stale = try await call(.put, "/api/sources/prod/draft", json: ["text": "{}", "since": "2020-01-01T00:00:00Z"])
+            XCTAssertEqual(stale.status, .conflict)
+            let current = try XCTUnwrap(saved.json?["updated"] as? String)
+            let fromCurrent = try await call(.put, "/api/sources/prod/draft", json: ["text": edited, "since": current])
+            XCTAssertEqual(fromCurrent.status, .ok)
+
             // A syntax error: saved, flagged, not exportable.
             let broken = try await call(.put, "/api/sources/prod/draft", json: ["text": "{\n  \"groups\": {\n"])
             XCTAssertEqual(broken.json?["valid"] as? Bool, false)
@@ -550,6 +557,75 @@ final class WebServerTests: XCTestCase {
         }
         let files = try FileManager.default.contentsOfDirectory(atPath: dir.appendingPathComponent("drafts").path)
         XCTAssertTrue(files.allSatisfy { !$0.contains("@") && !$0.contains("user") }, "no names in file names: \(files)")
+    }
+
+    func testEditingTheDraftInTheVisualBuilder() async throws {
+        stub()
+        let (app, state) = try app(config())
+        try await app.test(.router) { client in
+            let signedIn = try await self.signIn(client, state)
+            let session = try XCTUnwrap(signedIn.cookie)
+            func edit(_ op: [String: Any]) async throws -> (status: HTTPResponse.Status, json: [String: Any]?) {
+                let response = try await client.execute(uri: "/api/sources/prod/draft/edit", method: .post,
+                    headers: [.cookie: session, .origin: "https://acl.example.ts.net", .contentType: "application/json"],
+                    body: ByteBuffer(data: try JSONSerialization.data(withJSONObject: op)))
+                return (response.status, try? JSONSerialization.jsonObject(with: Data(buffer: response.body)) as? [String: Any])
+            }
+            func get(_ path: String) async throws -> [String: Any] {
+                let response = try await client.execute(uri: path, method: .get, headers: [.cookie: session])
+                return try XCTUnwrap(JSONSerialization.jsonObject(with: Data(buffer: response.body)) as? [String: Any])
+            }
+
+            // A new group with a member, connected to the web servers on SSH.
+            let added = try await edit(["op": "addBox", "kind": "group", "name": "ops"])
+            XCTAssertEqual(added.status, .ok)
+            _ = try await edit(["op": "setMembers", "name": "group:ops", "values": ["carol@example.com"]])
+            _ = try await edit(["op": "connect", "src": "group:ops", "dst": "tag:web", "ports": "22", "proto": "tcp"])
+            let carol = try await get("/api/sources/prod/simulate?src=carol@example.com&dst=tag:web&port=22&draft=1")
+            XCTAssertEqual(carol["allowed"] as? Bool, true)
+            let live = try await get("/api/sources/prod/simulate?src=carol@example.com&dst=tag:web&port=22")
+            XCTAssertEqual(live["allowed"] as? Bool, false)
+
+            // The review shows that change, not the reformatting the edits did.
+            let review = try await get("/api/sources/prod/draft/review")
+            let changed = (review["diff"] as? [[String: String]] ?? []).filter { $0["kind"] != "same" && $0["kind"] != "skipped" }
+            XCTAssertTrue(changed.contains { $0["text"]?.contains("group:ops") == true })
+            XCTAssertLessThanOrEqual(changed.count, 8, "\(changed)")
+            let draft = try await get("/api/sources/prod/draft")
+            XCTAssertTrue((draft["text"] as? String ?? "").contains("// production"), "comments survive")
+
+            // Change the new grant's ports, then remove it.
+            let builder = try await get("/api/sources/prod/connections?draft=1")
+            let lines = try XCTUnwrap(builder["connections"] as? [[String: Any]])
+            let mine = try XCTUnwrap(lines.first { $0["src"] as? String == "group:ops" })
+            let rule = try XCTUnwrap(mine["rule"] as? String)
+            _ = try await edit(["op": "setPorts", "rule": rule, "dst": "tag:web", "ports": "22,443", "proto": ""])
+            let both = try await get("/api/sources/prod/simulate?src=carol@example.com&dst=tag:web&port=443&draft=1")
+            XCTAssertEqual(both["allowed"] as? Bool, true)
+            _ = try await edit(["op": "disconnect", "rule": rule, "dst": "tag:web"])
+            let gone = try await get("/api/sources/prod/simulate?src=carol@example.com&dst=tag:web&port=22&draft=1")
+            XCTAssertEqual(gone["allowed"] as? Bool, false)
+
+            // Rename and delete reach every rule that names the box.
+            _ = try await edit(["op": "renameBox", "name": "group:eng", "newName": "group:engineering"])
+            let renamed = try await get("/api/sources/prod/draft")
+            XCTAssertTrue((renamed["text"] as? String ?? "").contains(#""src": ["group:engineering"]"#) ||
+                          (renamed["text"] as? String ?? "").contains("\"group:engineering\""))
+            XCTAssertFalse((renamed["text"] as? String ?? "").contains("\"group:eng\""))
+            _ = try await edit(["op": "deleteBox", "name": "group:ghosts"])
+            let afterDelete = try await get("/api/sources/prod/draft")
+            XCTAssertFalse((afterDelete["text"] as? String ?? "").contains("group:ghosts"))
+
+            // Bad input is refused before it reaches the draft.
+            for (bad, why) in [(["op": "connect", "src": "group:ops", "dst": "tag:web", "ports": "ssh"], "ports"),
+                               (["op": "addBox", "kind": "host", "name": "nas2", "address": "not-an-ip"], "address"),
+                               (["op": "addBox", "kind": "printer", "name": "x"], "kind"),
+                               (["op": "setPorts", "rule": "grant99x", "dst": "a", "ports": "1"], "rule"),
+                               (["op": "nonsense"], "op")] as [([String: Any], String)] {
+                let refused = try await edit(bad)
+                XCTAssertEqual(refused.status, .badRequest, why)
+            }
+        }
     }
 
     func testWhoIsKeptOut() async throws {

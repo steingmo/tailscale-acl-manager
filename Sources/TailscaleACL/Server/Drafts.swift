@@ -130,6 +130,13 @@ struct ReviewReply: ResponseEncodable {
     var testsFailing: Int
 }
 
+/// The text as the app writes it (parsed and serialized, comments kept), so
+/// comparing two policies shows what changed, not how they're laid out — a
+/// Visual Builder edit rewrites the whole draft in this style.
+func normalizedPolicy(_ text: String) -> String {
+    (try? HuJSONParser.parse(text)).map(HuJSONSerializer.serialize) ?? text
+}
+
 private func lines(_ diff: [DiffLine]) -> [ReviewReply.Line] {
     diff.map { l in
         .init(kind: { switch l.kind { case .same: "same"; case .added: "added"; case .removed: "removed"; case .skipped: "skipped" } }(), text: l.text)
@@ -148,7 +155,8 @@ func addDraftRoutes(to api: RouterGroup<AppContext>, state: ServerState) {
         let s = state.draftSnapshot(live, draft)
         return DraftReply(exists: true, text: draft.text, started: draft.started, updated: draft.updated, valid: s.model != nil,
                           error: s.parseError.map { .init(line: $0.line, message: $0.message) },
-                          liveChanged: live.text != draft.base, changed: live.text != draft.text)
+                          liveChanged: normalizedPolicy(live.text) != normalizedPolicy(draft.base),
+                          changed: normalizedPolicy(live.text) != normalizedPolicy(draft.text))
     }
 
     api.get("sources/:source/draft") { _, context -> DraftReply in
@@ -166,13 +174,19 @@ func addDraftRoutes(to api: RouterGroup<AppContext>, state: ServerState) {
         return reply(draft, live: live)
     }
 
-    struct Save: Decodable { var text: String }
+    /// `since`: when the draft the editor started from was saved. A save from
+    /// an older copy (another tab, an old page) is refused, not written over newer work.
+    struct Save: Decodable { var text: String; var since: Date? }
     api.put("sources/:source/draft") { request, context -> DraftReply in
         let live = try await state.liveSnapshot(context)
         let (person, source) = (try user(context), try context.parameters.require("source"))
         let body = try await request.decode(as: Save.self, context: context)
         guard body.text.utf8.count <= DraftStore.maxSize else { throw HTTPError(.contentTooLarge, message: "A policy that large isn't supported.") }
         var draft = state.drafts.load(person, source) ?? Draft(source: source, base: live.text, text: live.text, started: Date(), updated: Date())
+        // Saved to the second, so a second's slack.
+        if let since = body.since, draft.updated.timeIntervalSince(since) > 1 {
+            throw HTTPError(.conflict, message: "Your draft was changed elsewhere (another tab or window) after this page loaded it. Reload to see it.")
+        }
         draft.text = body.text
         draft.updated = Date()
         try state.drafts.save(draft, for: person)
@@ -190,10 +204,11 @@ func addDraftRoutes(to api: RouterGroup<AppContext>, state: ServerState) {
             throw HTTPError(.notFound, message: "There's no draft to review.")
         }
         let s = state.draftSnapshot(live, draft)
-        let liveDiff = live.text == draft.base ? [] : lines(lineDiff(old: draft.base, new: live.text))
+        let (liveNow, base, mine) = (normalizedPolicy(live.text), normalizedPolicy(draft.base), normalizedPolicy(draft.text))
+        let liveDiff = liveNow == base ? [] : lines(lineDiff(old: base, new: liveNow))
         guard let new = s.model else {
             return ReviewReply(valid: false, error: s.parseError.map { .init(line: $0.line, message: $0.message) },
-                               diff: lines(lineDiff(old: live.text, new: draft.text)), liveDiff: liveDiff, access: [],
+                               diff: lines(lineDiff(old: liveNow, new: mine)), liveDiff: liveDiff, access: [],
                                devicesCompared: 0, newProblems: [], fixedProblems: 0, testsTotal: 0, testsFailing: 0)
         }
         var access: [ReviewReply.Change] = []
@@ -209,7 +224,7 @@ func addDraftRoutes(to api: RouterGroup<AppContext>, state: ServerState) {
         let ev = Evaluator(model: new)
         let results = ev.runTests().map(\.passed) + ev.runSSHTests().map(\.passed)
         return ReviewReply(
-            valid: true, error: nil, diff: lines(lineDiff(old: live.text, new: draft.text)), liveDiff: liveDiff, access: access,
+            valid: true, error: nil, diff: lines(lineDiff(old: liveNow, new: mine)), liveDiff: liveDiff, access: access,
             devicesCompared: live.nodes.count,
             newProblems: newIssues.filter { !before.contains($0.id) }.map { i in
                 .init(severity: i.severity == .error ? "error" : "warning", title: i.title, detail: i.detail,
@@ -217,6 +232,23 @@ func addDraftRoutes(to api: RouterGroup<AppContext>, state: ServerState) {
             },
             fixedProblems: before.subtracting(after).count,
             testsTotal: results.count, testsFailing: results.filter { !$0 }.count)
+    }
+
+    // One edit to the draft (the Visual Builder's), done with the same tree
+    // edits as the Mac app, so comments and layout elsewhere survive.
+    api.post("sources/:source/draft/edit") { request, context -> DraftReply in
+        let live = try await state.liveSnapshot(context)
+        let (person, source) = (try user(context), try context.parameters.require("source"))
+        let edit = try await request.decode(as: DraftEdit.self, context: context)
+        var draft = state.drafts.load(person, source) ?? Draft(source: source, base: live.text, text: live.text, started: Date(), updated: Date())
+        guard var tree = try? HuJSONParser.parse(draft.text) else {
+            throw HTTPError(.conflict, message: "Your draft has a syntax error; fix it in the Policy view first.")
+        }
+        try edit.apply(to: &tree)
+        draft.text = HuJSONSerializer.serialize(tree)
+        draft.updated = Date()
+        try state.drafts.save(draft, for: person)
+        return reply(draft, live: live)
     }
 
     // The draft as a file, to import into the tailnet by hand.
@@ -231,5 +263,105 @@ func addDraftRoutes(to api: RouterGroup<AppContext>, state: ServerState) {
                                 body: .init(byteBuffer: .init(string: draft.text)))
         response.headers[.contentDisposition] = "attachment; filename=\"\(source)-policy-\(stamp).hujson\""
         return response
+    }
+}
+
+// MARK: - Edits
+
+/// One Visual Builder edit, checked before it touches the draft.
+struct DraftEdit: Decodable {
+    var op: String
+    var kind: String?      // addBox: group, tag, host, ipset
+    var name: String?      // a box
+    var newName: String?   // rename
+    var values: [String]?  // members (groups), owners (tags)
+    var address: String?   // hosts, IP sets
+    var src: String?
+    var dst: String?       // connect: the destination box; setPorts/disconnect: the rule's dst as written
+    var ports: String?
+    var proto: String?
+    var rule: String?      // "grant3", "acl1"
+    var asACL: Bool?
+
+    private func need(_ value: String?, _ what: String) throws -> String {
+        guard let v = value?.trimmingCharacters(in: .whitespaces), !v.isEmpty, v.count <= 200,
+              !v.contains(where: { $0.isNewline }) else { throw HTTPError(.badRequest, message: "Give \(what).") }
+        return v
+    }
+
+    /// "*", or ports and ranges: "22", "80,443", "8000-8100".
+    private func checkedPorts() throws -> String {
+        let p = try need(ports, "the ports").replacingOccurrences(of: " ", with: "")
+        let ok = p == "*" || p.split(separator: ",", omittingEmptySubsequences: false).allSatisfy { part in
+            let ends = part.split(separator: "-", omittingEmptySubsequences: false)
+            return (1...2).contains(ends.count) && ends.allSatisfy { Int($0).map { (0...65_535).contains($0) } ?? false }
+        }
+        guard ok else { throw HTTPError(.badRequest, message: "Ports: *, a port, or a list like 22,443 or 8000-8100.") }
+        return p
+    }
+
+    private func checkedProto() throws -> String? {
+        let p = (proto ?? "").lowercased()
+        guard ["", "any", "tcp", "udp"].contains(p) else { throw HTTPError(.badRequest, message: "Protocol: tcp, udp, or any.") }
+        return p.isEmpty || p == "any" ? nil : p
+    }
+
+    private func ruleIndex() throws -> (grant: Bool, index: Int) {
+        let r = try need(rule, "the rule")
+        if r.hasPrefix("grant"), let i = Int(r.dropFirst(5)) { return (true, i) }
+        if r.hasPrefix("acl"), let i = Int(r.dropFirst(3)) { return (false, i) }
+        throw HTTPError(.badRequest, message: "Unknown rule.")
+    }
+
+    func apply(to tree: inout JSON) throws {
+        switch op {
+        case "addBox":
+            let kinds: [String: PolicyEntityKind] = ["group": .group, "tag": .tag, "host": .host, "ipset": .ipSet]
+            guard let kind = kinds[kind ?? ""] else { throw HTTPError(.badRequest, message: "Kind: group, tag, host, or ipset.") }
+            let name = try need(self.name, "a name")
+            var address = ""
+            if kind == .host || kind == .ipSet {
+                address = try need(self.address, "an address")
+                guard isAddressLike(address) else { throw HTTPError(.badRequest, message: "\(address) isn't an IP address or range.") }
+            }
+            PolicyEdit.addEntity(&tree, kind: kind, name: name, address: address)
+        case "renameBox":
+            PolicyEdit.renameEntity(&tree, from: try need(name, "the box"), to: try need(newName, "the new name"))
+        case "deleteBox":
+            PolicyEdit.deleteEntity(&tree, try need(name, "the box"))
+        case "setMembers":
+            let name = try need(self.name, "the box")
+            let section = name.hasPrefix("group:") ? "groups" : name.hasPrefix("tag:") ? "tagOwners" : nil
+            guard let section else { throw HTTPError(.badRequest, message: "Only groups have members and tags owners.") }
+            let list = (values ?? []).map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+            PolicyEdit.setEntityList(&tree, section: section, key: name, values: list)
+        case "setAddress":
+            let address = try need(self.address, "an address")
+            guard isAddressLike(address) else { throw HTTPError(.badRequest, message: "\(address) isn't an IP address or range.") }
+            PolicyEdit.setHostAddress(&tree, name: try need(name, "the host"), address: address)
+        case "connect":
+            let (src, dst, ports, proto) = (try need(src, "the source"), try need(dst, "the destination"), try checkedPorts(), try checkedProto())
+            if asACL == true {
+                PolicyEdit.addRule(&tree, src: src, dstTarget: dst, ports: ports, proto: proto)
+            } else {
+                PolicyEdit.addGrant(&tree, src: src, dstTarget: dst, ports: ports, proto: proto)
+            }
+        case "setPorts":
+            let (r, ports, proto) = (try ruleIndex(), try checkedPorts(), try checkedProto())
+            if r.grant {
+                PolicyEdit.updateGrantIP(&tree, grantIndex: r.index, ports: ports, proto: proto)
+            } else {
+                PolicyEdit.updateConnection(&tree, ruleIndex: r.index, oldDst: try need(dst, "the destination"), newPorts: ports, proto: proto)
+            }
+        case "disconnect":
+            let (r, dst) = (try ruleIndex(), try need(dst, "the destination"))
+            if r.grant {
+                PolicyEdit.removeGrantConnection(&tree, grantIndex: r.index, dst: dst)
+            } else {
+                PolicyEdit.removeConnection(&tree, ruleIndex: r.index, dst: dst)
+            }
+        default:
+            throw HTTPError(.badRequest, message: "Unknown edit.")
+        }
     }
 }

@@ -855,7 +855,8 @@ async function viewRoutes(source) {
 // MARK: - Visual Builder (view only)
 
 async function viewBuilder(source, params) {
-  const data = await api(`/api/sources/${source}/connections`);
+  const editing = inDraft(source);
+  const [data, ents] = await Promise.all([api(`/api/sources/${source}/connections`), editing ? entities(source) : null]);
   const rules = new Map(data.rules.map((r) => [r.id, r]));
   const kindOf = (c) => rules.get(c.rule).kind;
   const counts = { all: data.connections.length, grants: data.connections.filter((c) => kindOf(c) === "grant").length };
@@ -915,10 +916,16 @@ async function viewBuilder(source, params) {
     const box = (name, sideKey) => {
       const [cls, iconName] = entityStyle(name);
       const key = sideKey + name;
-      return h("button", { type: "button", class: "node" + (ui.focus === key ? " focused" : ""), "data-key": key, "data-name": name,
+      const node = h("button", { type: "button", class: "node" + (ui.focus === key ? " focused" : ""), "data-key": key, "data-name": name,
         title: ui.focus === key ? "Show everything again" : `Show only ${name}'s connections`,
         onclick: () => { ui.focus = ui.focus === key ? "" : key; paint(); } },
         h("span", { class: `icon ${cls}` }, icon(iconName)), h("span", { class: "body" }, h("div", { class: "label" }, name)));
+      if (!editing) return node;
+      const defined = boxKind(name, ents);
+      return h("div", { class: "box" }, node,
+        defined ? h("button", { type: "button", class: "box-menu", title: `Change ${name}`, "aria-label": `Change ${name}`,
+          onclick: () => boxMenu(source, name, defined, ents) }, "⋯") : null,
+        sideKey === "S|" ? h("span", { class: "handle", title: `Drag to a destination to let ${name} reach it`, "data-name": name }) : null);
     };
     const left = h("div", { class: "col", "data-title": "Sources" }, h("div", { class: "col-title" }, "Sources"), sources.map((n) => box(n, "S|")));
     const right = h("div", { class: "col", "data-title": "Destinations" }, h("div", { class: "col-title" }, "Destinations"), dests.map((n) => box(n, "D|")));
@@ -976,6 +983,37 @@ async function viewBuilder(source, params) {
       });
       el.addEventListener("mouseleave", () => canvas.querySelectorAll(".dim").forEach((n) => n.classList.remove("dim")));
     }
+    if (editing) {
+      for (const handle of left.querySelectorAll(".handle")) {
+        handle.addEventListener("pointerdown", (event) => {
+          event.preventDefault();
+          handle.setPointerCapture(event.pointerId);
+          const base = canvas.getBoundingClientRect();
+          const start = handle.getBoundingClientRect();
+          const [x1, y1] = [start.left + start.width / 2 - base.left, start.top + start.height / 2 - base.top];
+          const temp = document.createElementNS("http://www.w3.org/2000/svg", "path");
+          temp.setAttribute("class", "line dragging");
+          temp.setAttribute("stroke", "var(--line-grant)");
+          wires.append(temp);
+          const target = (e) => document.elementFromPoint(e.clientX, e.clientY)?.closest("[data-key^='D|']");
+          const move = (e) => {
+            const [x2, y2] = [e.clientX - base.left, e.clientY - base.top], dx = Math.max(30, (x2 - x1) / 2);
+            temp.setAttribute("d", `M${x1},${y1} C${x1 + dx},${y1} ${x2 - dx},${y2} ${x2},${y2}`);
+            right.querySelectorAll(".drop").forEach((n) => n.classList.remove("drop"));
+            target(e)?.classList.add("drop");
+          };
+          const up = (e) => {
+            handle.removeEventListener("pointermove", move);
+            temp.remove();
+            right.querySelectorAll(".drop").forEach((n) => n.classList.remove("drop"));
+            const dst = target(e);
+            if (dst) askConnection(source, handle.dataset.name, dst.dataset.name);
+          };
+          handle.addEventListener("pointermove", move);
+          handle.addEventListener("pointerup", up, { once: true });
+        });
+      }
+    }
     requestAnimationFrame(draw);
     if (!canvas.observer) {
       canvas.observer = new ResizeObserver(() => (canvas.isConnected ? canvas.redraw() : canvas.observer.disconnect()));
@@ -993,19 +1031,193 @@ async function viewBuilder(source, params) {
         rule.line ? h("a", { href: href(source, "policy", { line: rule.line }) }, `Line ${rule.line}`) : null,
         h("button", { type: "button", class: "link", "aria-label": "Close", onclick: () => { detail.hidden = true; } }, "✕")),
       rule.explanation ? h("div", { class: "sentence" }, rule.explanation) : null,
-      h("div", { class: "muted small" }, `This line: ${c.src} → ${c.dst}${c.ports ? " on " + c.ports : ""}`));
+      h("div", { class: "muted small" }, `This line: ${c.src} → ${c.dst}${c.ports ? " on " + c.ports : ""}`),
+      editing ? h("div", { class: "actions" },
+        h("button", { type: "button", onclick: () => askPorts(source, rule, c) }, "Change ports…"),
+        h("button", { type: "button", class: "danger", onclick: async () => {
+          const others = data.connections.filter((x) => x.rule === c.rule && x.raw === c.raw && x.src !== c.src).map((x) => x.src);
+          if (!confirm(`Remove ${c.dst} from this ${rule.kind === "grant" ? "grant" : "rule"}?` +
+            (others.length ? ` It also stops ${others.join(", ")} reaching it through this rule.` : ""))) return;
+          await draftEdit(source, { op: "disconnect", rule: c.rule, dst: c.raw });
+        } }, "Remove")) : null);
   };
 
   let timer;
   filter.addEventListener("input", () => { clearTimeout(timer); timer = setTimeout(() => { ui.q = filter.value; paint(); }, 150); });
   paint();
   return [
-    head("Visual Builder", "Every rule as lines from sources to destinations. View only — build and edit rules in the Mac app."),
+    head("Visual Builder", editing
+      ? "Your draft: drag from a source's handle to a destination to connect them, use ⋯ to change a box, click a line to change it."
+      : "Every rule as lines from sources to destinations. To change them, edit a draft.",
+    editing ? h("button", { type: "button", onclick: () => askBox(source) }, "Add box") : null,
+    editing ? h("button", { type: "button", onclick: () => askConnection(source, "", "", ents) }, "Add connection") : null,
+    editing ? null : h("button", { type: "button", class: "primary", onclick: async () => {
+      try { await startDraft(source); render(); } catch (error) { if (!(error instanceof SignedOut)) alert(error.message); }
+    } }, state.draft[source] && state.draft[source].exists ? "Open your draft" : "Edit in a draft")),
     h("div", { class: "toolbar" }, filter, kinds),
     legend,
     detail,
     canvas,
   ];
+}
+
+// MARK: - Editing the draft (Visual Builder)
+
+/// A small modal form; resolves to the field values, or null on Cancel/Escape.
+/// fields: { name, label, value, type: "text" | "select" | "textarea", options: [[value, label]], placeholder, list }
+/// `aside`: an extra button on the left (e.g. Delete); choosing it resolves to { aside: true }.
+function askForm({ title, text, fields = [], submit = "Save", danger = false, aside = null }) {
+  return new Promise((resolve) => {
+    const dialog = document.getElementById("form-dialog");
+    const inputs = {};
+    const rows = fields.map((f) => {
+      let input;
+      if (f.type === "select") {
+        input = h("select", { name: f.name }, f.options.map(([v, l]) => h("option", { value: v, selected: v === f.value }, l)));
+      } else if (f.type === "textarea") {
+        input = h("textarea", { name: f.name, rows: 5, placeholder: f.placeholder || "", spellcheck: "false" });
+        input.value = f.value || "";
+      } else {
+        input = h("input", { type: "text", name: f.name, value: f.value || "", placeholder: f.placeholder || "", list: f.list || null,
+          autocomplete: "off", spellcheck: "false", required: f.required ? true : null });
+      }
+      inputs[f.name] = input;
+      return h("label", {}, f.label, input, f.hint ? h("span", { class: "hint" }, f.hint) : null);
+    });
+    let done = false;
+    const finish = (value) => { if (!done) { done = true; resolve(value); } if (dialog.open) dialog.close(); };
+    const form = h("form", { class: "form-dialog" },
+      h("h2", {}, title), text ? h("p", { class: "muted" }, text) : null, rows,
+      h("div", { class: "actions" },
+        aside ? h("button", { type: "button", class: "danger aside", onclick: () => finish({ aside: true }) }, aside) : null,
+        h("button", { type: "button", onclick: () => finish(null) }, "Cancel"),
+        h("button", { type: "submit", class: danger ? "danger solid" : "primary" }, submit)));
+    form.addEventListener("submit", (event) => {
+      event.preventDefault();
+      finish(Object.fromEntries(Object.entries(inputs).map(([k, el]) => [k, el.value])));
+    });
+    dialog.addEventListener("close", () => finish(null), { once: true });
+    fill(dialog, form);
+    dialog.showModal();
+    (form.querySelector("input:not([readonly]), select, textarea") || form.querySelector("button[type=submit]")).focus();
+  });
+}
+
+/// One edit to the draft, then the view again from the saved draft.
+async function draftEdit(source, op) {
+  try {
+    state.draft[source] = await api(`/api/sources/${source}/draft/edit`, { method: "POST", body: op });
+    draftChanged(source);
+    render();
+  } catch (error) {
+    if (!(error instanceof SignedOut)) alert(error.message);
+  }
+}
+
+/// What a box is in the policy, if it's defined there (and so can be changed).
+function boxKind(name, e) {
+  if (e.groups.some((g) => g.name === name)) return "group";
+  if (e.tags.some((t) => t.name === name)) return "tag";
+  if (e.hosts.some((x) => x.name === name)) return "host";
+  if (e.ipsets.some((x) => x.name === name)) return "ipset";
+  return null;
+}
+
+const listOf = (text) => text.split(/[\n,]/).map((s) => s.trim()).filter(Boolean);
+
+async function askBox(source) {
+  const v = await askForm({ title: "Add a box", submit: "Add", fields: [
+    { name: "kind", label: "Kind", type: "select", value: "group",
+      options: [["group", "Group of people"], ["tag", "Tag for devices"], ["host", "Host (a name for an address)"], ["ipset", "IP set"]] },
+    { name: "name", label: "Name", placeholder: "e.g. eng, prod, nas", required: true, hint: "group: and tag: are added for you." },
+    { name: "address", label: "Address (hosts and IP sets)", placeholder: "e.g. 10.0.0.5 or 192.168.1.0/24" },
+  ] });
+  if (!v) return;
+  // Like the Mac: a new box has no lines yet, so show the unused boxes.
+  const url = new URL(location.href);
+  url.searchParams.set("unused", "1");
+  history.replaceState(null, "", url.pathname + url.search);
+  await draftEdit(source, { op: "addBox", kind: v.kind, name: v.name, address: v.address });
+}
+
+async function boxMenu(source, name, kind, e) {
+  const fields = [{ name: "newName", label: "Name", value: name, required: true }];
+  if (kind === "group") fields.push({ name: "values", label: "Members", type: "textarea", value: (e.groups.find((g) => g.name === name).detail || []).join("\n"), hint: "One per line: people, or other groups." });
+  if (kind === "tag") fields.push({ name: "values", label: "Owners", type: "textarea", value: (e.tags.find((t) => t.name === name).detail || []).join("\n"), hint: "Who may give devices this tag." });
+  if (kind === "host") fields.push({ name: "address", label: "Address", value: (e.hosts.find((x) => x.name === name).detail || [])[0] || "" });
+  const v = await askForm({ title: name, fields, submit: "Save", aside: "Delete…" });
+  if (!v) return;
+  if (v.aside) {
+    if (confirm(`Delete ${name}? Rules that only name ${name} are removed too.`)) await draftEdit(source, { op: "deleteBox", name });
+    return;
+  }
+  // One edit at a time, so each lands on the draft the previous one saved.
+  if ((kind === "group" || kind === "tag") && v.values !== undefined) {
+    const before = ((kind === "group" ? e.groups : e.tags).find((x) => x.name === name).detail || []).join("\n");
+    if (listOf(v.values).join("\n") !== listOf(before).join("\n")) await editQuietly(source, { op: "setMembers", name, values: listOf(v.values) });
+  }
+  if (kind === "host" && v.address && v.address !== (e.hosts.find((x) => x.name === name).detail || [])[0]) {
+    await editQuietly(source, { op: "setAddress", name, address: v.address.trim() });
+  }
+  if (v.newName.trim() && v.newName.trim() !== name) await editQuietly(source, { op: "renameBox", name, newName: v.newName.trim() });
+  draftChanged(source);
+  render();
+}
+
+/// An edit whose view refresh comes later (several in a row).
+async function editQuietly(source, op) {
+  try { state.draft[source] = await api(`/api/sources/${source}/draft/edit`, { method: "POST", body: op }); }
+  catch (error) { if (!(error instanceof SignedOut)) alert(error.message); }
+}
+
+const PORT_PRESETS = [["*", "any port"], ["443", "HTTPS"], ["22", "SSH"], ["80,443", "web"], ["3389", "RDP"], ["5432", "PostgreSQL"], ["3306", "MySQL"], ["53", "DNS"]];
+
+function portsList() {
+  return h("datalist", { id: "port-presets" }, PORT_PRESETS.map(([v, l]) => h("option", { value: v }, l)));
+}
+
+async function askConnection(source, src, dst, e) {
+  e = e || await entities(source);
+  const names = [...e.groups.map((g) => g.name), ...e.tags.map((t) => t.name), ...e.users, ...e.hosts.map((x) => x.name),
+    ...e.ipsets.map((x) => x.name), ...e.autogroups, "*"];
+  const list = h("datalist", { id: "connect-names" }, names.map((n) => h("option", { value: n })));
+  document.body.append(list, portsList());
+  const v = await askForm({
+    title: "New connection", submit: "Connect",
+    text: "Adds a rule to your draft: the source may reach the destination on these ports.",
+    fields: [
+      { name: "src", label: "Source", value: src, list: "connect-names", required: true },
+      { name: "dst", label: "Destination", value: dst, list: "connect-names", required: true },
+      { name: "ports", label: "Ports", value: "*", list: "port-presets", hint: "* for any, or e.g. 443, 22,443, 8000-8100." },
+      { name: "proto", label: "Protocol", type: "select", value: "", options: [["", "TCP or UDP"], ["tcp", "TCP"], ["udp", "UDP"]] },
+      { name: "as", label: "Write it as", type: "select", value: "grant", options: [["grant", "a grant (recommended)"], ["acl", "a legacy ACL rule"]] },
+    ] });
+  list.remove();
+  document.getElementById("port-presets")?.remove();
+  if (v) await draftEdit(source, { op: "connect", src: v.src.trim(), dst: v.dst.trim(), ports: v.ports.trim() || "*", proto: v.proto, asACL: v.as === "acl" });
+}
+
+/// A grant's "tcp:22, tcp:443" or an ACL's "22,443" as the form's ports and protocol.
+function splitPorts(rule, c) {
+  if (rule.kind !== "grant") return { ports: c.ports || "*", proto: "" };
+  const entries = c.ports.split(",").map((x) => x.trim()).filter(Boolean);
+  const protos = new Set(entries.map((x) => (x.includes(":") ? x.split(":")[0].toLowerCase() : "any")));
+  const proto = protos.size === 1 && ["tcp", "udp"].includes([...protos][0]) ? [...protos][0] : "";
+  return { ports: entries.map((x) => (x.includes(":") ? x.split(":").slice(1).join(":") : x)).join(","), proto };
+}
+
+async function askPorts(source, rule, c) {
+  const now = splitPorts(rule, c);
+  document.body.append(portsList());
+  const v = await askForm({
+    title: "Change ports", submit: "Save",
+    text: rule.kind === "grant" ? "For every destination of this grant." : `For ${c.dst} in this rule.`,
+    fields: [
+      { name: "ports", label: "Ports", value: now.ports, list: "port-presets", hint: "* for any, or e.g. 443, 22,443, 8000-8100." },
+      { name: "proto", label: "Protocol", type: "select", value: now.proto, options: [["", "TCP or UDP"], ["tcp", "TCP"], ["udp", "UDP"]] },
+    ] });
+  document.getElementById("port-presets")?.remove();
+  if (v) await draftEdit(source, { op: "setPorts", rule: c.rule, dst: c.raw, ports: v.ports.trim() || "*", proto: v.proto });
 }
 
 // MARK: - Search (⌘K)
@@ -1144,12 +1356,13 @@ function policyEditor(source, d, wanted) {
       ? h("span", { class: "c-green" }, "Saved")
       : h("span", { class: "c-red" }, `Not valid — line ${now.error.line}: ${now.error.message}`));
   };
-  let timer, saving = Promise.resolve();
+  let timer = null, saving = Promise.resolve();
   const save = () => {
     clearTimeout(timer);
+    timer = null;
     saving = saving.then(async () => {
       try {
-        state.draft[source] = await api(`/api/sources/${source}/draft`, { method: "PUT", body: { text: box.value } });
+        state.draft[source] = await api(`/api/sources/${source}/draft`, { method: "PUT", body: { text: box.value, since: state.draft[source].updated } });
         errorLine = state.draft[source].valid ? 0 : state.draft[source].error.line;
         draftChanged(source);
         showStatus();
@@ -1174,8 +1387,9 @@ function policyEditor(source, d, wanted) {
       box.dispatchEvent(new Event("input"));
     }
   });
-  // Leaving the page within the save delay: save now.
-  window.addEventListener("pagehide", () => { if (timer) save(); }, { once: true });
+  // Leaving the page with typing not yet saved: save it now. (Only then:
+  // otherwise an old page could write its text over a newer draft.)
+  window.addEventListener("pagehide", () => { if (timer !== null && box.isConnected) save(); }, { once: true });
   afterRender.push(() => {
     repaint();
     showStatus();
@@ -1260,6 +1474,7 @@ async function viewReview(source) {
       h("div", { class: "detail" }, p.detail)))));
   }
   out.push(h("h2", {}, "Changed lines"));
+  out.push(h("p", { class: "muted small" }, "Both policies are laid out the same way before comparing, so only real changes show. Comments are kept; edits made in the Visual Builder lay the whole file out in this style."));
   out.push(diffView(r.diff));
   return out;
 }

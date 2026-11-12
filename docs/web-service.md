@@ -9,7 +9,12 @@ included.
 To change a policy, each person edits their own **draft**: a copy of the
 live policy, kept on the server. A bar on every view switches between the
 live policy and the draft, so the map, simulator, problems, and tests can
-all be checked against the draft before it goes anywhere. **Review &
+all be checked against the draft before it goes anywhere. Edit the draft as
+text in the Policy view, or in the Visual Builder: add boxes (groups, tags,
+hosts, IP sets), drag from a source's handle to a destination to connect
+them, change a box's members, owners, or address, rename or delete it, and
+click a line to change its ports or remove it. Visual Builder edits lay the
+whole file out in the app's style (comments kept), as the Mac app does. **Review &
 export** shows the changed lines, who gains or loses access on the real
 devices, new problems, and failing tests — and warns when someone changed
 the live policy after the draft started, since importing replaces the
@@ -180,7 +185,8 @@ Core (§3.1.3.7) permits relying on TLS instead. See `EntraLogin.validate`.
 | `GET /api/sources/{id}/routes` | auto-approvers, routed grants, node attributes, advertised routes |
 | `GET /api/sources/{id}/connections` | the Visual Builder's lines and rules |
 | `GET/POST/PUT/DELETE /api/sources/{id}/draft` | your draft: read, start from live, save `{"text": …}`, discard |
-| `GET /api/sources/{id}/draft/review` | live → draft: lines, access changes, new problems, tests |
+| `POST /api/sources/{id}/draft/edit` | one Visual Builder edit: `addBox`, `renameBox`, `deleteBox`, `setMembers`, `setAddress`, `connect`, `setPorts`, `disconnect` |
+| `GET /api/sources/{id}/draft/review` | live → draft: lines (both laid out the same way), access changes, new problems, tests |
 | `GET /api/sources/{id}/draft/export` | the draft as a `.hujson` download |
 
 Any view's request with `?draft=1` answers for your draft instead of the

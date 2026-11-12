@@ -73,7 +73,8 @@ struct RoutesReply: ResponseEncodable {
 
 /// The Visual Builder: one line per (rule, source, destination).
 struct ConnectionsReply: ResponseEncodable {
-    struct Connection: Encodable { var rule: String; var src: String; var dst: String; var ports: String }
+    /// `raw`: the destination as written in the rule (with ports, for ACLs), to edit it by.
+    struct Connection: Encodable { var rule: String; var src: String; var dst: String; var ports: String; var raw: String }
     struct Rule: Encodable { var id: String; var kind: String; var name: String; var badge: String; var explanation: String?; var line: Int? }
     var connections: [Connection]
     var rules: [Rule]
@@ -184,12 +185,12 @@ func addViewRoutes(to api: RouterGroup<AppContext>, state: ServerState) {
         for r in m.rules where r.action == "accept" {
             for src in r.src { for dst in r.dst {
                 let d = DestSpec(dst)
-                connections.append(.init(rule: "acl\(r.index)", src: src, dst: strip(d.target), ports: d.ports))
+                connections.append(.init(rule: "acl\(r.index)", src: src, dst: strip(d.target), ports: d.ports, raw: dst))
             } }
         }
         for g in m.grants {
             let ports = g.ip.isEmpty ? "app" : g.ip.joined(separator: ", ")
-            for src in g.src { for dst in g.dst { connections.append(.init(rule: "grant\(g.index)", src: src, dst: strip(dst), ports: ports)) } }
+            for src in g.src { for dst in g.dst { connections.append(.init(rule: "grant\(g.index)", src: src, dst: strip(dst), ports: ports, raw: dst)) } }
         }
         let rules = ruleSummaries(m, sourceIDs: nil).filter { $0.kind != .ssh }.map { r in
             ConnectionsReply.Rule(id: r.id, kind: r.kind == .grant ? "grant" : "acl", name: r.name, badge: r.badge,

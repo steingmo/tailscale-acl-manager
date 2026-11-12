@@ -74,8 +74,13 @@ Swift Package (no Xcode project), one module, two layers:
   `AppContext.useDraft` from `?draft=1`, and `ServerState.snapshot(_:)`
   then swaps in the draft (`liveSnapshot` for the real one); it also
   refuses non-GET requests not posted from the site (`postedFromThisSite`).
-  Review uses `lineDiff`, `accessChanges`, lint, and the tests; export is a
-  download. The server never writes to the tailnet. In app.js, draft mode
+  Review uses `lineDiff` (of `normalizedPolicy` — parsed and re-serialized,
+  so layout doesn't show as change), `accessChanges`, lint, and the tests;
+  export is a download. `POST …/draft/edit` (`DraftEdit`) applies one Visual
+  Builder edit with `PolicyEdit` — the engine's tree edits
+  (`PolicyEdits.swift`), which the Mac `PolicyStore` methods also wrap in
+  `mutate`, so both edit the same way. PUT saves carry `since` and a save
+  from an older copy is refused (409). The server never writes to the tailnet. In app.js, draft mode
   is per tailnet in localStorage (`inDraft`), `api()` adds `draft=1`, and
   caches/badges are keyed by `key(source)`; `draftChanged` clears them. Check UI changes
   in the browser with the dev login and `scripts/fake_headscale.py`.

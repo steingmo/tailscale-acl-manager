@@ -348,3 +348,34 @@ button.danger { color: var(--red); }
 details summary { cursor: pointer; margin: 4px 0 8px; color: var(--muted); }
 .card.export h2 { margin-top: 0; }
 a.plain:hover { text-decoration: none; filter: brightness(1.15); }
+
+/* Editing in the Visual Builder */
+.map.builder .box { position: relative; }
+.map.builder .box .node { padding-right: 34px; }
+.map.builder .box-menu {
+  position: absolute; right: 6px; top: 50%; transform: translateY(-50%); padding: 0 7px; line-height: 22px;
+  background: none; border: 0; color: var(--muted); font-size: 15px; border-radius: 6px;
+}
+.map.builder .box-menu:hover { background: var(--selected); color: var(--text); }
+.map.builder .handle {
+  position: absolute; right: -7px; top: 50%; width: 13px; height: 13px; margin-top: -6.5px; border-radius: 50%;
+  background: var(--line-grant); border: 2px solid var(--bg); cursor: crosshair; touch-action: none; z-index: 2;
+}
+.map.builder .handle:hover { transform: scale(1.25); }
+.map.builder .node.drop { border-color: var(--line-grant); box-shadow: 0 0 0 2px var(--line-grant); }
+.map.builder svg.wires path.dragging { stroke-dasharray: 5 4; stroke-width: 2; opacity: 1; }
+.rule-detail .actions { display: flex; gap: 8px; margin-top: 8px; }
+dialog#form-dialog {
+  width: min(440px, calc(100vw - 32px)); padding: 0; background: var(--bg); color: var(--text);
+  border: 1px solid var(--border); border-radius: 12px; box-shadow: 0 20px 60px rgba(0, 0, 0, 0.45);
+}
+dialog#form-dialog::backdrop { background: rgba(0, 0, 0, 0.45); }
+.form-dialog { display: flex; flex-direction: column; gap: 12px; padding: 18px 20px; }
+.form-dialog h2 { margin: 0; font-size: 15px; }
+.form-dialog p { margin: -4px 0 0; font-size: 12px; }
+.form-dialog label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; font-weight: 600; color: var(--muted); }
+.form-dialog textarea { background: var(--panel); border: 1px solid var(--border); border-radius: 7px; padding: 6px 9px; font: 12px var(--mono); resize: vertical; }
+.form-dialog .hint { font-weight: 400; font-size: 11px; }
+.form-dialog .actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
+button.danger.solid { background: var(--red); border-color: transparent; color: #fff; font-weight: 600; }
+.form-dialog .actions .aside { margin-right: auto; }
