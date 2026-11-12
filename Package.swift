@@ -20,6 +20,10 @@ let app = false
 // server only the others; what a target doesn't use isn't compiled.
 var dependencies: [Package.Dependency] = [
     .package(url: "https://github.com/hummingbird-project/hummingbird.git", from: "2.0.0"),
+    // bcrypt for local accounts.
+    .package(url: "https://github.com/hummingbird-project/hummingbird-auth.git", from: "2.0.0"),
+    // HTTPS served directly, for a LAN without a TLS proxy.
+    .package(url: "https://github.com/apple/swift-nio-ssl.git", from: "2.0.0"),
     // SHA-256 for the sign-in flow on Linux; macOS has CryptoKit.
     .package(url: "https://github.com/apple/swift-crypto.git", from: "3.0.0"),
 ]
@@ -38,6 +42,9 @@ let package = Package(
                 .product(name: "Sparkle", package: "Sparkle"),
             ] : [
                 .product(name: "Hummingbird", package: "hummingbird"),
+                .product(name: "HummingbirdTLS", package: "hummingbird"),
+                .product(name: "HummingbirdBcrypt", package: "hummingbird-auth"),
+                .product(name: "NIOSSL", package: "swift-nio-ssl"),
                 .product(name: "Crypto", package: "swift-crypto", condition: .when(platforms: [.linux])),
             ],
             path: "Sources/TailscaleACL",
@@ -56,6 +63,7 @@ let package = Package(
             dependencies: app ? ["TailscaleACL"] : [
                 "TailscaleACL",
                 .product(name: "HummingbirdTesting", package: "hummingbird"),
+                .product(name: "HummingbirdBcrypt", package: "hummingbird-auth"),
             ],
             path: "Tests/TailscaleACLTests",
             exclude: app ? ["Server"] : ["Mac"],

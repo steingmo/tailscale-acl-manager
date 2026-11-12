@@ -19,6 +19,15 @@
       }
     },
     {
+      "identity" : "hummingbird-auth",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/hummingbird-project/hummingbird-auth.git",
+      "state" : {
+        "revision" : "b94ab03d76ce9d7c7162fbf8898d76877f623392",
+        "version" : "2.5.0"
+      }
+    },
+    {
       "identity" : "sparkle",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/sparkle-project/Sparkle",
@@ -106,6 +115,15 @@
       "state" : {
         "revision" : "9f982a7ec8dd815bf57024e39de592813ca14399",
         "version" : "1.7.4"
+      }
+    },
+    {
+      "identity" : "swift-extras-base64",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/swift-extras/swift-extras-base64.git",
+      "state" : {
+        "revision" : "c803790ffc55c4b4f297f52ee6fbd5b0b3d046ef",
+        "version" : "1.2.0"
       }
     },
     {

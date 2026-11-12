@@ -94,9 +94,51 @@ The unit is locked down (`systemd-analyze security tailscale-acl` rates it
 Back up `/var/lib/tailscale-acl` (the audit log) and `/etc/tailscale-acl`
 — on Proxmox, the container's scheduled backup covers both.
 
+## On a LAN, with local accounts
+
+Before Microsoft sign-in and Tailscale are set up, the service can serve
+HTTPS itself on the LAN and sign people in with accounts listed in the
+config. Instead of `entra`:
+
+```json
+"listen": "0.0.0.0:8443",
+"publicURL": "https://192.168.1.50:8443",
+"tls": { "certificateFile": "/etc/tailscale-acl/tls.crt", "keyFile": "/etc/tailscale-acl/tls.key" },
+"localUsers": []
+```
+
+A self-signed certificate for the server's address (browsers warn once; on a
+Mac, open the .crt in Keychain Access and set it to Always Trust to stop
+that):
+
+```sh
+cd /etc/tailscale-acl
+openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -days 825 \
+  -subj "/CN=Tailscale ACL" -addext "subjectAltName=IP:192.168.1.50" \
+  -addext "extendedKeyUsage=serverAuth" -keyout tls.key -out tls.crt
+chown root:tailscale-acl tls.key tls.crt && chmod 0640 tls.key
+```
+
+Accounts, managed on the server (the password is typed there, hidden, and
+only its bcrypt hash is stored):
+
+```sh
+ssh -t root@server tailscale-acl-user add anna viewer,approver
+ssh -t root@server tailscale-acl-user password anna
+ssh root@server tailscale-acl-user list
+```
+
+An account is refused for 15 minutes after 5 wrong passwords; an unknown
+name takes as long to refuse as a wrong password. Switching to Microsoft
+later: replace `localUsers` with `entra` and `roles`, and `tls` with a proxy.
+
 ## How signing in works
 
-OpenID Connect authorization code flow with PKCE, as a confidential client.
+With local accounts: a form posted to `/login`, accepted only from the
+site's own page (Origin, or Sec-Fetch-Site when the browser sends Origin
+null), checked against the bcrypt hash off the request threads.
+
+With Microsoft: OpenID Connect authorization code flow with PKCE, as a confidential client.
 The browser is sent to Microsoft; the code that comes back is traded for an
 ID token server to server, with the client secret. The token must be from the
 configured tenant, for this application, unexpired, and carry the nonce of

@@ -1,0 +1,75 @@
+#!/bin/bash
+# Local accounts of the web service: add, reset a password, remove, list.
+# Passwords are typed here, hidden, and only their bcrypt hash is stored.
+#   tailscale-acl-user add <name> [viewer|viewer,approver]
+#   tailscale-acl-user password <name>
+#   tailscale-acl-user remove <name>
+#   tailscale-acl-user list
+# Changes restart the service, which also signs everyone out.
+set -euo pipefail
+config=${TAILSCALE_ACL_CONFIG:-/etc/tailscale-acl/server.json}
+cmd=${1:-}; name=${2:-}; roles=${3:-viewer}
+usage() { sed -n '2,8p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
+case "$cmd" in
+  add|password|remove) [ -n "$name" ] || usage ;;
+  list) ;;
+  *) usage ;;
+esac
+[ -e "$config" ] || { echo "$config doesn't exist yet — write it first (see server.json.example)" >&2; exit 1; }
+
+hash=""
+if [ "$cmd" = add ] || [ "$cmd" = password ]; then
+  [ -t 0 ] || { echo "run this in a terminal (ssh -t …), so the password can be typed hidden" >&2; exit 1; }
+  echo "Password for $name (at least 12 characters):" >&2
+  hash=$(tailscale-acl hash-password)
+  [[ "$hash" == '$2'* ]] || { echo "$hash" >&2; exit 1; }
+fi
+
+python3 - "$config" "$cmd" "$name" "$roles" "$hash" <<'PY'
+import grp, json, os, sys
+path, cmd, name, roles, hashed = sys.argv[1:6]
+with open(path) as f:
+    config = json.load(f)
+users = config.get("localUsers")
+if users is None:
+    if cmd == "list":
+        print("This config signs in with " + ("Microsoft" if "entra" in config else "something else") + ", not local accounts.")
+        sys.exit(0)
+    if "entra" in config:
+        sys.exit("This config signs in with Microsoft (entra); remove that first to use local accounts.")
+    users = config["localUsers"] = []
+match = [u for u in users if u["login"].lower() == name.lower()]
+if cmd == "list":
+    for u in users:
+        print(f'{u["login"]}\t{",".join(u["roles"])}')
+    sys.exit(0)
+if cmd == "add":
+    if match:
+        sys.exit(f"{name} already exists; to reset the password: tailscale-acl-user password {name}")
+    bad = [r for r in roles.split(",") if r not in ("viewer", "approver")]
+    if bad:
+        sys.exit("roles: viewer, or viewer,approver")
+    users.append({"login": name, "passwordHash": hashed, "roles": roles.split(",")})
+elif not match:
+    sys.exit(f"no account {name}")
+elif cmd == "password":
+    match[0]["passwordHash"] = hashed
+else:
+    users.remove(match[0])
+new = path + ".new"
+with open(new, "w") as f:
+    json.dump(config, f, indent=2)
+    f.write("\n")
+os.chmod(new, 0o640)
+os.chown(new, 0, grp.getgrnam("tailscale-acl").gr_gid)
+os.replace(new, path)
+print({"add": f"Added {name} ({roles}).", "password": f"Password changed for {name}.", "remove": f"Removed {name}."}[cmd])
+PY
+
+[ "$cmd" = list ] && exit 0
+if tailscale-acl serve --config "$config" --check >/dev/null; then
+  systemctl is-enabled --quiet tailscale-acl 2>/dev/null && systemctl restart tailscale-acl && echo "Restarted the service."
+else
+  tailscale-acl serve --config "$config" --check || true
+  echo "The config has problems (above); the service wasn't restarted." >&2
+fi

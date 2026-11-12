@@ -46,6 +46,10 @@ Swift Package (no Xcode project), one module, two layers:
   `ServerConfig.swift` (JSON config, `problems()`; secrets by file),
   `Login.swift` (Microsoft Entra OIDC: code flow + PKCE, `EntraLogin`,
   `roles(for:)` from app roles/group IDs, in-memory `SessionStore`),
+  `LocalLogin.swift` (or `localUsers`: bcrypt via hummingbird-auth, a
+  sign-in form, per-account and overall throttling; `tailscale-acl
+  hash-password`; `deploy/tailscale-acl-user` manages accounts on the
+  server), optional `tls` (HTTPS served directly, for a LAN),
   `WebServer.swift` (`buildRouter`: `/login`, `/auth/callback`, `/logout`,
   `/api/*` behind `RequireRole`; `PolicySource` caches a tailnet for a
   minute; `AuditLog` → `<dataDir>/audit.jsonl`; `SecurityHeaders`), and

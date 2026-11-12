@@ -10,7 +10,12 @@ struct ServerConfig: Decodable {
     var publicURL: String
     /// Where the audit log is kept.
     var dataDir: String
+    /// Sign in with Microsoft Entra ID…
     var entra: Entra?
+    /// …or with accounts listed here (one or the other).
+    var localUsers: [LocalUser]?
+    /// Serve HTTPS directly with this certificate, instead of behind a proxy.
+    var tls: TLS?
     var roles: Roles?
     var sources: [Source]
     /// Sign in without Microsoft, for development on localhost only (also
@@ -44,6 +49,11 @@ struct ServerConfig: Decodable {
         var tailnet: String?
         var credential: String?
         var credentialFile: String?
+    }
+
+    struct TLS: Decodable {
+        var certificateFile: String
+        var keyFile: String
     }
 
     struct DevLogin: Decodable {
@@ -105,6 +115,15 @@ struct ServerConfig: Decodable {
         }
         if dataDir.isEmpty { out.append("dataDir: where should the audit log go?") }
 
+        let modes = [devLogin != nil, entra != nil, localUsers != nil].filter { $0 }.count
+        if modes > 1 { out.append("entra, localUsers, devLogin: use one way of signing in, not several") }
+        if let tls {
+            if !isSecure { out.append("tls: the publicURL must then start with https://") }
+            for file in [tls.certificateFile, tls.keyFile] where !FileManager.default.isReadableFile(atPath: file) {
+                out.append("tls: cannot read \(file)")
+            }
+        }
+
         if let devLogin {
             if !devLoginAllowed {
                 out.append("devLogin: signs everyone in without Microsoft. Remove it, or pass --insecure-dev-login on localhost.")
@@ -122,8 +141,20 @@ struct ServerConfig: Decodable {
             if (roles?.viewer ?? []).isEmpty && (roles?.approver ?? []).isEmpty {
                 out.append("roles: nobody could sign in — list the app roles or group IDs for viewer and approver")
             }
+        } else if let localUsers {
+            if localUsers.isEmpty { out.append("localUsers: nobody could sign in — add an account") }
+            var logins = Set<String>()
+            for (i, u) in localUsers.enumerated() {
+                let label = "localUsers[\(i)]"
+                if u.login.trimmingCharacters(in: .whitespaces).isEmpty { out.append("\(label).login: missing") }
+                if !logins.insert(u.login.lowercased()).inserted { out.append("\(label).login: \(u.login) is listed twice") }
+                if !u.isBcryptHash { out.append("\(label).passwordHash: not a bcrypt hash — make one with: tailscale-acl hash-password") }
+                if u.roles.isEmpty || u.roles.contains(where: { Role(rawValue: $0) == nil }) {
+                    out.append("\(label).roles: use \"viewer\" and/or \"approver\"")
+                }
+            }
         } else {
-            out.append("entra: missing — the Microsoft Entra ID app registration people sign in with")
+            out.append("entra or localUsers: missing — how people sign in (Microsoft Entra ID, or accounts listed here)")
         }
 
         if sources.isEmpty { out.append("sources: add at least one tailnet") }
@@ -159,13 +190,20 @@ func secret(_ inline: String?, file: String?) throws -> String {
 }
 
 /// Paths among the config's files that other accounts on the machine can
-/// read: anyone at all, or a group other than this process's own (root
-/// owning a file the service's group reads is the intended layout).
-func readableByOthers(_ paths: [String], ownGroup: UInt32 = UInt32(getegid())) -> [String] {
+/// read: anyone at all, or a group other than this process's own or the
+/// service's (root owning a file the tailscale-acl group reads is the
+/// intended layout, and root runs the check too).
+func readableByOthers(_ paths: [String], ownGroups: Set<UInt32> = serviceGroups()) -> [String] {
     paths.filter { path in
         guard let attributes = try? FileManager.default.attributesOfItem(atPath: path),
               let mode = (attributes[.posixPermissions] as? NSNumber)?.intValue else { return false }
         let group = (attributes[.groupOwnerAccountID] as? NSNumber)?.uint32Value
-        return mode & 0o007 != 0 || (mode & 0o070 != 0 && group != ownGroup)
+        return mode & 0o007 != 0 || (mode & 0o070 != 0 && !ownGroups.contains(group ?? .max))
     }
+}
+
+func serviceGroups() -> Set<UInt32> {
+    var groups: Set<UInt32> = [UInt32(getegid())]
+    if let entry = getgrnam("tailscale-acl") { groups.insert(UInt32(entry.pointee.gr_gid)) }
+    return groups
 }

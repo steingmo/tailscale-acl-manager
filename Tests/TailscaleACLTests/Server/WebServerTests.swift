@@ -4,6 +4,7 @@ import FoundationNetworking
 #endif
 import Hummingbird
 import HummingbirdTesting
+import HummingbirdBcrypt
 import HTTPTypes
 @testable import TailscaleACL
 
@@ -91,8 +92,8 @@ final class WebServerTests: XCTestCase {
         // root:tailscale-acl 0640 is the intended layout; the same mode with another group isn't.
         let group = try XCTUnwrap(FileManager.default.attributesOfItem(atPath: file.path)[.groupOwnerAccountID] as? NSNumber).uint32Value
         try FileManager.default.setAttributes([.posixPermissions: 0o640], ofItemAtPath: file.path)
-        XCTAssertEqual(readableByOthers([file.path], ownGroup: group), [])
-        XCTAssertEqual(readableByOthers([file.path], ownGroup: group &+ 1), [file.path])
+        XCTAssertEqual(readableByOthers([file.path], ownGroups: [group]), [])
+        XCTAssertEqual(readableByOthers([file.path], ownGroups: [group &+ 1]), [file.path])
     }
 
     // MARK: - ID token and roles
@@ -460,6 +461,122 @@ final class WebServerTests: XCTestCase {
         }
     }
 
+    // MARK: - Local accounts
+
+    func localConfig(_ users: String) throws -> ServerConfig {
+        try JSONDecoder().decode(ServerConfig.self, from: Data("""
+        {"publicURL": "https://192.168.1.50:8443", "listen": "0.0.0.0:8443", "dataDir": "\(dir.path)",
+         "localUsers": \(users),
+         "sources": [{"id": "prod", "name": "Production", "kind": "tailscale", "tailnet": "-", "credential": "tskey-api-x"}]}
+        """.utf8))
+    }
+
+    func testLocalAccountConfig() throws {
+        let hash = Bcrypt.hash("correct horse battery", cost: 4)
+        XCTAssertEqual(try localConfig(#"[{"login": "anna", "passwordHash": "\#(hash)", "roles": ["viewer"]}]"#)
+            .problems(devLoginAllowed: false), [])
+        let bad = try localConfig(#"""
+        [{"login": "anna", "passwordHash": "correct horse battery", "roles": ["viewer"]},
+         {"login": "Anna", "passwordHash": "\#(hash)", "roles": ["admin"]}]
+        """#).problems(devLoginAllowed: false).joined(separator: "\n")
+        for expected in ["not a bcrypt hash", "listed twice", "roles: use"] {
+            XCTAssertTrue(bad.contains(expected), "\(expected) missing in:\n\(bad)")
+        }
+        // One way of signing in; TLS needs https and readable files.
+        var both = try localConfig(#"[{"login": "anna", "passwordHash": "\#(hash)", "roles": ["viewer"]}]"#)
+        both.entra = .init(tenant: tenant, clientID: "a", clientSecret: "s")
+        XCTAssertTrue(both.problems(devLoginAllowed: false).joined().contains("one way of signing in"))
+        var tls = try localConfig(#"[{"login": "anna", "passwordHash": "\#(hash)", "roles": ["viewer"]}]"#)
+        tls.tls = .init(certificateFile: dir.appendingPathComponent("nope.crt").path, keyFile: dir.appendingPathComponent("nope.key").path)
+        tls.publicURL = "http://192.168.1.50:8443"
+        let tlsProblems = tls.problems(devLoginAllowed: false).joined(separator: "\n")
+        XCTAssertTrue(tlsProblems.contains("must then start with https"))
+        XCTAssertTrue(tlsProblems.contains("cannot read"))
+
+        XCTAssertEqual(parseForm("username=anna%40example.com&password=a+b%26c&return=%2Fs%2Fprod%2Fmap&empty="),
+                       ["username": "anna@example.com", "password": "a b&c", "return": "/s/prod/map", "empty": ""])
+
+        var printed: [String] = []
+        XCTAssertEqual(runHashPasswordCommand(interactive: false, readLine: { "short" }) { printed.append($0) }, 1)
+        XCTAssertEqual(runHashPasswordCommand(interactive: false, readLine: { "a long enough password" }) { printed.append($0) }, 0)
+        XCTAssertTrue(Bcrypt.verify("a long enough password", hash: try XCTUnwrap(printed.last)))
+    }
+
+    func testSigningInWithALocalAccount() async throws {
+        stub()
+        let hash = Bcrypt.hash("correct horse battery", cost: 4)
+        let config = try localConfig(#"""
+        [{"login": "anna", "name": "Anna", "passwordHash": "\#(hash)", "roles": ["viewer", "approver"]},
+         {"login": "bo", "passwordHash": "\#(hash)", "roles": ["viewer"]}]
+        """#)
+        let (app, state) = try app(config)
+        let origin: HTTPFields = [.origin: "https://192.168.1.50:8443", .contentType: "application/x-www-form-urlencoded"]
+        @Sendable func post(_ client: any TestClientProtocol, _ form: String, headers: HTTPFields? = nil) async throws -> TestResponse {
+            try await client.execute(uri: "/login", method: .post, headers: headers ?? origin, body: ByteBuffer(string: form))
+        }
+        try await app.test(.router) { client in
+            // The form, not a redirect to Microsoft; the return path escaped into it.
+            let form = try await client.execute(uri: "/login?return=%2Fs%2Fprod%2Fmap%3Fx%3D%22%3E%3Cscript%3E", method: .get)
+            XCTAssertEqual(form.status, .ok)
+            let html = String(buffer: form.body)
+            XCTAssertTrue(html.contains(#"<form class="login card" method="post" action="/login">"#))
+            XCTAssertTrue(html.contains("&quot;&gt;&lt;script&gt;"))
+            XCTAssertFalse(html.contains("\"><script>"))
+
+            // Posted from another site: refused before the password is looked at.
+            var elsewhere = origin
+            elsewhere[.origin] = "https://evil.example"
+            let csrf = try await post(client, "username=anna&password=correct+horse+battery", headers: elsewhere)
+            XCTAssertEqual(csrf.status, .forbidden)
+            XCTAssertNil(self.cookie(csrf, state.sessionCookie))
+            // Browsers may send Origin: null; then Sec-Fetch-Site decides.
+            let fetchSite = try XCTUnwrap(HTTPField.Name("Sec-Fetch-Site"))
+            var crossSite: HTTPFields = [.contentType: "application/x-www-form-urlencoded", .origin: "null"]
+            crossSite[fetchSite] = "cross-site"
+            let nullCross = try await post(client, "username=anna&password=correct+horse+battery", headers: crossSite)
+            XCTAssertEqual(nullCross.status, .forbidden)
+            let bare = try await post(client, "username=anna&password=correct+horse+battery",
+                                      headers: [.contentType: "application/x-www-form-urlencoded"])
+            XCTAssertEqual(bare.status, .forbidden, "no Origin and no Sec-Fetch-Site: refused")
+            var browser: HTTPFields = [.contentType: "application/x-www-form-urlencoded", .origin: "null"]
+            browser[fetchSite] = "same-origin"
+            let fromBrowser = try await post(client, "username=anna&password=correct+horse+battery", headers: browser)
+            XCTAssertEqual(fromBrowser.status, .seeOther, "how Chrome posts the form under a strict referrer policy")
+
+            let wrong = try await post(client, "username=anna&password=nope")
+            XCTAssertEqual(wrong.status, .unauthorized)
+            XCTAssertTrue(String(buffer: wrong.body).contains("Wrong user name or password."))
+            let unknown = try await post(client, "username=nobody&password=correct+horse+battery")
+            XCTAssertEqual(unknown.status, .unauthorized)
+            XCTAssertEqual(String(buffer: unknown.body), String(buffer: wrong.body), "an unknown name looks the same as a wrong password")
+
+            // Right password (user names aren't case-sensitive): signed in, back where they were going.
+            let ok = try await post(client, "username=Anna&password=correct+horse+battery&return=%2Fs%2Fprod%2Fmap")
+            XCTAssertEqual(ok.status, .seeOther)
+            XCTAssertEqual(ok.headers[.location], "/s/prod/map")
+            let session = try XCTUnwrap(self.cookie(ok, state.sessionCookie))
+            let me = try await client.execute(uri: "/api/me", method: .get, headers: [.cookie: "\(state.sessionCookie)=\(session)"])
+            XCTAssertEqual(try JSONSerialization.jsonObject(with: Data(buffer: me.body)) as? [String: AnyHashable],
+                           ["login": "anna", "name": "Anna", "roles": ["approver", "viewer"]])
+
+            // Five wrong passwords for bo, then even the right one is refused for a while.
+            for _ in 0..<LocalLogin.perAccount.attempts { _ = try await post(client, "username=bo&password=guess") }
+            let locked = try await post(client, "username=bo&password=correct+horse+battery")
+            XCTAssertEqual(locked.status, .tooManyRequests)
+            XCTAssertNil(self.cookie(locked, state.sessionCookie))
+            // Anna isn't affected.
+            let stillOK = try await post(client, "username=anna&password=correct+horse+battery")
+            XCTAssertEqual(stillOK.status, .seeOther)
+        }
+        let log = state.audit.entries()
+        XCTAssertEqual(log.filter { $0.event == "login-failed" && $0.detail.hasPrefix("form posted from another site") }.count, 3)
+        XCTAssertTrue(log.contains { $0.event == "login-failed" && $0.user == "nobody" && $0.detail == "unknown user" })
+        XCTAssertTrue(log.contains { $0.event == "login-failed" && $0.user == "bo" && $0.detail == "too many attempts" })
+        XCTAssertTrue(log.contains { $0.event == "login" && $0.user == "anna" && $0.detail.hasPrefix("local account") })
+        let raw = try String(contentsOf: state.audit.url, encoding: .utf8)
+        XCTAssertFalse(raw.contains("correct horse") || raw.contains("guess"), "no passwords in the log")
+    }
+
     func testAuditLogSurvivesRotation() throws {
         let log = try AuditLog(directory: dir.path)
         log.record("login", user: "a@example.com", detail: "first")
@@ -503,6 +620,8 @@ final class WebServerTests: XCTestCase {
         try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: path)
         let good = await runServeCommand(["--config", path, "--check"]) { lines.append($0) }
         XCTAssertEqual(good, 0, lines.joined(separator: "\n"))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: dir.appendingPathComponent("data").path),
+                       "a check creates nothing (run as root, it would leave a log the service can't write)")
         XCTAssertTrue(lines.contains { $0.contains("can be read by other accounts") })
         XCTAssertTrue(lines.last?.contains("https://acl.example.ts.net/auth/callback") == true)
         let usage = await runServeCommand(["--nope"]) { _ in }

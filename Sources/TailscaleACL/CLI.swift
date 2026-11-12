@@ -14,6 +14,7 @@ enum Main {
     static func main() async {
         let args = Array(CommandLine.arguments.dropFirst())
         if args.first == "serve" { exit(await runServeCommand(Array(args.dropFirst()))) }
+        if args.first == "hash-password" { exit(runHashPasswordCommand()) }
         if let code = runCommandLine(args) { exit(code) }
         print(usage)
         exit(2)
@@ -27,6 +28,7 @@ usage: tailscale-acl lint <policy.hujson>   problems (exit 1 on errors)
        tailscale-acl mcp                    MCP server for AI apps (relays to the running Mac app;
                                             turn on Settings ▸ AI tools first)
        tailscale-acl serve --config <file>   the read-only web service (not in the Mac app)
+       tailscale-acl hash-password          a password hash for the web service's local accounts
 Use - to read the policy from standard input.
 """
 

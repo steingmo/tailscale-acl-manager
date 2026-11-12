@@ -3,7 +3,9 @@ import Foundation
 import FoundationNetworking
 #endif
 import Hummingbird
+import HummingbirdTLS
 import HTTPTypes
+import NIOSSL
 
 // `tailscale-acl serve`: the read-only web service. People sign in with
 // Microsoft; viewers can read the policy, its problems and devices, and
@@ -31,10 +33,13 @@ final class AuditLog: @unchecked Sendable {
         return e
     }()
 
-    init(directory: String) throws {
+    /// `create: false` (a config check, maybe run as root) touches nothing:
+    /// a log created by root couldn't be written by the service's account.
+    init(directory: String, create: Bool = true) throws {
         let dir = URL(fileURLWithPath: directory, isDirectory: true)
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         url = dir.appendingPathComponent("audit.jsonl")
+        guard create else { return }
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         if !FileManager.default.fileExists(atPath: url.path) {
             guard FileManager.default.createFile(atPath: url.path, contents: nil, attributes: [.posixPermissions: 0o600]) else {
                 throw ConfigError("\(url.path): cannot create the audit log")
@@ -150,6 +155,7 @@ final class ServerState: Sendable {
     let origin: String
     let secure: Bool
     let login: EntraLogin?
+    let local: LocalLogin?
     let devUser: SignedInUser?
     let roles: ServerConfig.Roles?
     let sessions = SessionStore()
@@ -159,14 +165,18 @@ final class ServerState: Sendable {
     var sessionCookie: String { secure ? "__Host-tsacl_session" : "tsacl_session" }
     var loginCookie: String { secure ? "__Host-tsacl_login" : "tsacl_login" }
 
-    init(config: ServerConfig, session: URLSession = serverSession) throws {
+    init(config: ServerConfig, session: URLSession = serverSession, checkOnly: Bool = false) throws {
         guard let origin = config.origin else { throw ConfigError("publicURL: not a usable address") }
         self.origin = origin
         secure = config.isSecure
         roles = config.roles
-        audit = try AuditLog(directory: config.dataDir)
+        audit = try AuditLog(directory: config.dataDir, create: !checkOnly)
+        local = config.localUsers.map(LocalLogin.init)
         if let dev = config.devLogin {
             devUser = SignedInUser(id: "dev", login: dev.login.lowercased(), name: dev.login, roles: Set(dev.roles.compactMap(Role.init(rawValue:))))
+            login = nil
+        } else if config.localUsers != nil {
+            devUser = nil
             login = nil
         } else if let entra = config.entra {
             devUser = nil
@@ -174,7 +184,7 @@ final class ServerState: Sendable {
                                clientSecret: try secret(entra.clientSecret, file: entra.clientSecretFile),
                                redirectURI: origin + "/auth/callback", session: session)
         } else {
-            throw ConfigError("entra: missing")
+            throw ConfigError("entra or localUsers: missing")
         }
         sources = try config.sources.map { s in
             guard let client = makeServer(kind: s.kind, serverURL: s.serverURL ?? "", tailnet: s.tailnet ?? "-",
@@ -211,6 +221,14 @@ private func forwardedFor(_ request: Request) -> String? {
     return String(value.prefix(100))
 }
 
+/// A form post from this site's own pages: the browser says so with Origin,
+/// or — when it sends Origin: null — with Sec-Fetch-Site, which pages can't set.
+func postedFromThisSite(_ request: Request, origin: String) -> Bool {
+    if let sent = request.headers[.origin], sent != "null" { return sent == origin }
+    guard let name = HTTPField.Name("Sec-Fetch-Site") else { return false }
+    return request.headers[name] == "same-origin"
+}
+
 // MARK: - Middleware
 
 /// Headers that keep the pages from being framed, sniffed, or cached with
@@ -230,7 +248,8 @@ struct SecurityHeaders: RouterMiddleware {
         response.headers[.cacheControl] = "no-store"
         response.headers[.contentSecurityPolicy] = "default-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
         if let name = HTTPField.Name("X-Frame-Options") { response.headers[name] = "DENY" }
-        if let name = HTTPField.Name("Referrer-Policy") { response.headers[name] = "no-referrer" }
+        // Nothing to other sites. (With no-referrer, browsers post forms with Origin: null.)
+        if let name = HTTPField.Name("Referrer-Policy") { response.headers[name] = "same-origin" }
         if secure { response.headers[.strictTransportSecurity] = "max-age=31536000" }
         return response
     }
@@ -384,6 +403,7 @@ func buildRouter(_ state: ServerState) -> Router<AppContext> {
             response.setCookie(state.cookie(state.sessionCookie, id, maxAge: Int(SessionStore.sessionLifetime)))
             return response
         }
+        if state.local != nil { return localLoginPage(returnTo: returnTo) }
         guard let login = state.login else { throw HTTPError(.internalServerError) }
         let nonce = randomToken(), verifier = randomToken()
         guard let pending = await state.sessions.begin(nonce: nonce, verifier: verifier, returnTo: returnTo) else {
@@ -394,6 +414,37 @@ func buildRouter(_ state: ServerState) -> Router<AppContext> {
         // Ties this sign-in to this browser: the callback must carry the same state in its cookie.
         response.setCookie(state.cookie(state.loginCookie, pending, maxAge: Int(SessionStore.pendingLifetime)))
         return response
+    }
+
+    router.post("login") { request, context -> Response in
+        guard let local = state.local else { throw HTTPError(.notFound) }
+        // Only this site's own form: a sign-in posted from elsewhere is refused.
+        guard postedFromThisSite(request, origin: state.origin) else {
+            state.audit.record("login-failed", user: nil, detail: "form posted from another site (\(request.headers[.origin] ?? "no Origin"))",
+                               from: forwardedFor(request))
+            return localLoginPage(returnTo: "/", message: "That sign-in didn't come from this page. Try again here.", status: .forbidden)
+        }
+        let body = try await request.body.collect(upTo: 8_192)
+        let form = parseForm(String(buffer: body))
+        let returnTo = safeReturnPath(form["return"])
+        let name = String((form["username"] ?? "").prefix(200))
+        switch await local.check(login: name, password: form["password"] ?? "") {
+        case .signedIn(let user):
+            let id = await state.sessions.signIn(user)
+            state.audit.record("login", user: user.login,
+                               detail: "local account, roles: \(user.roles.map(\.rawValue).sorted().joined(separator: ", "))",
+                               from: forwardedFor(request))
+            var response = Response(status: .seeOther, headers: [.location: returnTo])
+            response.setCookie(state.cookie(state.sessionCookie, id, maxAge: Int(SessionStore.sessionLifetime)))
+            return response
+        case .wrong(let reason):
+            state.audit.record("login-failed", user: name.lowercased(), detail: reason, from: forwardedFor(request))
+            return localLoginPage(returnTo: returnTo, message: "Wrong user name or password.", status: .unauthorized)
+        case .throttled:
+            state.audit.record("login-failed", user: name.lowercased(), detail: "too many attempts", from: forwardedFor(request))
+            return localLoginPage(returnTo: returnTo, message: "Too many failed attempts. Wait 15 minutes and try again.",
+                                  status: .tooManyRequests)
+        }
     }
 
     router.get("auth/callback") { request, _ -> Response in
@@ -611,6 +662,7 @@ private let serveUsage = """
 usage: tailscale-acl serve --config <server.json>   run the web service
        tailscale-acl serve --config <server.json> --check   check the config and exit
        --insecure-dev-login   honour the config's devLogin (localhost only; never in production)
+       tailscale-acl hash-password   a bcrypt hash for the config's localUsers
 """
 
 /// `tailscale-acl serve …`; returns the exit code.
@@ -644,16 +696,28 @@ func runServeCommand(_ args: [String], output: (String) -> Void = { print($0) })
             output("warning: \(file) can be read by other accounts on this machine (chmod 600 it)")
         }
         if config.devLogin != nil { output("warning: development login is ON — everyone who can reach this is signed in without Microsoft") }
-        if let host = config.listenAddress?.host, !["127.0.0.1", "localhost", "::1"].contains(host) {
+        if config.tls == nil, let host = config.listenAddress?.host, !["127.0.0.1", "localhost", "::1"].contains(host) {
             output("warning: listening on \(host), not the loopback address — put a TLS proxy in front and firewall the port")
         }
-        let state = try ServerState(config: config)
+        let state = try ServerState(config: config, checkOnly: check)
         if check {
-            output("\(path): ok — \(config.sources.count) tailnet\(config.sources.count == 1 ? "" : "s"), sign-in redirect \(state.origin)/auth/callback")
+            let signIn = config.localUsers.map { "\($0.count) local account\($0.count == 1 ? "" : "s")" }
+                ?? (config.devLogin != nil ? "development login" : "sign-in redirect \(state.origin)/auth/callback")
+            output("\(path): ok — \(config.sources.count) tailnet\(config.sources.count == 1 ? "" : "s"), \(signIn)")
             return 0
         }
         let address = config.listenAddress!
-        let app = Application(router: buildRouter(state), configuration: .init(address: .hostname(address.host, port: address.port)))
+        let configuration = ApplicationConfiguration(address: .hostname(address.host, port: address.port))
+        let app: any ApplicationProtocol
+        if let tls = config.tls {
+            let tlsConfiguration = TLSConfiguration.makeServerConfiguration(
+                certificateChain: try NIOSSLCertificate.fromPEMFile(tls.certificateFile).map { .certificate($0) },
+                privateKey: .privateKey(try NIOSSLPrivateKey(file: tls.keyFile, format: .pem)))
+            app = Application(router: buildRouter(state), server: try .tls(.http1(), tlsConfiguration: tlsConfiguration),
+                              configuration: configuration)
+        } else {
+            app = Application(router: buildRouter(state), configuration: configuration)
+        }
         output("tailscale-acl: serving \(state.origin) on \(address.host):\(address.port)")
         try await app.runService()
         return 0

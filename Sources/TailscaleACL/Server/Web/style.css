@@ -62,6 +62,13 @@ button, input, select { font: inherit; color: inherit; }
 :focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 
+/* Sign-in page (local accounts) */
+.login-page { display: grid; place-items: center; min-height: 100vh; padding: 16px; }
+.login { width: min(340px, 100%); display: flex; flex-direction: column; gap: 12px; padding: 22px; }
+.login .brand { margin-bottom: 4px; }
+.login label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; font-weight: 600; color: var(--muted); }
+.login .banner { margin: 0; }
+
 /* Layout */
 .layout { display: flex; min-height: 100%; }
 .sidebar {
@@ -95,7 +102,7 @@ main[aria-busy="true"] > * { opacity: 0.45; transition: opacity 0.15s 0.1s; }
 }
 
 /* Controls */
-select, input[type="text"], input[type="number"], input[type="search"] {
+select, input[type="text"], input[type="password"], input[type="number"], input[type="search"] {
   background: var(--panel); border: 1px solid var(--border); border-radius: 7px; padding: 6px 9px; min-width: 0;
 }
 button {

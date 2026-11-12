@@ -20,6 +20,7 @@ id tailscale-acl >/dev/null 2>&1 || useradd --system --user-group --no-create-ho
 install -d -m 0750 -o root -g tailscale-acl /etc/tailscale-acl
 install -m 0640 -o root -g tailscale-acl deploy/server.json.example /etc/tailscale-acl/server.json.example
 
+install -m 0755 deploy/tailscale-acl-user /usr/local/sbin/tailscale-acl-user
 install -m 0644 deploy/tailscale-acl.service /etc/systemd/system/tailscale-acl.service
 install -m 0644 deploy/logrotate /etc/logrotate.d/tailscale-acl
 systemctl daemon-reload
