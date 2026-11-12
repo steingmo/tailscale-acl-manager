@@ -42,6 +42,8 @@ let package = Package(
             ],
             path: "Sources/TailscaleACL",
             exclude: app ? ["Server"] : ["Mac"],
+            // The web interface, compiled into the server so it stays one file to deploy.
+            resources: app ? [] : ["index.html", "app.js", "style.css", "favicon.svg"].map { .embedInCode("Server/Web/\($0)") },
             // For the few places where engine code hands over to the app.
             swiftSettings: app ? [.define("MAC_APP")] : [],
             linkerSettings: app ? [

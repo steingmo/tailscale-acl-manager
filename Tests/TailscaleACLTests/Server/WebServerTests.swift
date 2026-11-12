@@ -229,7 +229,7 @@ final class WebServerTests: XCTestCase {
                 XCTAssertEqual(response.headers[.xContentTypeOptions], "nosniff", "security headers on errors too")
             }
             let home = try await client.execute(uri: "/", method: .get)
-            XCTAssertEqual(home.headers[.location], "/login")
+            XCTAssertEqual(home.headers[.location], "/login?return=%2F")
 
             let signedIn = try await self.signIn(client, state, returnTo: "?return=/map")
             XCTAssertEqual(signedIn.status, 302)
@@ -310,6 +310,80 @@ final class WebServerTests: XCTestCase {
         XCTAssertFalse(raw.contains("s3cret") || raw.contains("tskey") || raw.contains("tsacl_session"))
         let mode = try XCTUnwrap(FileManager.default.attributesOfItem(atPath: state.audit.url.path)[.posixPermissions] as? NSNumber)
         XCTAssertEqual(mode.intValue & 0o077, 0, "the audit log is for the server's account only")
+    }
+
+    func testTheWebInterface() async throws {
+        stub()
+        let (app, state) = try app(config())
+        try await app.test(.router) { client in
+            // Signed out, a page sends you to sign in and back to it.
+            let away = try await client.execute(uri: "/s/prod/map?focus=group:eng", method: .get)
+            XCTAssertEqual(away.status, .found)
+            XCTAssertEqual(away.headers[.location], "/login?return=%2Fs%2Fprod%2Fmap%3Ffocus%3Dgroup%3Aeng")
+            let start = try await client.execute(uri: "/login?return=%2Fs%2Fprod%2Fmap%3Ffocus%3Dgroup%3Aeng", method: .get)
+            let authorize = try XCTUnwrap(URLComponents(string: try XCTUnwrap(start.headers[.location])))
+            XCTAssertNotNil(authorize.queryItems?.first { $0.name == "state" })
+
+            // The files hold no data, so they're served to anyone.
+            for (path, type) in [("/app.js", "text/javascript"), ("/style.css", "text/css"), ("/favicon.svg", "image/svg+xml")] {
+                let response = try await client.execute(uri: path, method: .get)
+                XCTAssertEqual(response.status, .ok, path)
+                XCTAssertTrue(response.headers[.contentType]?.hasPrefix(type) == true, path)
+                XCTAssertGreaterThan(response.body.readableBytes, 100, path)
+            }
+
+            let signedIn = try await self.signIn(client, state)
+            let session = try XCTUnwrap(signedIn.cookie)
+            for path in ["/", "/s/prod/map", "/s/prod/policy"] {
+                let page = try await client.execute(uri: path, method: .get, headers: [.cookie: session])
+                XCTAssertEqual(page.status, .ok, path)
+                XCTAssertEqual(page.headers[.contentType], "text/html; charset=utf-8")
+                let html = String(buffer: page.body)
+                XCTAssertTrue(html.contains(#"<script src="/app.js" defer></script>"#))
+                XCTAssertFalse(html.contains("<script>"), "the CSP allows no inline script")
+                XCTAssertTrue(page.headers[.contentSecurityPolicy]?.contains("default-src 'self'") == true)
+            }
+            let missing = try await client.execute(uri: "/s/prod/map/extra", method: .get, headers: [.cookie: session])
+            XCTAssertEqual(missing.status, .notFound)
+
+            func json(_ path: String) async throws -> [String: Any] {
+                let response = try await client.execute(uri: path, method: .get, headers: [.cookie: session])
+                XCTAssertEqual(response.status, .ok, path)
+                return try XCTUnwrap(JSONSerialization.jsonObject(with: Data(buffer: response.body)) as? [String: Any])
+            }
+
+            let entities = try await json("/api/sources/prod/entities")
+            XCTAssertEqual((entities["groups"] as? [[String: Any]])?.map { $0["name"] as? String }, ["group:eng"])
+            XCTAssertEqual((entities["tags"] as? [[String: Any]])?.first?["detail"] as? [String], ["group:eng"])
+            XCTAssertTrue((entities["autogroups"] as? [String] ?? []).contains("autogroup:member"))
+
+            // What group:eng reaches, as on the Mac's Access Map.
+            let reaches = try await json("/api/sources/prod/map?focus=group:eng")
+            XCTAssertEqual((reaches["focus"] as? [String: Any])?["subtitle"] as? String, "1 member")
+            let rule = try XCTUnwrap((reaches["rules"] as? [[String: Any]])?.first)
+            XCTAssertEqual(rule["kind"] as? String, "grant")
+            XCTAssertEqual(rule["badge"] as? String, "TCP:443")
+            XCTAssertEqual(rule["line"] as? Int, 6)
+            XCTAssertEqual(rule["explanation"] as? String, "Everyone in eng can reach devices tagged web on HTTPS.")
+            XCTAssertEqual((reaches["endpoints"] as? [[String: Any]])?.map { $0["name"] as? String }, ["tag:web"])
+            XCTAssertEqual((reaches["endpoints"] as? [[String: Any]])?.first?["subtitle"] as? String, "0 of 1 device online")
+            XCTAssertNotNil(reaches["routes"], "devices are loaded, so exit nodes and subnets are summarised")
+
+            // Who reaches the web server, by device.
+            let reachedBy = try await json("/api/sources/prod/map?focus=node:n2&direction=reachedBy")
+            XCTAssertEqual((reachedBy["focus"] as? [String: Any])?["label"] as? String, "web-1")
+            XCTAssertEqual((reachedBy["endpoints"] as? [[String: Any]])?.compactMap { $0["name"] as? String }.sorted(),
+                           ["group:eng", "group:ghosts"])
+            XCTAssertNil(reachedBy["routes"])
+            let noFocus = try await client.execute(uri: "/api/sources/prod/map", method: .get, headers: [.cookie: session])
+            XCTAssertEqual(noFocus.status, .badRequest)
+
+            // Problems include the device checks the Mac app runs once devices are loaded.
+            let problems = try await json("/api/sources/prod/problems")
+            let titles = (problems["problems"] as? [[String: Any]] ?? []).compactMap { $0["title"] as? String }
+            XCTAssertTrue(titles.contains("Undefined group"))
+            XCTAssertTrue(titles.contains("Rule matches no device"), "\(titles)")
+        }
     }
 
     func testWhoIsKeptOut() async throws {

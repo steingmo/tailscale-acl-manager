@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tailscale ACL</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/style.css">
+<script src="/app.js" defer></script>
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar">
+    <div class="brand"><img src="/favicon.svg" alt="" width="22" height="22"><span>Tailscale ACL</span></div>
+    <label class="source-picker"><span class="sr-only">Tailnet</span><select id="source" aria-label="Tailnet"></select></label>
+    <nav id="nav" aria-label="Views"></nav>
+    <div class="account">
+      <div id="me" class="me"></div>
+      <form method="post" action="/logout"><button type="submit" class="link">Sign out</button></form>
+    </div>
+  </aside>
+  <main id="main" tabindex="-1"><p class="loading">Loading…</p></main>
+</div>
+</body>
+</html>

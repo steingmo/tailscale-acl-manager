@@ -4,7 +4,7 @@ name: Linux engine
 # Mac app (everything in a Mac/ folder is left out — see Package.swift).
 on:
   push:
-    branches: [main]
+    branches: [main, web-ui]
   pull_request:
 
 jobs:

@@ -1,11 +1,13 @@
-# Web service (in progress)
+# Web service
 
 `tailscale-acl serve` is a read-only web service for colleagues on any
-platform: they sign in with Microsoft and can read a tailnet's policy, its
-problems and devices, and simulate access. It never changes a policy —
-editing and pushing stay in the Mac app. The web interface itself is the
-next step; today the service has the sign-in, the roles, the API, and the
-audit log.
+platform: they sign in with Microsoft and see a tailnet's Access Map, run the
+Simulator, and read its problems, policy, and devices. It never changes a
+policy — editing and pushing stay in the Mac app.
+
+Every view has its own address (`/s/<tailnet>/map?focus=group:eng`,
+`/s/<tailnet>/simulate?src=…&dst=…&port=443`, `/s/<tailnet>/policy?line=23`),
+so a link to a finding or a simulation can be sent to a colleague.
 
 It is built on Linux (or on a Mac with `TAILSCALE_ACL_ENGINE=1`); the Mac app
 does not contain it.
@@ -87,6 +89,8 @@ Core (§3.1.3.7) permits relying on TLS instead. See `EntraLogin.validate`.
 | `GET /api/sources/{id}/problems` | lint and security findings, with lines |
 | `GET /api/sources/{id}/devices` | devices |
 | `GET /api/sources/{id}/simulate?src=&dst=&port=&proto=` | whether src reaches dst, and through which rules; `node:<device id>` picks a device |
+| `GET /api/sources/{id}/map?focus=&direction=reaches\|reachedBy` | the Access Map for one entity or `node:<device id>` |
+| `GET /api/sources/{id}/entities` | users, groups, tags, hosts, IP sets, autogroups — for pickers |
 
 A tailnet's policy and devices are read at most once a minute.
 
@@ -106,3 +110,18 @@ API request with who made it. No secrets or tokens.
 
 `devLogin` signs everyone in without Microsoft. It is refused unless the
 address is localhost **and** `--insecure-dev-login` is given.
+
+To work on the interface without a tailnet, `scripts/fake_headscale.py`
+serves a policy file and a few devices as a Headscale server would; point a
+source at it:
+
+```sh
+python3 scripts/fake_headscale.py 18475 my-policy.hujson &
+# source: {"id": "lab", "name": "Lab", "kind": "headscale",
+#          "serverURL": "http://127.0.0.1:18475", "credential": "unused"}
+TAILSCALE_ACL_ENGINE=1 swift run TailscaleACL serve --config dev.json --insecure-dev-login
+```
+
+The interface is `Sources/TailscaleACL/Server/Web/` — plain HTML, CSS, and
+JavaScript with no build step and no outside code, compiled into the binary.
+Rebuild to see a change.

@@ -75,6 +75,8 @@ actor PolicySource {
         var model: PolicyModel?
         var parseError: HuJSONError?
         var nodes: [HeadscaleNode]
+        /// Everyone the server knows, for the "not a user" check; nil when it couldn't be listed.
+        var logins: Set<String>?
         var fetched: Date
         /// Why this is older than it should be, when the last refresh failed.
         var stale: String?
@@ -116,7 +118,7 @@ actor PolicySource {
         let (text, nodes) = try await (policy, devices)
         // Role autogroups (autogroup:admin…) come from the user list; without the scope they just don't match.
         let users = try? await client.serverUsers()
-        var snapshot = Snapshot(text: text, nodes: nodes, fetched: Date())
+        var snapshot = Snapshot(text: text, nodes: nodes, logins: users?.logins, fetched: Date())
         do {
             let tree = try HuJSONParser.parse(text)
             var model = PolicyModel(tree: tree)
@@ -273,9 +275,54 @@ struct PolicyReply: ResponseEncodable {
 struct ProblemsReply: ResponseEncodable {
     struct Problem: Encodable { var severity: String; var title: String; var detail: String; var line: Int?; var security: Bool }
     var problems: [Problem]
+    var stale: String?
+}
+
+/// Names for the pickers, with what each one is.
+struct EntitiesReply: ResponseEncodable {
+    struct Named: Encodable { var name: String; var detail: [String] }
+    var users: [String]
+    var groups: [Named]
+    var tags: [Named]
+    var hosts: [Named]
+    var ipsets: [Named]
+    var autogroups: [String]
+}
+
+/// The Access Map for one entity: the rules that apply to it, and what they
+/// reach (or, reached by, who they let in).
+struct MapReply: ResponseEncodable {
+    struct Entity: Encodable { var name: String; var label: String; var subtitle: String }
+    struct Rule: Encodable {
+        var id: String
+        var kind: String
+        var index: Int
+        var name: String
+        var badge: String
+        var sources: [String]
+        var destinations: [String]
+        var notes: [String]
+        var explanation: String?
+        var line: Int?
+    }
+    struct Routes: Encodable {
+        struct Subnet: Encodable { var route: String; var routers: [String] }
+        var exitNode: Bool
+        var exitVia: [String]
+        var exitNodes: [String]
+        var subnets: [Subnet]
+    }
+    var focus: Entity
+    var direction: String
+    var rules: [Rule]
+    /// The far column, in order: what the rules reach, or who they let in.
+    var endpoints: [Entity]
+    var routes: Routes?
+    var stale: String?
 }
 
 struct DevicesReply: ResponseEncodable {
+    var stale: String?
     struct Device: Encodable {
         var id: String
         var name: String
@@ -299,11 +346,13 @@ struct SimulateReply: ResponseEncodable {
         var posture: [String]
         var via: [String]
         var explanation: String?
+        var line: Int?
     }
     var allowed: Bool
     /// Allowed only if the source device meets a posture.
     var conditional: Bool
     var rules: [Rule]
+    var stale: String?
 }
 
 // MARK: - Routes
@@ -313,14 +362,6 @@ func buildRouter(_ state: ServerState) -> Router<AppContext> {
     router.add(middleware: SecurityHeaders(secure: state.secure))
 
     router.get("healthz") { _, _ in "ok" }
-
-    router.get("/") { request, _ -> Response in
-        guard let user = await state.user(for: request) else { return Response(status: .found, headers: [.location: "/login"]) }
-        // The web interface comes with the next step; until then this shows that signing in works.
-        let roles = user.roles.map(\.rawValue).sorted().joined(separator: ", ")
-        return Response(status: .ok, headers: [.contentType: "text/plain; charset=utf-8"],
-                        body: .init(byteBuffer: .init(string: "Signed in as \(user.login) (\(roles)).\nAPI: /api/me, /api/sources\n")))
-    }
 
     router.get("login") { request, _ -> Response in
         let returnTo = safeReturnPath(request.uri.queryParameters.get("return"))
@@ -433,15 +474,17 @@ func buildRouter(_ state: ServerState) -> Router<AppContext> {
     api.get("sources/:source/problems") { _, context -> ProblemsReply in
         let s = try await snapshot(context)
         let m = try model(s)
-        return ProblemsReply(problems: lintPolicy(m).map { issue in
+        // The same checks as the app's Problems screen with devices loaded.
+        let issues = lintPolicy(m) + lintNodes(m, nodes: s.nodes) + lintUsers(m, logins: s.logins)
+        return ProblemsReply(problems: issues.map { issue in
             .init(severity: issue.severity == .error ? "error" : "warning", title: issue.title, detail: issue.detail,
                   line: issue.line ?? issue.path.flatMap { s.tree?.line(at: $0) }, security: issue.security)
-        })
+        }, stale: s.stale)
     }
 
     api.get("sources/:source/devices") { _, context -> DevicesReply in
         let s = try await snapshot(context)
-        return DevicesReply(devices: s.nodes.map { n in
+        return DevicesReply(stale: s.stale, devices: s.nodes.map { n in
             .init(id: n.id, name: n.displayName, user: n.user?.email ?? n.user?.name, tags: n.allTags,
                   addresses: n.ipAddresses ?? [], online: n.online == true, lastSeen: n.lastSeenDate)
         })
@@ -478,11 +521,76 @@ func buildRouter(_ state: ServerState) -> Router<AppContext> {
             let kind: RuleSummary.Kind = match.kind == .grant ? .grant : .acl
             return .init(kind: match.kind == .grant ? "grant" : "acl", index: match.ruleIndex, src: match.srcSpec, dst: match.dstSpec,
                          ports: match.ipSpec, posture: match.posture, via: match.via,
-                         explanation: ruleExplanation(m, kind: kind, index: match.ruleIndex))
-        })
+                         explanation: ruleExplanation(m, kind: kind, index: match.ruleIndex),
+                         line: s.tree?.line(at: "\(match.kind == .grant ? "grants" : "acls")[\(match.ruleIndex)]"))
+        }, stale: s.stale)
     }
 
+    api.get("sources/:source/entities") { _, context -> EntitiesReply in
+        let m = try model(try await snapshot(context))
+        return EntitiesReply(
+            users: m.allUsers,
+            groups: m.groupOrder.map { .init(name: $0, detail: m.groups[$0] ?? []) },
+            tags: m.tagOrder.map { .init(name: $0, detail: m.tagOwners[$0] ?? []) },
+            hosts: m.hostOrder.map { .init(name: $0, detail: [m.hosts[$0] ?? ""]) },
+            ipsets: m.ipsetOrder.map { .init(name: $0, detail: m.ipsets[$0] ?? []) },
+            autogroups: EditorVocabulary.autogroups.map(\.0))
+    }
+
+    // ?focus=<policy name, or node:<device id>>&direction=reaches|reachedBy
+    api.get("sources/:source/map") { request, context -> MapReply in
+        let s = try await snapshot(context)
+        let m = try model(s)
+        let query = request.uri.queryParameters
+        guard let focus = query.get("focus"), !focus.isEmpty, focus.count <= 256 else { throw HTTPError(.badRequest, message: "Give focus.") }
+        let reaches = query.get("direction") != "reachedBy"
+        var ids = [focus], label = focus, subtitle = entitySubtitle(focus, model: m, nodes: s.nodes)
+        if focus.hasPrefix("node:") {
+            guard let node = s.nodes.first(where: { $0.id == focus.dropFirst(5) }) else { throw HTTPError(.badRequest, message: "No device \(focus).") }
+            ids = node.identities
+            label = node.displayName
+            subtitle = ([node.online == true ? "online" : "offline"] + node.allTags + [node.user?.email ?? node.user?.name].compactMap { $0 })
+                .joined(separator: " · ")
+        }
+        let summaries = reaches ? ruleSummaries(m, sourceIDs: ids) : ruleSummaries(m, sourceIDs: nil, destIDs: ids)
+        let far = summaries.flatMap { reaches ? $0.destinations : $0.sources }.uniqued()
+        var routes: MapReply.Routes?
+        if reaches, !s.nodes.isEmpty {
+            let r = routeAccess(m, sourceIDs: ids, nodes: s.nodes)
+            routes = .init(exitNode: r.exitNode, exitVia: r.exitVia, exitNodes: r.exitNodes,
+                           subnets: r.subnets.map { .init(route: $0.route, routers: $0.routers) })
+        }
+        return MapReply(
+            focus: .init(name: focus, label: label, subtitle: subtitle),
+            direction: reaches ? "reaches" : "reachedBy",
+            rules: summaries.map { r in
+                .init(id: r.id, kind: "\(r.kind)", index: r.index, name: r.name, badge: r.badge, sources: r.sources,
+                      destinations: r.destinations, notes: r.notes, explanation: ruleExplanation(m, kind: r.kind, index: r.index),
+                      line: s.tree?.line(at: "\(r.section)[\(r.index)]"))
+            },
+            endpoints: far.map { .init(name: $0, label: $0, subtitle: entitySubtitle($0, model: m, nodes: s.nodes)) },
+            routes: routes, stale: s.stale)
+    }
+
+    // The web interface: the page for signed-in people, the files for everyone (they hold no data).
+    @Sendable func page(_ request: Request) async -> Response {
+        guard await state.user(for: request) != nil else {
+            let back = safeReturnPath(request.uri.string)
+            return Response(status: .found, headers: [.location: "/login?return=" + (back.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? "/")])
+        }
+        return asset(PackageResources.index_html, "text/html; charset=utf-8")
+    }
+    router.get("/") { request, _ in await page(request) }
+    router.get("s/:source/:view") { request, _ in await page(request) }
+    router.get("app.js") { _, _ in asset(PackageResources.app_js, "text/javascript; charset=utf-8") }
+    router.get("style.css") { _, _ in asset(PackageResources.style_css, "text/css; charset=utf-8") }
+    router.get("favicon.svg") { _, _ in asset(PackageResources.favicon_svg, "image/svg+xml") }
+
     return router
+}
+
+private func asset(_ bytes: [UInt8], _ type: String) -> Response {
+    Response(status: .ok, headers: [.contentType: type], body: .init(byteBuffer: .init(bytes: bytes)))
 }
 
 // MARK: - Command

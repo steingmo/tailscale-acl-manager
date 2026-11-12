@@ -683,24 +683,8 @@ struct AccessMapScreen: View {
 
 
     private func destSubtitle(_ name: String) -> String {
-        let m = store.model
-        if name == "*" { return "everything" }
-        if name == "autogroup:internet" { return "internet via exit node" }
-        if name == "autogroup:self" { return "the user's own devices" }
-        if let ip = m.hosts[name] { return ip }
-        if let set = m.ipsets[name] { return "\(set.count) entr\(set.count == 1 ? "y" : "ies") — hover to list" }
-        if let members = m.groups[name] { return "\(members.count) member\(members.count == 1 ? "" : "s")" }
-        if !store.headscaleNodes.isEmpty, name.hasPrefix("tag:") || name.contains("@") {
-            let ev = store.evaluator
-            let matching = store.headscaleNodes.filter { n in
-                n.identities.contains { ev.targetMatches(target: name, destID: $0) }
-            }
-            let online = matching.filter { $0.online == true }.count
-            return matching.isEmpty ? "no devices" : "\(online) of \(matching.count) device\(matching.count == 1 ? "" : "s") online"
-        }
-        if name.hasPrefix("tag:") { return "tag" }
-        if name.hasPrefix("autogroup:") { return "autogroup" }
-        return isAddressLike(name) ? "address" : "user"
+        let text = entitySubtitle(name, model: store.model, nodes: store.headscaleNodes)
+        return store.model.ipsets[name] != nil ? text + " — hover to list" : text
     }
 
     private func iconSquare(_ icon: String, color: Color) -> some View {

@@ -48,8 +48,17 @@ Swift Package (no Xcode project), one module, two layers:
   `roles(for:)` from app roles/group IDs, in-memory `SessionStore`),
   `WebServer.swift` (`buildRouter`: `/login`, `/auth/callback`, `/logout`,
   `/api/*` behind `RequireRole`; `PolicySource` caches a tailnet for a
-  minute; `AuditLog` → `<dataDir>/audit.jsonl`; `SecurityHeaders`). It must
-  never get a route that changes a policy. Tests drive it in-process
+  minute; `AuditLog` → `<dataDir>/audit.jsonl`; `SecurityHeaders`), and
+  `/s/<tailnet>/<view>` pages. It must never get a route that changes a
+  policy. The interface is `Server/Web/` (index.html, app.js, style.css,
+  favicon.svg): no build step, no libraries, embedded with SwiftPM's
+  `.embedInCode` (`PackageResources.app_js`…). The CSP allows no inline
+  script or style attribute (set `el.style.x` from JS), and app.js puts all
+  server data into the page through `h()`/text nodes — never `innerHTML`.
+  Views: map (`/api/…/map`, built on `ruleSummaries`/`routeAccess`/
+  `entitySubtitle`, like the Mac Access Map), simulate, problems (with
+  `lintNodes`/`lintUsers` like the app), policy, devices. Check UI changes
+  in the browser with the dev login and `scripts/fake_headscale.py`. Tests drive it in-process
   (`HummingbirdTesting`) with Microsoft and the tailnet stubbed by
   `StubProtocol`.
 

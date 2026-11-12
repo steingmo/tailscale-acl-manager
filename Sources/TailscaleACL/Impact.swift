@@ -251,6 +251,26 @@ func ruleSummaries(_ m: PolicyModel, sourceIDs: [String]?, destIDs: [String]? = 
     return out
 }
 
+/// One line under an entity on the access map: what it is, or how many of
+/// its devices are online.
+func entitySubtitle(_ name: String, model m: PolicyModel, nodes: [HeadscaleNode]) -> String {
+    if name == "*" { return "everything" }
+    if name == "autogroup:internet" { return "internet via exit node" }
+    if name == "autogroup:self" { return "the user's own devices" }
+    if let ip = m.hosts[name] { return ip }
+    if let set = m.ipsets[name] { return "\(set.count) entr\(set.count == 1 ? "y" : "ies")" }
+    if let members = m.groups[name] { return "\(members.count) member\(members.count == 1 ? "" : "s")" }
+    if !nodes.isEmpty, name.hasPrefix("tag:") || name.contains("@") {
+        let ev = Evaluator(model: m)
+        let matching = nodes.filter { n in n.identities.contains { ev.targetMatches(target: name, destID: $0) } }
+        let online = matching.filter { $0.online == true }.count
+        return matching.isEmpty ? "no devices" : "\(online) of \(matching.count) device\(matching.count == 1 ? "" : "s") online"
+    }
+    if name.hasPrefix("tag:") { return "tag" }
+    if name.hasPrefix("autogroup:") { return "autogroup" }
+    return isAddressLike(name) ? "address" : "user"
+}
+
 // MARK: - Exit nodes and subnet routes
 
 /// What a source can do with the tailnet's routers: use exit nodes (and
