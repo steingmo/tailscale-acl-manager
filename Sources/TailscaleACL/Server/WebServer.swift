@@ -113,9 +113,16 @@ actor PolicySource {
     }
 
     private static func fetch(_ client: PolicyServer) async throws -> Snapshot {
-        async let policy = client.getPolicy()
-        async let devices = client.listNodes()
-        let (text, nodes) = try await (policy, devices)
+        // Both requests run to the end before either error is thrown: with
+        // `try await (a, b)` a failure cancels the other request, and on Linux
+        // cancelling a URLSession request can hang the caller for good.
+        func outcome<T>(_ work: () async throws -> T) async -> Result<T, Error> {
+            do { return .success(try await work()) } catch { return .failure(error) }
+        }
+        async let policy = outcome { try await client.getPolicy() }
+        async let devices = outcome { try await client.listNodes() }
+        let (policyResult, devicesResult) = await (policy, devices)
+        let text = try policyResult.get(), nodes = try devicesResult.get()
         // Role autogroups (autogroup:admin…) come from the user list; without the scope they just don't match.
         let users = try? await client.serverUsers()
         var snapshot = Snapshot(text: text, nodes: nodes, logins: users?.logins, fetched: Date())
