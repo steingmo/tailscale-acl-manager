@@ -556,8 +556,10 @@ final class WebServerTests: XCTestCase {
             XCTAssertEqual(ok.headers[.location], "/s/prod/map")
             let session = try XCTUnwrap(self.cookie(ok, state.sessionCookie))
             let me = try await client.execute(uri: "/api/me", method: .get, headers: [.cookie: "\(state.sessionCookie)=\(session)"])
-            XCTAssertEqual(try JSONSerialization.jsonObject(with: Data(buffer: me.body)) as? [String: AnyHashable],
-                           ["login": "anna", "name": "Anna", "roles": ["approver", "viewer"]])
+            let who = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(buffer: me.body)) as? [String: Any])
+            XCTAssertEqual(who["login"] as? String, "anna")
+            XCTAssertEqual(who["name"] as? String, "Anna")
+            XCTAssertEqual(who["roles"] as? [String], ["approver", "viewer"])
 
             // Five wrong passwords for bo, then even the right one is refused for a while.
             for _ in 0..<LocalLogin.perAccount.attempts { _ = try await post(client, "username=bo&password=guess") }
