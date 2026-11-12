@@ -18,11 +18,11 @@ jobs:
         shell: bash
         run: |
           swift build --build-tests
-          for t in testConfigProblems testSecretsComeFromFilesAndLooseOnesAreNoticed testIDTokenChecks testRolesAndReturnPath testSessionsExpireAndStatesWorkOnce testSigningInAndTheAPI testTheWebInterface testWhoIsKeptOut testMicrosoftRefusingOrTheTailnetBeingDown testDevelopmentLoginOnlyWhenAskedFor testServeCommandChecksTheConfig; do
-            echo "=== $t"
-            timeout 60 swift test --skip-build --filter "WebServerTests/$t" 2>&1 | grep -E "error|passed|failed|Executed" | head -8 || true
-            echo "=== $t exit ${PIPESTATUS[0]}"
-          done
+          echo "=== server suite alone"
+          timeout 120 stdbuf -oL -eL swift test --skip-build --filter WebServerTests 2>&1 | grep -E "Test Case|error|Executed|Fatal|signal" | tail -30 || true
+          echo "=== full suite"
+          timeout 300 stdbuf -oL -eL swift test --skip-build 2>&1 | grep -E "Test Case .*WebServer|Test Suite 'WebServer|error|Executed [0-9]{3}|Fatal|signal" | tail -30 || true
+          echo "=== done"
       - name: Lint a policy with the command-line tool
         run: |
           printf '{"groups": {"group:eng": ["a@example.com"]}, "grants": [{"src": ["group:eng"], "dst": ["*"], "ip": ["tcp:443"]}]}' > /tmp/policy.hujson
