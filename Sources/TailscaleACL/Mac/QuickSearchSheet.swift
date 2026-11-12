@@ -6,52 +6,6 @@ enum SearchResult {
     case line(Int)        // show the Policy Editor at this line
 }
 
-/// Everything in a policy that covers an IP address: hosts, IP sets, rules
-/// (other than through "*"), tests, and devices with that address, each with
-/// its policy path for jumping to the line.
-struct IPLookupHit: Identifiable {
-    var title: String
-    var detail: String
-    var path: String?
-    var deviceID: String?
-    var id: String { "\(title)|\(detail)" }
-}
-
-func ipLookup(_ ip: String, _ m: PolicyModel, nodes: [HeadscaleNode] = []) -> [IPLookupHit] {
-    let ev = Evaluator(model: m)
-    var hits: [IPLookupHit] = []
-    for h in m.hostOrder where cidrContains(cidr: m.hosts[h] ?? "", ip: ip) {
-        hits.append(.init(title: h, detail: "host = \(m.hosts[h] ?? "")", path: "hosts[\(h)]"))
-    }
-    for s in m.ipsetOrder where ev.ipsetContains(s, ip: ip) {
-        hits.append(.init(title: s, detail: "IP set contains \(ip)", path: "ipsets[\(s)]"))
-    }
-    for r in ruleSummaries(m, sourceIDs: nil) {
-        let to = r.destinations.filter { $0 != "*" && ev.targetMatches(target: $0, destID: ip) }
-        let from = r.sources.filter { $0 != "*" && ev.sourceMatches(spec: $0, sourceID: ip) }
-        guard !to.isEmpty || !from.isEmpty else { continue }
-        let how = (to.isEmpty ? [] : ["reaches it via \(to.joined(separator: ", "))"])
-            + (from.isEmpty ? [] : ["it is a source via \(from.joined(separator: ", "))"])
-        hits.append(.init(title: r.name, detail: "\(r.section) · \(r.badge) · " + how.joined(separator: "; "),
-                          path: "\(r.section)[\(r.index)]"))
-    }
-    for t in m.tests {
-        let entries = (t.accept + t.deny).filter { e in
-            let target = DestSpec(e).target
-            return target != "*" && ev.targetMatches(target: target, destID: ip)
-        }
-        if !entries.isEmpty || ev.sourceMatches(spec: t.src, sourceID: ip) && t.src != "*" {
-            hits.append(.init(title: "Test #\(t.index + 1) (\(t.src))",
-                              detail: entries.isEmpty ? "source covers it" : entries.joined(separator: ", "),
-                              path: "tests[\(t.index)]"))
-        }
-    }
-    for n in nodes where (n.ipAddresses ?? []).contains(ip) {
-        hits.append(.init(title: n.displayName, detail: "device · \(n.policyName ?? "")", deviceID: n.id))
-    }
-    return hits
-}
-
 /// ⌘K: find any group, tag, user, host, IP set, device, or rule.
 struct QuickSearchSheet: View {
     var onPick: (SearchResult) -> Void

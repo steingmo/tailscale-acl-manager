@@ -205,6 +205,26 @@ final class ServerState: Sendable {
     }
 }
 
+extension ServerState {
+    /// The tailnet named in the route's `:source`, read (or cached).
+    func snapshot(_ context: AppContext) async throws -> PolicySource.Snapshot {
+        let id = try context.parameters.require("source")
+        guard let source = sources.first(where: { $0.config.id == id }) else { throw HTTPError(.notFound, message: "No such tailnet.") }
+        do {
+            return try await source.snapshot()
+        } catch {
+            // What the control server said is for the operator's log, not for every viewer.
+            context.logger.error("source \(id): \(error.localizedDescription)")
+            throw HTTPError(.badGateway, message: "The tailnet's server couldn't be read.")
+        }
+    }
+}
+
+func requireModel(_ snapshot: PolicySource.Snapshot) throws -> PolicyModel {
+    guard let model = snapshot.model else { throw HTTPError(.conflict, message: "The policy on the server has a syntax error.") }
+    return model
+}
+
 struct AppContext: RequestContext {
     var coreContext: CoreRequestContextStorage
     var user: SignedInUser?
@@ -511,22 +531,8 @@ func buildRouter(_ state: ServerState) -> Router<AppContext> {
         SourcesReply(sources: state.sources.map { .init(id: $0.config.id, name: $0.config.name, kind: $0.config.kind.rawValue) })
     }
 
-    @Sendable func snapshot(_ context: AppContext) async throws -> PolicySource.Snapshot {
-        let id = try context.parameters.require("source")
-        guard let source = state.sources.first(where: { $0.config.id == id }) else { throw HTTPError(.notFound, message: "No such tailnet.") }
-        do {
-            return try await source.snapshot()
-        } catch {
-            // What the control server said is for the audit trail of the operator, not for every viewer.
-            context.logger.error("source \(id): \(error.localizedDescription)")
-            throw HTTPError(.badGateway, message: "The tailnet's server couldn't be read.")
-        }
-    }
-
-    @Sendable func model(_ snapshot: PolicySource.Snapshot) throws -> PolicyModel {
-        guard let model = snapshot.model else { throw HTTPError(.conflict, message: "The policy on the server has a syntax error.") }
-        return model
-    }
+    @Sendable func snapshot(_ context: AppContext) async throws -> PolicySource.Snapshot { try await state.snapshot(context) }
+    @Sendable func model(_ snapshot: PolicySource.Snapshot) throws -> PolicyModel { try requireModel(snapshot) }
 
     api.get("sources/:source/policy") { _, context -> PolicyReply in
         let s = try await snapshot(context)
@@ -634,6 +640,8 @@ func buildRouter(_ state: ServerState) -> Router<AppContext> {
             endpoints: far.map { .init(name: $0, label: $0, subtitle: entitySubtitle($0, model: m, nodes: s.nodes)) },
             routes: routes, stale: s.stale)
     }
+
+    addViewRoutes(to: api, state: state)
 
     // The web interface: the page for signed-in people, the files for everyone (they hold no data).
     @Sendable func page(_ request: Request) async -> Response {

@@ -1,9 +1,11 @@
 # Web service
 
 `tailscale-acl serve` is a read-only web service for colleagues on any
-platform: they sign in with Microsoft and see a tailnet's Access Map, run the
-Simulator, and read its problems, policy, and devices. It never changes a
-policy — editing and pushing stay in the Mac app.
+platform: they sign in and see a tailnet's Access Map and Visual Builder,
+run the Simulator, and read its SSH rules, routes, problems, tests, policy,
+and devices, with ⌘K (Ctrl K) search across all of it, IP addresses
+included. It never changes a policy — editing and pushing stay in the Mac
+app.
 
 Every view has its own address (`/s/<tailnet>/map?focus=group:eng`,
 `/s/<tailnet>/simulate?src=…&dst=…&port=443`, `/s/<tailnet>/policy?line=23`),
@@ -162,6 +164,11 @@ Core (§3.1.3.7) permits relying on TLS instead. See `EntraLogin.validate`.
 | `GET /api/sources/{id}/simulate?src=&dst=&port=&proto=` | whether src reaches dst, and through which rules; `node:<device id>` picks a device |
 | `GET /api/sources/{id}/map?focus=&direction=reaches\|reachedBy` | the Access Map for one entity or `node:<device id>` |
 | `GET /api/sources/{id}/entities` | users, groups, tags, hosts, IP sets, autogroups — for pickers |
+| `GET /api/sources/{id}/search-index` | everything ⌘K finds; `…/ip-lookup?ip=` what covers an address |
+| `GET /api/sources/{id}/ssh` | SSH rules with their explanations |
+| `GET /api/sources/{id}/tests` | the policy's tests and SSH tests, run, with why failures fail |
+| `GET /api/sources/{id}/routes` | auto-approvers, routed grants, node attributes, advertised routes |
+| `GET /api/sources/{id}/connections` | the Visual Builder's lines and rules |
 
 A tailnet's policy and devices are read at most once a minute.
 

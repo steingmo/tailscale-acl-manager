@@ -13,6 +13,7 @@
   <aside class="sidebar">
     <div class="brand"><img src="/favicon.svg" alt="" width="22" height="22"><span>Tailscale ACL</span></div>
     <label class="source-picker"><span class="sr-only">Tailnet</span><select id="source" aria-label="Tailnet"></select></label>
+    <button type="button" id="search-button" class="search-button"><span>Search</span><kbd>⌘K</kbd></button>
     <nav id="nav" aria-label="Views"></nav>
     <div class="account">
       <div id="me" class="me"></div>
@@ -21,5 +22,9 @@
   </aside>
   <main id="main" tabindex="-1"><p class="loading">Loading…</p></main>
 </div>
+<dialog id="search" aria-label="Search">
+  <input type="search" placeholder="Search groups, tags, users, devices, rules, or an IP…" aria-label="Search" autocomplete="off" spellcheck="false">
+  <ul role="listbox"></ul>
+</dialog>
 </body>
 </html>

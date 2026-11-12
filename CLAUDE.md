@@ -60,8 +60,14 @@ Swift Package (no Xcode project), one module, two layers:
   script or style attribute (set `el.style.x` from JS), and app.js puts all
   server data into the page through `h()`/text nodes — never `innerHTML`.
   Views: map (`/api/…/map`, built on `ruleSummaries`/`routeAccess`/
-  `entitySubtitle`, like the Mac Access Map), simulate, problems (with
-  `lintNodes`/`lintUsers` like the app), policy, devices. Check UI changes
+  `entitySubtitle`, like the Mac Access Map), builder (view-only Visual
+  Builder: `/connections`, ordered in JS like the Mac's), simulate, ssh,
+  routes, problems (with `lintNodes`/`lintUsers` like the app), tests,
+  policy, devices; ⌘K search (`/search-index`, `/ip-lookup` →
+  `ipLookup`, now in Impact.swift). The extra endpoints are in
+  `Server/ViewRoutes.swift`; `ServerState.snapshot(_:)`/`requireModel`
+  give any route its tailnet. In app.js use `fill()` (or `h()`), not
+  `replaceChildren` with lists or nulls. Check UI changes
   in the browser with the dev login and `scripts/fake_headscale.py`.
   Deployment: `deploy/install.sh` (builds with `--static-swift-stdlib`,
   installs the binary, account, `/etc/tailscale-acl`, the hardened systemd

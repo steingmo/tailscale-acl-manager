@@ -5,11 +5,15 @@
 "use strict";
 
 const VIEWS = [
-  { id: "map", label: "Access Map", icon: "map" },
-  { id: "simulate", label: "Simulator", icon: "play" },
-  { id: "problems", label: "Problems", icon: "warn" },
-  { id: "policy", label: "Policy", icon: "doc" },
-  { id: "devices", label: "Devices", icon: "device" },
+  { id: "map", label: "Access Map", icon: "map", group: "See" },
+  { id: "builder", label: "Visual Builder", icon: "builder", group: "See" },
+  { id: "simulate", label: "Simulator", icon: "play", group: "See" },
+  { id: "ssh", label: "SSH", icon: "terminal", group: "See" },
+  { id: "routes", label: "Routes", icon: "routes", group: "See" },
+  { id: "problems", label: "Problems", icon: "warn", group: "Check" },
+  { id: "tests", label: "Tests", icon: "check", group: "Check" },
+  { id: "policy", label: "Policy", icon: "doc", group: "Tailnet" },
+  { id: "devices", label: "Devices", icon: "device", group: "Tailnet" },
 ];
 
 // Stroke icons, 24×24.
@@ -31,6 +35,10 @@ const ICONS = {
   clock: "M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM12 7v5l3 2",
   arrowR: "M5 12h14M13 6l6 6-6 6",
   arrowL: "M19 12H5M11 6l-6 6 6 6",
+  builder: "M6 6a2 2 0 1 0 0 .01M6 18a2 2 0 1 0 0 .01M18 12a2 2 0 1 0 0 .01M8 6c5 0 5 6 8 6M8 18c5 0 5-6 8-6",
+  terminal: "M4 5h16v14H4zM8 10l3 2-3 2M13 15h3",
+  routes: "M7 21V12a5 5 0 0 1 5-5h5M14 4l3 3-3 3M7 12V3",
+  search: "M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14zM20 20l-4-4",
 };
 
 // MARK: - Helpers
@@ -48,6 +56,11 @@ function h(tag, attrs, ...kids) {
     el.append(kid instanceof Node ? kid : String(kid));
   }
   return el;
+}
+
+/// replaceChildren with h()'s rules: nested lists flattened, null and false skipped.
+function fill(el, ...kids) {
+  el.replaceChildren(...kids.flat(Infinity).filter((k) => k != null && k !== false));
 }
 
 function icon(name, cls) {
@@ -115,7 +128,7 @@ async function api(path) {
 
 // MARK: - State and routing
 
-const state = { me: null, sources: [], problemCount: {} };
+const state = { me: null, sources: [], problemCount: {}, failingTests: {} };
 let renderToken = 0;
 
 function route() {
@@ -158,6 +171,10 @@ async function start() {
   const select = document.getElementById("source");
   select.replaceChildren(...state.sources.map((s) => h("option", { value: s.id }, s.name)));
   select.addEventListener("change", () => go(href(select.value, route().view || "map")));
+  document.getElementById("search-button").addEventListener("click", openSearch);
+  // ⌘K on a Mac, Ctrl+K elsewhere.
+  document.querySelector("#search-button kbd").textContent = /Mac|iPhone|iPad/.test(navigator.platform) ? "⌘K" : "Ctrl K";
+  document.getElementById("search").addEventListener("click", (event) => { if (event.target.id === "search") event.target.close(); });
   if (state.sources.length < 2) select.closest("label").hidden = true;
   render();
 }
@@ -169,13 +186,25 @@ function showFatal(error) {
 
 function renderNav(source, view) {
   const nav = document.getElementById("nav");
-  nav.replaceChildren(...VIEWS.map((v) => {
-    const count = v.id === "problems" ? state.problemCount[source] : undefined;
-    return h("a", { href: href(source, v.id), "aria-current": v.id === view ? "page" : null },
-      icon(v.icon), v.label,
-      count === undefined ? null
-        : count === 0 ? h("span", { class: "badge c-green", title: "No problems" }, "✓")
-        : h("span", { class: "badge c-orange" }, count));
+  const badge = (v) => {
+    if (v.id === "problems") {
+      const n = state.problemCount[source];
+      return n === undefined ? null : n === 0 ? h("span", { class: "badge c-green", title: "No problems" }, "✓")
+        : h("span", { class: "badge c-orange" }, n);
+    }
+    if (v.id === "tests") {
+      const t = state.failingTests[source];
+      return !t || !t.total ? null : t.failing === 0 ? h("span", { class: "badge c-green", title: `All ${t.total} tests pass` }, "✓")
+        : h("span", { class: "badge c-red", title: `${t.failing} of ${t.total} tests fail` }, t.failing);
+    }
+    return null;
+  };
+  let group = null;
+  nav.replaceChildren(...VIEWS.flatMap((v) => {
+    const out = [];
+    if (v.group !== group) { group = v.group; out.push(h("div", { class: "nav-group" }, group)); }
+    out.push(h("a", { href: href(source, v.id), "aria-current": v.id === view ? "page" : null }, icon(v.icon), v.label, badge(v)));
+    return out;
   }));
 }
 
@@ -210,10 +239,17 @@ async function render() {
   } finally {
     if (stillCurrent()) main.removeAttribute("aria-busy");
   }
-  // The problem count in the sidebar, once per tailnet.
+  // The problem and failing-test counts in the sidebar, once per tailnet.
   if (state.problemCount[source] === undefined) {
     api(`/api/sources/${source}/problems`).then((r) => {
       state.problemCount[source] = r.problems.length;
+      if (route().source === source) renderNav(source, route().view);
+    }).catch(() => {});
+  }
+  if (state.failingTests[source] === undefined) {
+    api(`/api/sources/${source}/tests`).then((r) => {
+      const all = [...r.tests, ...r.sshTests];
+      state.failingTests[source] = { total: all.length, failing: all.filter((t) => !t.passed).length };
       if (route().source === source) renderNav(source, route().view);
     }).catch(() => {});
   }
@@ -672,6 +708,336 @@ async function viewDevices(source, params) {
   ];
 }
 
-const VIEW_RENDERERS = { map: viewMap, simulate: viewSimulate, problems: viewProblems, policy: viewPolicy, devices: viewDevices };
+// MARK: - SSH
+
+async function viewSSH(source) {
+  const { rules } = await api(`/api/sources/${source}/ssh`);
+  const out = [head("SSH", "Tailscale SSH rules: who may connect where, and as which users.")];
+  if (!rules.length) {
+    out.push(empty("terminal", "No SSH rules", "Tailscale SSH is off until a rule allows it."));
+    return out;
+  }
+  out.push(h("div", { class: "stack narrow" }, rules.map((r) => h("div", { class: "card rule" },
+    h("div", { class: "rule-head" },
+      h("span", { class: `chip ${r.action === "check" ? "c-orange" : "c-green"}`, title: r.action === "check" ? "People sign in again before connecting" : null }, r.action),
+      h("span", { class: "name" }, r.name),
+      r.line ? h("a", { href: href(source, "policy", { line: r.line }) }, `Line ${r.line}`) : null),
+    h("div", { class: "chips flow" }, r.src.map((n) => chip(n)), h("span", { class: "muted" }, "→"), r.dst.map((n) => chip(n))),
+    h("div", { class: "chips flow" }, h("span", { class: "muted" }, "as"), r.users.map((u) => h("span", { class: "chip c-pink" }, u)),
+      r.expires ? h("span", { class: "chip c-orange" }, `expires ${r.expires}`) : null),
+    r.explanation ? h("div", { class: "sentence" }, r.explanation) : null))));
+  return out;
+}
+
+// MARK: - Tests
+
+async function viewTests(source) {
+  const { tests, sshTests } = await api(`/api/sources/${source}/tests`);
+  const all = [...tests, ...sshTests];
+  const failing = all.filter((t) => !t.passed).length;
+  state.failingTests[source] = { total: all.length, failing };
+  const out = [head("Tests", all.length ? `${all.length - failing} of ${all.length} passing` : "The policy's tests, run against the policy as it is now.")];
+  if (!all.length) {
+    out.push(empty("check", "No tests in the policy", "Tests lock in the access you expect. They're written in the policy (\"tests\" and \"sshTests\"); the Mac app can generate them from current access."));
+    return out;
+  }
+  out.push(failing
+    ? h("div", { class: "banner error" }, icon("x"), h("div", { class: "text" }, `${plural(failing, "test")} failing.`))
+    : h("div", { class: "banner ok" }, icon("check"), h("div", { class: "text" }, `All ${plural(all.length, "test")} pass.`)));
+  const card = (t, ssh) => h("div", { class: `card test ${t.passed ? "" : "failed"}` },
+    h("div", { class: "rule-head" },
+      h("span", { class: `chip ${t.passed ? "c-green" : "c-red"}` }, t.passed ? "Pass" : "Fail"),
+      h("span", { class: "name" }, `${ssh ? "SSH test" : "Test"} #${t.index + 1}`),
+      chip(t.src),
+      t.line ? h("a", { href: href(source, "policy", { line: t.line }) }, `Line ${t.line}`) : null),
+    h("div", { class: "stack tight" }, t.assertions.map((a) => h("div", { class: "assertion" },
+      icon(a.passed ? "check" : "x", a.passed ? "c-green" : "c-red"),
+      h("div", {},
+        h("span", { class: `chip ${a.kind === "deny" ? "c-orange" : "c-green"}` },
+          ssh ? `${a.kind} ${a.dst} as ${a.login}` : `${a.kind === "accept" ? "allow" : "deny"} ${a.dst}`),
+        !a.passed ? h("span", { class: "c-red fail-text" }, ssh ? ` — actually ${a.actual}` : a.kind === "accept" ? " expected to be allowed, but is denied" : " expected to be denied, but is allowed") : null,
+        a.why ? h("div", { class: "muted why" }, a.why) : null)))));
+  out.push(h("div", { class: "stack narrow" }, tests.map((t) => card(t, false))));
+  if (sshTests.length) {
+    out.push(h("h2", {}, "SSH tests"));
+    out.push(h("div", { class: "stack narrow" }, sshTests.map((t) => card(t, true))));
+  }
+  return out;
+}
+
+// MARK: - Routes
+
+async function viewRoutes(source) {
+  const r = await api(`/api/sources/${source}/routes`);
+  const panel = (title, detail, ...body) => h("section", { class: "card panel" }, h("h2", {}, title), h("p", { class: "muted" }, detail), body);
+  const lineLink = (line) => line ? h("a", { class: "line-link", href: href(source, "policy", { line }) }, `Line ${line}`) : null;
+  const STATES = {
+    approved: ["c-green", "approved on the server"],
+    autoApproved: ["c-orange", "not approved yet, but an auto-approver covers it"],
+    manual: ["c-muted", "needs approving by hand"],
+  };
+  return [
+    head("Routes", "Auto-approved subnet routes and exit nodes, routed grants, node attributes, and the routes your devices advertise."),
+    h("div", { class: "stack narrow" },
+      panel("Auto-approvers", "Routes and exit nodes advertised by these are approved without a manual step.",
+        r.routeApprovers.map((a) => h("div", { class: "chips flow" }, h("span", { class: "chip c-orange" }, a.route), h("span", { class: "muted" }, "←"), a.approvers.map((n) => chip(n)))),
+        h("div", { class: "chips flow" }, h("span", { class: "chip c-pink" }, "exit node"), h("span", { class: "muted" }, "←"),
+          r.exitNodeApprovers.length ? r.exitNodeApprovers.map((n) => chip(n)) : h("span", { class: "muted" }, "no approvers"))),
+      r.via.length ? panel("Routed through (via)", "Grants whose traffic must go through the routers or exit nodes carrying these tags.",
+        r.via.map((v) => h("div", { class: "stack tight" },
+          h("div", { class: "chips flow" }, v.src.map((n) => chip(n)), h("span", { class: "muted" }, "→"), v.dst.map((n) => chip(n)),
+            h("span", { class: "muted" }, "via"), v.via.map((n) => chip(n)), lineLink(v.line)),
+          h("div", { class: v.routers.length ? "muted small" : "c-orange small" },
+            v.routers.length ? "Devices: " + v.routers.join(", ") : `No device carries ${v.via.join(" or ")}, so this traffic has no route.`)))) : null,
+      panel("Node attributes", "Attributes (and app capabilities) given to the devices each entry targets.",
+        r.nodeAttrs.length ? r.nodeAttrs.map((a) => h("div", { class: "chips flow" }, a.target.map((n) => chip(n)), h("span", { class: "muted" }, "→"),
+          a.attr.map((x) => h("span", { class: "chip c-purple" }, x)), a.app ? h("span", { class: "chip c-pink" }, "app") : null, lineLink(a.line)))
+          : h("p", { class: "muted" }, "No node attributes.")),
+      panel("Devices advertising routes", "Green: approved on the server. Orange: not yet approved, but auto-approvers cover it. Grey: needs approving by hand.",
+        r.devices.length ? r.devices.map((d) => h("div", { class: "card inner" },
+          h("div", { class: "chips flow" }, h("a", { class: "mono strong", href: href(source, "map", { focus: `node:${d.id}` }) }, d.name), d.tags.map((t) => chip(t)),
+            h("span", { class: "muted small" }, `${plural(d.routes.length, "route")} · ${d.routes.filter((x) => x.state === "approved").length} approved`)),
+          h("div", { class: "chips flow" }, d.routes.map((x) => h("span", { class: `chip ${STATES[x.state][0]}`, title: STATES[x.state][1] }, x.route)))))
+          : h("p", { class: "muted" }, "No device advertises routes."))),
+  ];
+}
+
+// MARK: - Visual Builder (view only)
+
+async function viewBuilder(source, params) {
+  const data = await api(`/api/sources/${source}/connections`);
+  const rules = new Map(data.rules.map((r) => [r.id, r]));
+  const kindOf = (c) => rules.get(c.rule).kind;
+  const counts = { all: data.connections.length, grants: data.connections.filter((c) => kindOf(c) === "grant").length };
+  counts.acls = counts.all - counts.grants;
+  const ui = { q: params.get("q") || "", kind: params.get("kind") || "all", focus: params.get("focus") || "", unused: params.get("unused") === "1" };
+  const save = () => history.replaceState(null, "", href(source, "builder", { q: ui.q, kind: ui.kind === "all" ? "" : ui.kind, focus: ui.focus, unused: ui.unused ? "1" : "" }));
+
+  const filter = h("input", { type: "search", class: "filter", placeholder: "Show only… (name, group, tag, rule)", value: ui.q, "aria-label": "Filter" });
+  const kinds = h("div", { class: "pills", role: "group", "aria-label": "Rule kind" });
+  const legend = h("div", { class: "legend muted" });
+  const detail = h("div", { class: "rule-detail", hidden: true });
+  const canvas = h("div", { class: "map builder" });
+  const colour = { acl: "var(--line-acl)", grant: "var(--line-grant)" };
+
+  const paint = () => {
+    save();
+    kinds.replaceChildren(...[["all", "All"], ["grants", "Grants"], ["acls", "ACLs"]].map(([id, label]) =>
+      h("button", { type: "button", "aria-pressed": String(ui.kind === id), onclick: () => { ui.kind = id; paint(); } }, `${label} (${counts[id]})`)));
+    const q = ui.q.trim().toLowerCase();
+    const [side, focusName] = ui.focus ? [ui.focus.slice(0, 2), ui.focus.slice(2)] : [null, null];
+    const visible = data.connections.filter((c) => {
+      if (ui.kind !== "all" && kindOf(c) !== (ui.kind === "grants" ? "grant" : "acl")) return false;
+      if (side && (side === "S|" ? c.src !== focusName : c.dst !== focusName)) return false;
+      return !q || [c.src, c.dst, rules.get(c.rule).name].some((x) => x.toLowerCase().includes(q));
+    });
+    const narrowed = Boolean(q || side || ui.kind !== "all");
+    const used = { src: [...new Set(visible.map((c) => c.src))], dst: [...new Set(visible.map((c) => c.dst))] };
+    const unusedSrc = narrowed ? [] : data.sourceOrder.filter((n) => !used.src.includes(n));
+    const unusedDst = narrowed ? [] : data.destOrder.filter((n) => !used.dst.includes(n));
+    let sources = [...used.src, ...(ui.unused ? unusedSrc : [])];
+    let dests = [...used.dst, ...(ui.unused ? unusedDst : [])];
+    if (side === "S|" && !sources.includes(focusName)) sources.unshift(focusName);
+    if (side === "D|" && !dests.includes(focusName)) dests.unshift(focusName);
+    // Like the Mac: sources by the policy position of what they reach, then
+    // destinations by where their sources sit — few crossing lines.
+    const destPos = new Map(data.destOrder.map((n, i) => [n, i]));
+    const avg = (xs) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : Infinity);
+    const srcWeight = new Map(sources.map((n) => [n, avg(visible.filter((c) => c.src === n).map((c) => destPos.get(c.dst) ?? 0))]));
+    sources = sources.map((n, i) => [n, i]).sort((a, b) => srcWeight.get(a[0]) - srcWeight.get(b[0]) || a[1] - b[1]).map(([n]) => n);
+    const srcRow = new Map(sources.map((n, i) => [n, i]));
+    const dstWeight = new Map(dests.map((n, i) => [n, avg(visible.filter((c) => c.dst === n).map((c) => srcRow.get(c.src)))]));
+    dests = dests.map((n, i) => [n, i]).sort((a, b) => (dstWeight.get(a[0]) - dstWeight.get(b[0])) || a[1] - b[1]).map(([n]) => n);
+
+    fill(legend, 
+      h("span", { class: "swatch acl" }), " ACL ", h("span", { class: "swatch grant" }), " grant · ",
+      plural(visible.length, "connection"), " · click a box to focus on it, a line to see its rule",
+      !narrowed && unusedSrc.length + unusedDst.length
+        ? [" · ", h("button", { type: "button", class: "link inline", onclick: () => { ui.unused = !ui.unused; paint(); } },
+          ui.unused ? "hide unused boxes" : `show ${plural(unusedSrc.length + unusedDst.length, "unused box", "unused boxes")}`)] : null,
+      ui.focus ? [" · ", h("button", { type: "button", class: "link inline", onclick: () => { ui.focus = ""; paint(); } }, `clear focus on ${focusName}`)] : null);
+
+    if (!visible.length && !sources.length) {
+      canvas.replaceChildren(empty("builder", "No connections match", ui.kind !== "all" && !counts[ui.kind]
+        ? `The policy has no ${ui.kind === "grants" ? "grants" : "ACL rules"}.` : "Clear the filter or the focus to see everything."));
+      return;
+    }
+    const box = (name, sideKey) => {
+      const [cls, iconName] = entityStyle(name);
+      const key = sideKey + name;
+      return h("button", { type: "button", class: "node" + (ui.focus === key ? " focused" : ""), "data-key": key, "data-name": name,
+        title: ui.focus === key ? "Show everything again" : `Show only ${name}'s connections`,
+        onclick: () => { ui.focus = ui.focus === key ? "" : key; paint(); } },
+        h("span", { class: `icon ${cls}` }, icon(iconName)), h("span", { class: "body" }, h("div", { class: "label" }, name)));
+    };
+    const left = h("div", { class: "col", "data-title": "Sources" }, h("div", { class: "col-title" }, "Sources"), sources.map((n) => box(n, "S|")));
+    const right = h("div", { class: "col", "data-title": "Destinations" }, h("div", { class: "col-title" }, "Destinations"), dests.map((n) => box(n, "D|")));
+    const wires = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    wires.setAttribute("class", "wires");
+    canvas.replaceChildren(wires, left, h("div", { class: "gap" }), right);
+
+    const draw = () => {
+      if (!canvas.isConnected) return;
+      wires.replaceChildren();
+      if (getComputedStyle(wires).display === "none") return;
+      const base = canvas.getBoundingClientRect();
+      const at = (el, edge) => {
+        const r = el.getBoundingClientRect();
+        return [edge === "right" ? r.right - base.left : r.left - base.left, r.top - base.top + r.height / 2];
+      };
+      const boxes = { S: new Map([...left.querySelectorAll(".node")].map((el) => [el.dataset.name, el])),
+        D: new Map([...right.querySelectorAll(".node")].map((el) => [el.dataset.name, el])) };
+      const ns = "http://www.w3.org/2000/svg";
+      for (const c of visible) {
+        const a = boxes.S.get(c.src), b = boxes.D.get(c.dst);
+        if (!a || !b) continue;
+        const [x1, y1] = at(a, "right"), [x2, y2] = at(b, "left"), dx = Math.max(30, (x2 - x1) / 2);
+        const d = `M${x1},${y1} C${x1 + dx},${y1} ${x2 - dx},${y2} ${x2},${y2}`;
+        const rule = rules.get(c.rule);
+        const line = document.createElementNS(ns, "path");
+        line.setAttribute("d", d);
+        line.setAttribute("stroke", colour[rule.kind]);
+        line.setAttribute("class", "line");
+        line.dataset.src = c.src;
+        line.dataset.dst = c.dst;
+        const hit = document.createElementNS(ns, "path");
+        hit.setAttribute("d", d);
+        hit.setAttribute("class", "hit");
+        const tip = document.createElementNS(ns, "title");
+        tip.textContent = `${rule.name} · ${c.src} → ${c.dst}${c.ports ? " : " + c.ports : ""}`;
+        hit.append(tip);
+        hit.addEventListener("click", () => showRule(rule, c));
+        hit.addEventListener("mouseenter", () => line.classList.add("hover"));
+        hit.addEventListener("mouseleave", () => line.classList.remove("hover"));
+        wires.append(line, hit);
+      }
+    };
+    // Hovering a box dims what it doesn't touch.
+    for (const el of canvas.querySelectorAll(".node")) {
+      el.addEventListener("mouseenter", () => {
+        const name = el.dataset.name, src = el.dataset.key.startsWith("S|");
+        const touched = new Set();
+        wires.querySelectorAll("path.line").forEach((p) => {
+          const on = src ? p.dataset.src === name : p.dataset.dst === name;
+          p.classList.toggle("dim", !on);
+          if (on) { touched.add("S|" + p.dataset.src); touched.add("D|" + p.dataset.dst); }
+        });
+        canvas.querySelectorAll(".node").forEach((n) => n.classList.toggle("dim", !touched.has(n.dataset.key) && n !== el));
+      });
+      el.addEventListener("mouseleave", () => canvas.querySelectorAll(".dim").forEach((n) => n.classList.remove("dim")));
+    }
+    requestAnimationFrame(draw);
+    if (!canvas.observer) {
+      canvas.observer = new ResizeObserver(() => (canvas.isConnected ? canvas.redraw() : canvas.observer.disconnect()));
+      canvas.observer.observe(canvas);
+    }
+    canvas.redraw = draw;
+  };
+
+  const showRule = (rule, c) => {
+    detail.hidden = false;
+    fill(detail, 
+      h("div", { class: "rule-head" },
+        h("span", { class: `chip ${rule.kind === "grant" ? "c-green" : "c-blue"}` }, rule.kind === "grant" ? "grant" : "ACL"),
+        h("span", { class: "name" }, rule.name), h("span", { class: "mono muted" }, rule.badge),
+        rule.line ? h("a", { href: href(source, "policy", { line: rule.line }) }, `Line ${rule.line}`) : null,
+        h("button", { type: "button", class: "link", "aria-label": "Close", onclick: () => { detail.hidden = true; } }, "✕")),
+      rule.explanation ? h("div", { class: "sentence" }, rule.explanation) : null,
+      h("div", { class: "muted small" }, `This line: ${c.src} → ${c.dst}${c.ports ? " on " + c.ports : ""}`));
+  };
+
+  let timer;
+  filter.addEventListener("input", () => { clearTimeout(timer); timer = setTimeout(() => { ui.q = filter.value; paint(); }, 150); });
+  paint();
+  return [
+    head("Visual Builder", "Every rule as lines from sources to destinations. View only — build and edit rules in the Mac app."),
+    h("div", { class: "toolbar" }, filter, kinds),
+    legend,
+    detail,
+    canvas,
+  ];
+}
+
+// MARK: - Search (⌘K)
+
+const searchIndexes = new Map();
+
+function looksLikeAddress(q) { return /^[0-9a-f:.]+(\/\d{1,3})?$/i.test(q) && /\d/.test(q) && /[.:]/.test(q); }
+
+async function openSearch() {
+  const source = route().source;
+  const dialog = document.getElementById("search");
+  if (!source || !dialog || dialog.open) return;
+  const input = dialog.querySelector("input");
+  const list = dialog.querySelector("ul");
+  input.value = "";
+  list.replaceChildren(h("li", { class: "muted pad" }, "Loading…"));
+  dialog.showModal();
+  input.focus();
+  if (!searchIndexes.has(source)) {
+    searchIndexes.set(source, api(`/api/sources/${source}/search-index`).then((r) => r.items).catch((e) => { searchIndexes.delete(source); throw e; }));
+  }
+  let items;
+  try { items = await searchIndexes.get(source); } catch (error) {
+    list.replaceChildren(h("li", { class: "c-red pad" }, error.message));
+    return;
+  }
+  let results = [], selected = 0, ipHits = [], ipToken = 0, timer;
+  const iconFor = (it) => it.kind === "device" ? "device" : it.kind === "rule" ? "doc" : it.kind === "ip" ? "search" : entityStyle(it.title)[1];
+  const colorFor = (it) => it.kind === "entity" ? entityStyle(it.title)[0] : it.kind === "ip" ? "c-orange" : it.kind === "rule" ? "c-green" : "c-blue";
+  const pick = (it) => {
+    if (!it) return;
+    dialog.close();
+    if (it.focus) go(href(source, "map", { focus: it.focus }));
+    else if (it.line) go(href(source, "policy", { line: it.line }));
+  };
+  const show = () => {
+    const q = input.value.trim().toLowerCase();
+    const matches = q ? items.filter((it) => it.title.toLowerCase().includes(q) || it.subtitle.toLowerCase().includes(q)) : items;
+    results = [...ipHits, ...matches.filter((m) => !ipHits.some((x) => x.title === m.title))].slice(0, 60);
+    selected = Math.min(selected, Math.max(results.length - 1, 0));
+    list.replaceChildren(...(results.length ? results.map((it, i) => h("li", {
+      role: "option", "aria-selected": String(i === selected), onclick: () => pick(it), onmousemove: () => { if (selected !== i) { selected = i; mark(); } },
+    }, h("span", { class: `icon ${colorFor(it)}` }, icon(iconFor(it))),
+    h("span", { class: "text" }, h("span", { class: "title" }, it.title), h("span", { class: "sub" }, it.subtitle))))
+      : [h("li", { class: "muted pad" }, "No matches.")]));
+  };
+  const mark = () => {
+    list.querySelectorAll("li[role=option]").forEach((li, i) => li.setAttribute("aria-selected", String(i === selected)));
+    list.children[selected]?.scrollIntoView({ block: "nearest" });
+  };
+  input.oninput = () => {
+    selected = 0;
+    ipHits = [];
+    show();
+    clearTimeout(timer);
+    const q = input.value.trim();
+    if (!looksLikeAddress(q)) return;
+    const token = ++ipToken;
+    timer = setTimeout(async () => {
+      try {
+        const { hits } = await api(`/api/sources/${source}/ip-lookup?` + new URLSearchParams({ ip: q }));
+        if (token !== ipToken) return;
+        ipHits = hits.map((x) => ({ kind: "ip", title: x.title, subtitle: x.detail, focus: x.device ? `node:${x.device}` : null, line: x.line }));
+        show();
+      } catch { /* the plain matches stay */ }
+    }, 200);
+  };
+  input.onkeydown = (event) => {
+    if (event.key === "ArrowDown") { selected = Math.min(selected + 1, results.length - 1); mark(); event.preventDefault(); }
+    else if (event.key === "ArrowUp") { selected = Math.max(selected - 1, 0); mark(); event.preventDefault(); }
+    else if (event.key === "Enter") { pick(results[selected]); event.preventDefault(); }
+  };
+  show();
+}
+
+document.addEventListener("keydown", (event) => {
+  if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") { event.preventDefault(); openSearch(); }
+});
+
+const VIEW_RENDERERS = {
+  map: viewMap, builder: viewBuilder, simulate: viewSimulate, ssh: viewSSH, routes: viewRoutes,
+  problems: viewProblems, tests: viewTests, policy: viewPolicy, devices: viewDevices,
+};
 
 start();

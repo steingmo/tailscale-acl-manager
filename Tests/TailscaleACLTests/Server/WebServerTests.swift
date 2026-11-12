@@ -180,6 +180,12 @@ final class WebServerTests: XCTestCase {
                     {"src": ["group:eng"], "dst": ["tag:web"], "ip": ["tcp:443"]},
                     {"src": ["group:ghosts"], "dst": ["tag:web"], "ip": ["tcp:22"]},
                   ],
+                  "ssh": [{"action": "check", "src": ["group:eng"], "dst": ["tag:web"], "users": ["root"]}],
+                  "tests": [
+                    {"src": "alice@example.com", "accept": ["tag:web:443"], "deny": ["tag:web:22"]},
+                    {"src": "alice@example.com", "accept": ["tag:web:22"]},
+                  ],
+                  "autoApprovers": {"routes": {"10.0.0.0/8": ["tag:web"]}, "exitNode": ["tag:web"]},
                 }
                 """.utf8))
             }
@@ -187,7 +193,8 @@ final class WebServerTests: XCTestCase {
                 return .init(body: Data(#"""
                 {"devices": [
                   {"id": "1", "nodeId": "n1", "hostname": "alice-mbp", "name": "alice-mbp.example.ts.net", "user": "alice@example.com", "addresses": ["100.64.0.1"], "os": "macOS"},
-                  {"id": "2", "nodeId": "n2", "hostname": "web-1", "name": "web-1.example.ts.net", "user": "", "addresses": ["100.64.0.2"], "tags": ["tag:web"]}
+                  {"id": "2", "nodeId": "n2", "hostname": "web-1", "name": "web-1.example.ts.net", "user": "", "addresses": ["100.64.0.2"], "tags": ["tag:web"],
+                   "advertisedRoutes": ["10.1.0.0/24", "0.0.0.0/0", "::/0"], "enabledRoutes": ["0.0.0.0/0", "::/0"]}
                 ]}
                 """#.utf8))
             }
@@ -389,6 +396,60 @@ final class WebServerTests: XCTestCase {
             let titles = (problems["problems"] as? [[String: Any]] ?? []).compactMap { $0["title"] as? String }
             XCTAssertTrue(titles.contains("Undefined group"))
             XCTAssertTrue(titles.contains("Rule matches no device"), "\(titles)")
+        }
+    }
+
+    func testSearchSSHTestsRoutesAndBuilder() async throws {
+        stub()
+        let (app, state) = try app(config())
+        try await app.test(.router) { client in
+            let signedIn = try await self.signIn(client, state)
+            let session = try XCTUnwrap(signedIn.cookie)
+            func json(_ path: String) async throws -> [String: Any] {
+                let response = try await client.execute(uri: path, method: .get, headers: [.cookie: session])
+                XCTAssertEqual(response.status, .ok, path)
+                return try XCTUnwrap(JSONSerialization.jsonObject(with: Data(buffer: response.body)) as? [String: Any])
+            }
+
+            // ⌘K: entities, devices, and rules, each saying where it opens.
+            let index = try await json("/api/sources/prod/search-index")
+            let items = try XCTUnwrap(index["items"] as? [[String: Any]])
+            XCTAssertTrue(items.contains { $0["title"] as? String == "group:eng" && $0["focus"] as? String == "group:eng" })
+            XCTAssertTrue(items.contains { $0["title"] as? String == "web-1" && $0["focus"] as? String == "node:n2" })
+            XCTAssertTrue(items.contains { $0["kind"] as? String == "rule" && $0["line"] as? Int == 6 })
+            let ip = try await json("/api/sources/prod/ip-lookup?ip=100.64.0.2")
+            XCTAssertEqual((ip["hits"] as? [[String: Any]])?.compactMap { $0["device"] as? String }, ["n2"])
+            let notAnAddress = try await json("/api/sources/prod/ip-lookup?ip=group:eng")
+            XCTAssertEqual((notAnAddress["hits"] as? [Any])?.count, 0)
+
+            let ssh = try await json("/api/sources/prod/ssh")
+            let rule = try XCTUnwrap((ssh["rules"] as? [[String: Any]])?.first)
+            XCTAssertEqual(rule["action"] as? String, "check")
+            XCTAssertEqual(rule["users"] as? [String], ["root"])
+            XCTAssertEqual(rule["explanation"] as? String, "Everyone in eng can SSH into devices tagged web as root, after signing in again.")
+            XCTAssertNotNil(rule["line"] as? Int)
+
+            // The policy's tests, with why a failing one fails.
+            let testsReply = try await json("/api/sources/prod/tests")
+            let tests = try XCTUnwrap(testsReply["tests"] as? [[String: Any]])
+            XCTAssertEqual(tests.map { $0["passed"] as? Bool }, [true, false])
+            let failed = try XCTUnwrap((tests[1]["assertions"] as? [[String: Any]])?.first)
+            XCTAssertEqual(failed["why"] as? String, "alice@example.com reaches tag:web through Grant #1, but not on port 22.")
+
+            // Routes: the exit node is approved; the subnet isn't, but an auto-approver covers it.
+            let routes = try await json("/api/sources/prod/routes")
+            XCTAssertEqual(routes["exitNodeApprovers"] as? [String], ["tag:web"])
+            let device = try XCTUnwrap((routes["devices"] as? [[String: Any]])?.first)
+            XCTAssertEqual((device["routes"] as? [[String: Any]])?.map { "\($0["route"] ?? "") \($0["state"] ?? "")" },
+                           ["exit node approved", "10.1.0.0/24 autoApproved"])
+
+            // The Visual Builder's lines.
+            let builder = try await json("/api/sources/prod/connections")
+            let lines = try XCTUnwrap(builder["connections"] as? [[String: Any]])
+            XCTAssertEqual(lines.map { "\($0["src"] ?? "")→\($0["dst"] ?? "") \($0["ports"] ?? "")" },
+                           ["group:eng→tag:web tcp:443", "group:ghosts→tag:web tcp:22"])
+            XCTAssertEqual((builder["rules"] as? [[String: Any]])?.count, 2)
+            XCTAssertTrue((builder["sourceOrder"] as? [String] ?? []).contains("group:eng"))
         }
     }
 
