@@ -4,30 +4,19 @@ name: Linux engine
 # Mac app (everything in a Mac/ folder is left out — see Package.swift).
 on:
   push:
-    branches: [main, web-ui]
+    branches: [main]
   pull_request:
 
 jobs:
   test:
     runs-on: ubuntu-24.04
-    timeout-minutes: 25
+    # A hang fails the job instead of running for hours.
+    timeout-minutes: 20
     container: swift:6.1-noble
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
-      - name: Diagnose (temporary)
-        shell: bash
-        run: |
-          swift build --build-tests
-          set +e +o pipefail
-          for i in $(seq 1 20); do
-            timeout 90 stdbuf -oL -eL swift test --skip-build > run.log 2>&1; code=$?
-            if [ $code -ne 0 ]; then
-              echo "=== run $i exit $code; last lines:"
-              grep -E "Test Case|Test Suite|error|Fatal|signal" run.log | tail -8
-            else
-              echo "=== run $i ok"
-            fi
-          done
+      - name: Run tests
+        run: swift test
       - name: Lint a policy with the command-line tool
         run: |
           printf '{"groups": {"group:eng": ["a@example.com"]}, "grants": [{"src": ["group:eng"], "dst": ["*"], "ip": ["tcp:443"]}]}' > /tmp/policy.hujson
