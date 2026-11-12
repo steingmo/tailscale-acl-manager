@@ -5,15 +5,20 @@ import Foundation
 /// Built without the app (Linux), it is the command-line tool only.
 @main
 enum Main {
+    #if MAC_APP
     static func main() {
         if let code = runCommandLine(Array(CommandLine.arguments.dropFirst())) { exit(code) }
-        #if MAC_APP
         TailscaleACLApp.main()
-        #else
+    }
+    #else
+    static func main() async {
+        let args = Array(CommandLine.arguments.dropFirst())
+        if args.first == "serve" { exit(await runServeCommand(Array(args.dropFirst()))) }
+        if let code = runCommandLine(args) { exit(code) }
         print(usage)
         exit(2)
-        #endif
     }
+    #endif
 }
 
 private let usage = """
@@ -21,6 +26,7 @@ usage: tailscale-acl lint <policy.hujson>   problems (exit 1 on errors)
        tailscale-acl test <policy.hujson>   problems + the policy's tests (exit 1 on any failure)
        tailscale-acl mcp                    MCP server for AI apps (relays to the running Mac app;
                                             turn on Settings ▸ AI tools first)
+       tailscale-acl serve --config <file>   the read-only web service (not in the Mac app)
 Use - to read the policy from standard input.
 """
 

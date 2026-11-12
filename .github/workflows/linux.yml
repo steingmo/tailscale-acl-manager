@@ -1,10 +1,10 @@
 name: Linux engine
 
-# The policy engine and the command-line tool, without the Mac app
-# (everything in a Mac/ folder is left out — see Package.swift).
+# The policy engine, the command-line tool, and the web service, without the
+# Mac app (everything in a Mac/ folder is left out — see Package.swift).
 on:
   push:
-    branches: [main]
+    branches: [main, web-server]
   pull_request:
 
 jobs:

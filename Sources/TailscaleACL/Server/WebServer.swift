@@ -1,0 +1,544 @@
+import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
+import Hummingbird
+import HTTPTypes
+
+// `tailscale-acl serve`: the read-only web service. People sign in with
+// Microsoft; viewers can read the policy, its problems and devices, and
+// simulate access. It never changes a policy.
+
+// MARK: - Audit log
+
+/// Who did what, appended as JSON lines to <dataDir>/audit.jsonl (readable by
+/// the server's account only). Never contains secrets or tokens.
+final class AuditLog: @unchecked Sendable {
+    struct Entry: Codable, Equatable {
+        var time: Date
+        var event: String
+        var user: String?
+        var detail: String
+        var from: String?
+    }
+
+    let url: URL
+    private let lock = NSLock()
+    private let encoder: JSONEncoder = {
+        let e = JSONEncoder()
+        e.dateEncodingStrategy = .iso8601
+        e.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        return e
+    }()
+
+    init(directory: String) throws {
+        let dir = URL(fileURLWithPath: directory, isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        url = dir.appendingPathComponent("audit.jsonl")
+        if !FileManager.default.fileExists(atPath: url.path) {
+            guard FileManager.default.createFile(atPath: url.path, contents: nil, attributes: [.posixPermissions: 0o600]) else {
+                throw ConfigError("\(url.path): cannot create the audit log")
+            }
+        }
+        // Fail at start, not at the first sign-in.
+        guard FileManager.default.isWritableFile(atPath: url.path) else { throw ConfigError("\(url.path): the audit log isn't writable") }
+    }
+
+    func record(_ event: String, user: String?, detail: String, from: String? = nil, time: Date = Date()) {
+        // JSON encoding escapes line breaks, so a crafted path can't forge a line.
+        guard var line = try? encoder.encode(Entry(time: time, event: event, user: user, detail: detail, from: from)) else { return }
+        line.append(0x0A)
+        lock.withLock {
+            guard let handle = try? FileHandle(forWritingTo: url) else { return }
+            defer { try? handle.close() }
+            _ = try? handle.seekToEnd()
+            try? handle.write(contentsOf: line)
+        }
+    }
+
+    func entries() -> [Entry] {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let text = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
+        return text.split(separator: "\n").compactMap { try? decoder.decode(Entry.self, from: Data($0.utf8)) }
+    }
+}
+
+// MARK: - Policy sources
+
+/// One tailnet's policy and devices, read from its server and kept for a
+/// minute, so a page of requests is one fetch.
+actor PolicySource {
+    struct Snapshot {
+        var text: String
+        var tree: JSON?
+        var model: PolicyModel?
+        var parseError: HuJSONError?
+        var nodes: [HeadscaleNode]
+        var fetched: Date
+        /// Why this is older than it should be, when the last refresh failed.
+        var stale: String?
+    }
+
+    nonisolated let config: ServerConfig.Source
+    private let client: PolicyServer
+    private var cached: Snapshot?
+    private var loading: Task<Snapshot, Error>?
+    static let maxAge: TimeInterval = 60
+
+    init(_ config: ServerConfig.Source, client: PolicyServer) {
+        self.config = config
+        self.client = client
+    }
+
+    func snapshot(now: Date = Date()) async throws -> Snapshot {
+        if let cached, cached.stale == nil, now.timeIntervalSince(cached.fetched) < Self.maxAge { return cached }
+        // Requests arriving together share one fetch.
+        let task = loading ?? Task { try await Self.fetch(client) }
+        loading = task
+        do {
+            let fresh = try await task.value
+            loading = nil
+            cached = fresh
+            return fresh
+        } catch {
+            loading = nil
+            // The server being down for a moment shouldn't blank the page: show the last good copy, marked.
+            guard var old = cached else { throw error }
+            old.stale = error.localizedDescription
+            return old
+        }
+    }
+
+    private static func fetch(_ client: PolicyServer) async throws -> Snapshot {
+        async let policy = client.getPolicy()
+        async let devices = client.listNodes()
+        let (text, nodes) = try await (policy, devices)
+        // Role autogroups (autogroup:admin…) come from the user list; without the scope they just don't match.
+        let users = try? await client.serverUsers()
+        var snapshot = Snapshot(text: text, nodes: nodes, fetched: Date())
+        do {
+            let tree = try HuJSONParser.parse(text)
+            var model = PolicyModel(tree: tree)
+            model.userAutogroups = users?.autogroups ?? [:]
+            snapshot.tree = tree
+            snapshot.model = model
+        } catch let error as HuJSONError {
+            snapshot.parseError = error
+        }
+        return snapshot
+    }
+}
+
+// MARK: - Server state
+
+final class ServerState: Sendable {
+    let origin: String
+    let secure: Bool
+    let login: EntraLogin?
+    let devUser: SignedInUser?
+    let roles: ServerConfig.Roles?
+    let sessions = SessionStore()
+    let sources: [PolicySource]
+    let audit: AuditLog
+
+    var sessionCookie: String { secure ? "__Host-tsacl_session" : "tsacl_session" }
+    var loginCookie: String { secure ? "__Host-tsacl_login" : "tsacl_login" }
+
+    init(config: ServerConfig, session: URLSession = serverSession) throws {
+        guard let origin = config.origin else { throw ConfigError("publicURL: not a usable address") }
+        self.origin = origin
+        secure = config.isSecure
+        roles = config.roles
+        audit = try AuditLog(directory: config.dataDir)
+        if let dev = config.devLogin {
+            devUser = SignedInUser(id: "dev", login: dev.login.lowercased(), name: dev.login, roles: Set(dev.roles.compactMap(Role.init(rawValue:))))
+            login = nil
+        } else if let entra = config.entra {
+            devUser = nil
+            login = EntraLogin(tenant: entra.tenant.lowercased(), clientID: entra.clientID,
+                               clientSecret: try secret(entra.clientSecret, file: entra.clientSecretFile),
+                               redirectURI: origin + "/auth/callback", session: session)
+        } else {
+            throw ConfigError("entra: missing")
+        }
+        sources = try config.sources.map { s in
+            guard let client = makeServer(kind: s.kind, serverURL: s.serverURL ?? "", tailnet: s.tailnet ?? "-",
+                                          credential: try secret(s.credential, file: s.credentialFile), session: session) else {
+                throw ConfigError("sources[\(s.id)]: no usable server address or credential")
+            }
+            return PolicySource(s, client: client)
+        }
+    }
+
+    func cookie(_ name: String, _ value: String, maxAge: Int) -> Cookie {
+        Cookie(name: name, value: value, maxAge: maxAge, path: "/", secure: secure, httpOnly: true, sameSite: .lax)
+    }
+
+    func user(for request: Request) async -> SignedInUser? {
+        guard let id = request.cookies[sessionCookie]?.value, !id.isEmpty else { return nil }
+        return await sessions.user(for: id)
+    }
+}
+
+struct AppContext: RequestContext {
+    var coreContext: CoreRequestContextStorage
+    var user: SignedInUser?
+
+    init(source: ApplicationRequestContextSource) {
+        coreContext = .init(source: source)
+    }
+}
+
+/// The address the proxy says the request came from. Only for the audit
+/// log: the header is whatever the proxy (or a direct caller) sent.
+private func forwardedFor(_ request: Request) -> String? {
+    guard let name = HTTPField.Name("X-Forwarded-For"), let value = request.headers[name] else { return nil }
+    return String(value.prefix(100))
+}
+
+// MARK: - Middleware
+
+/// Headers that keep the pages from being framed, sniffed, or cached with
+/// someone's data in them — on errors too.
+struct SecurityHeaders: RouterMiddleware {
+    typealias Context = AppContext
+    let secure: Bool
+
+    func handle(_ request: Request, context: Context, next: (Request, Context) async throws -> Response) async throws -> Response {
+        var response: Response
+        do {
+            response = try await next(request, context)
+        } catch let error as HTTPResponseError {
+            response = try error.response(from: request, context: context)
+        }
+        response.headers[.xContentTypeOptions] = "nosniff"
+        response.headers[.cacheControl] = "no-store"
+        response.headers[.contentSecurityPolicy] = "default-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
+        if let name = HTTPField.Name("X-Frame-Options") { response.headers[name] = "DENY" }
+        if let name = HTTPField.Name("Referrer-Policy") { response.headers[name] = "no-referrer" }
+        if secure { response.headers[.strictTransportSecurity] = "max-age=31536000" }
+        return response
+    }
+}
+
+/// Lets only signed-in people with the role through, and writes each of
+/// their requests to the audit log.
+struct RequireRole: RouterMiddleware {
+    typealias Context = AppContext
+    let state: ServerState
+    let role: Role
+
+    func handle(_ request: Request, context: Context, next: (Request, Context) async throws -> Response) async throws -> Response {
+        guard let user = await state.user(for: request) else {
+            throw HTTPError(.unauthorized, message: "Sign in at /login")
+        }
+        let what = "\(request.method.rawValue) \(request.uri.string.prefix(400))"
+        guard user.roles.contains(role) else {
+            state.audit.record("denied", user: user.login, detail: what, from: forwardedFor(request))
+            throw HTTPError(.forbidden, message: "Your account isn't allowed to do this.")
+        }
+        var context = context
+        context.user = user
+        do {
+            let response = try await next(request, context)
+            state.audit.record("request", user: user.login, detail: "\(what) → \(response.status.code)", from: forwardedFor(request))
+            return response
+        } catch {
+            let status = (error as? HTTPResponseError)?.status.code ?? 500
+            state.audit.record("request", user: user.login, detail: "\(what) → \(status)", from: forwardedFor(request))
+            throw error
+        }
+    }
+}
+
+// MARK: - API answers
+
+struct MeReply: ResponseEncodable { var login: String; var name: String; var roles: [String] }
+
+struct SourcesReply: ResponseEncodable {
+    struct Source: Encodable { var id: String; var name: String; var kind: String }
+    var sources: [Source]
+}
+
+struct PolicyReply: ResponseEncodable {
+    struct ParseError: Encodable { var line: Int; var message: String }
+    var text: String
+    var valid: Bool
+    var error: ParseError?
+    var fetched: Date
+    var stale: String?
+}
+
+struct ProblemsReply: ResponseEncodable {
+    struct Problem: Encodable { var severity: String; var title: String; var detail: String; var line: Int?; var security: Bool }
+    var problems: [Problem]
+}
+
+struct DevicesReply: ResponseEncodable {
+    struct Device: Encodable {
+        var id: String
+        var name: String
+        var user: String?
+        var tags: [String]
+        var addresses: [String]
+        var online: Bool
+        var lastSeen: Date?
+    }
+    var devices: [Device]
+}
+
+struct SimulateReply: ResponseEncodable {
+    struct Rule: Encodable {
+        var kind: String
+        var index: Int
+        var src: String
+        var dst: String
+        var ports: String?
+        /// Postures the source device must meet for this rule to count.
+        var posture: [String]
+        var via: [String]
+        var explanation: String?
+    }
+    var allowed: Bool
+    /// Allowed only if the source device meets a posture.
+    var conditional: Bool
+    var rules: [Rule]
+}
+
+// MARK: - Routes
+
+func buildRouter(_ state: ServerState) -> Router<AppContext> {
+    let router = Router(context: AppContext.self)
+    router.add(middleware: SecurityHeaders(secure: state.secure))
+
+    router.get("healthz") { _, _ in "ok" }
+
+    router.get("/") { request, _ -> Response in
+        guard let user = await state.user(for: request) else { return Response(status: .found, headers: [.location: "/login"]) }
+        // The web interface comes with the next step; until then this shows that signing in works.
+        let roles = user.roles.map(\.rawValue).sorted().joined(separator: ", ")
+        return Response(status: .ok, headers: [.contentType: "text/plain; charset=utf-8"],
+                        body: .init(byteBuffer: .init(string: "Signed in as \(user.login) (\(roles)).\nAPI: /api/me, /api/sources\n")))
+    }
+
+    router.get("login") { request, _ -> Response in
+        let returnTo = safeReturnPath(request.uri.queryParameters.get("return"))
+        if let dev = state.devUser {
+            let id = await state.sessions.signIn(dev)
+            state.audit.record("login", user: dev.login, detail: "development login", from: forwardedFor(request))
+            var response = Response(status: .found, headers: [.location: returnTo])
+            response.setCookie(state.cookie(state.sessionCookie, id, maxAge: Int(SessionStore.sessionLifetime)))
+            return response
+        }
+        guard let login = state.login else { throw HTTPError(.internalServerError) }
+        let nonce = randomToken(), verifier = randomToken()
+        guard let pending = await state.sessions.begin(nonce: nonce, verifier: verifier, returnTo: returnTo) else {
+            throw HTTPError(.tooManyRequests, message: "Too many sign-ins under way; try again in a few minutes.")
+        }
+        let url = login.authorizeURL(state: pending, nonce: nonce, challenge: pkceChallenge(verifier))
+        var response = Response(status: .found, headers: [.location: url.absoluteString])
+        // Ties this sign-in to this browser: the callback must carry the same state in its cookie.
+        response.setCookie(state.cookie(state.loginCookie, pending, maxAge: Int(SessionStore.pendingLifetime)))
+        return response
+    }
+
+    router.get("auth/callback") { request, _ -> Response in
+        guard let login = state.login else { throw HTTPError(.notFound) }
+        let query = request.uri.queryParameters
+        let from = forwardedFor(request)
+        func refuse(_ status: HTTPResponse.Status, _ shown: String, log: String) -> Response {
+            state.audit.record("login-failed", user: nil, detail: log, from: from)
+            var response = Response(status: status, headers: [.contentType: "text/plain; charset=utf-8"],
+                                    body: .init(byteBuffer: .init(string: shown + "\nStart again at /login\n")))
+            response.setCookie(state.cookie(state.loginCookie, "", maxAge: 0))
+            return response
+        }
+        if let error = query.get("error") {
+            return refuse(.badRequest, "Microsoft didn't complete the sign-in.",
+                          log: "Microsoft: \(error): \(String((query.get("error_description") ?? "").prefix(300)))")
+        }
+        guard let code = query.get("code"), let stateParameter = query.get("state"),
+              let cookie = request.cookies[state.loginCookie]?.value, !cookie.isEmpty, cookie == stateParameter,
+              let pending = await state.sessions.finish(state: stateParameter) else {
+            return refuse(.badRequest, "This sign-in wasn't started in this browser, or it took too long.", log: "state mismatch or expired")
+        }
+        let claims: IDTokenClaims
+        do {
+            claims = try login.validate(idToken: try await login.exchange(code: code, verifier: pending.verifier), nonce: pending.nonce)
+        } catch {
+            return refuse(.badGateway, "Signing in with Microsoft failed.", log: error.localizedDescription)
+        }
+        let granted = roles(for: claims, state.roles)
+        let person = user(from: claims, roles: granted)
+        guard !granted.isEmpty else {
+            return refuse(.forbidden, "You're signed in to Microsoft as \(person.login), but that account has no access here.",
+                          log: "\(person.login) has no role")
+        }
+        let id = await state.sessions.signIn(person)
+        state.audit.record("login", user: person.login, detail: "roles: \(granted.map(\.rawValue).sorted().joined(separator: ", "))", from: from)
+        var response = Response(status: .found, headers: [.location: pending.returnTo])
+        response.setCookie(state.cookie(state.sessionCookie, id, maxAge: Int(SessionStore.sessionLifetime)))
+        response.setCookie(state.cookie(state.loginCookie, "", maxAge: 0))
+        return response
+    }
+
+    // POST, so another site can't sign people out with a link (the cookie is SameSite=Lax).
+    router.post("logout") { request, _ -> Response in
+        if let id = request.cookies[state.sessionCookie]?.value {
+            if let user = await state.sessions.user(for: id) {
+                state.audit.record("logout", user: user.login, detail: "", from: forwardedFor(request))
+            }
+            await state.sessions.signOut(id)
+        }
+        var response = Response(status: .seeOther, headers: [.location: "/"])
+        response.setCookie(state.cookie(state.sessionCookie, "", maxAge: 0))
+        return response
+    }
+
+    let api = router.group("api").add(middleware: RequireRole(state: state, role: .viewer))
+
+    api.get("me") { _, context -> MeReply in
+        guard let user = context.user else { throw HTTPError(.unauthorized) }
+        return MeReply(login: user.login, name: user.name, roles: user.roles.map(\.rawValue).sorted())
+    }
+
+    api.get("sources") { _, _ in
+        SourcesReply(sources: state.sources.map { .init(id: $0.config.id, name: $0.config.name, kind: $0.config.kind.rawValue) })
+    }
+
+    @Sendable func snapshot(_ context: AppContext) async throws -> PolicySource.Snapshot {
+        let id = try context.parameters.require("source")
+        guard let source = state.sources.first(where: { $0.config.id == id }) else { throw HTTPError(.notFound, message: "No such tailnet.") }
+        do {
+            return try await source.snapshot()
+        } catch {
+            // What the control server said is for the audit trail of the operator, not for every viewer.
+            context.logger.error("source \(id): \(error.localizedDescription)")
+            throw HTTPError(.badGateway, message: "The tailnet's server couldn't be read.")
+        }
+    }
+
+    @Sendable func model(_ snapshot: PolicySource.Snapshot) throws -> PolicyModel {
+        guard let model = snapshot.model else { throw HTTPError(.conflict, message: "The policy on the server has a syntax error.") }
+        return model
+    }
+
+    api.get("sources/:source/policy") { _, context -> PolicyReply in
+        let s = try await snapshot(context)
+        return PolicyReply(text: s.text, valid: s.model != nil,
+                           error: s.parseError.map { .init(line: $0.line, message: $0.message) }, fetched: s.fetched, stale: s.stale)
+    }
+
+    api.get("sources/:source/problems") { _, context -> ProblemsReply in
+        let s = try await snapshot(context)
+        let m = try model(s)
+        return ProblemsReply(problems: lintPolicy(m).map { issue in
+            .init(severity: issue.severity == .error ? "error" : "warning", title: issue.title, detail: issue.detail,
+                  line: issue.line ?? issue.path.flatMap { s.tree?.line(at: $0) }, security: issue.security)
+        })
+    }
+
+    api.get("sources/:source/devices") { _, context -> DevicesReply in
+        let s = try await snapshot(context)
+        return DevicesReply(devices: s.nodes.map { n in
+            .init(id: n.id, name: n.displayName, user: n.user?.email ?? n.user?.name, tags: n.allTags,
+                  addresses: n.ipAddresses ?? [], online: n.online == true, lastSeen: n.lastSeenDate)
+        })
+    }
+
+    // ?src=…&dst=…&port=443[&proto=tcp] — src and dst are policy names
+    // (a user, group, tag, host, address) or node:<device id>.
+    api.get("sources/:source/simulate") { request, context -> SimulateReply in
+        let s = try await snapshot(context)
+        let m = try model(s)
+        let query = request.uri.queryParameters
+        guard let src = query.get("src"), let dst = query.get("dst"), !src.isEmpty, !dst.isEmpty, src.count <= 256, dst.count <= 256 else {
+            throw HTTPError(.badRequest, message: "Give src and dst.")
+        }
+        let port = query.get("port").map { Int($0) ?? -1 } ?? 443
+        guard (0...65_535).contains(port) else { throw HTTPError(.badRequest, message: "port must be 0–65535.") }
+        var proto: Int?
+        if let name = query.get("proto"), !name.isEmpty {
+            guard let number = Evaluator.protoNumber(name) else { throw HTTPError(.badRequest, message: "Unknown proto.") }
+            proto = number
+        }
+        func device(_ selection: String) throws -> HeadscaleNode? {
+            guard selection.hasPrefix("node:") else { return nil }
+            guard let node = s.nodes.first(where: { $0.id == selection.dropFirst(5) }) else {
+                throw HTTPError(.badRequest, message: "No device \(selection).")
+            }
+            return node
+        }
+        let source = try device(src), destination = try device(dst)
+        // From the device list only os and version are known, so other posture conditions stay "conditional".
+        let result = Evaluator(model: m, sourceAttributes: source?.postureAttributes, proto: proto)
+            .evaluate(sourceIDs: source?.identities ?? [src], destIDs: destination?.identities ?? [dst], port: port)
+        return SimulateReply(allowed: result.allowed, conditional: result.conditional, rules: result.matches.map { match in
+            let kind: RuleSummary.Kind = match.kind == .grant ? .grant : .acl
+            return .init(kind: match.kind == .grant ? "grant" : "acl", index: match.ruleIndex, src: match.srcSpec, dst: match.dstSpec,
+                         ports: match.ipSpec, posture: match.posture, via: match.via,
+                         explanation: ruleExplanation(m, kind: kind, index: match.ruleIndex))
+        })
+    }
+
+    return router
+}
+
+// MARK: - Command
+
+private let serveUsage = """
+usage: tailscale-acl serve --config <server.json>   run the web service
+       tailscale-acl serve --config <server.json> --check   check the config and exit
+       --insecure-dev-login   honour the config's devLogin (localhost only; never in production)
+"""
+
+/// `tailscale-acl serve …`; returns the exit code.
+func runServeCommand(_ args: [String], output: (String) -> Void = { print($0) }) async -> Int32 {
+    var path: String?
+    var check = false, devLogin = false
+    var rest = args[...]
+    while let arg = rest.popFirst() {
+        switch arg {
+        case "--config": path = rest.popFirst()
+        case "--check": check = true
+        case "--insecure-dev-login": devLogin = true
+        default:
+            output(serveUsage)
+            return 2
+        }
+    }
+    guard let path else {
+        output(serveUsage)
+        return 2
+    }
+    do {
+        let config = try ServerConfig.load(path)
+        let problems = config.problems(devLoginAllowed: devLogin)
+        guard problems.isEmpty else {
+            problems.forEach { output("\(path): \($0)") }
+            return 1
+        }
+        let secretFiles = [path] + [config.entra?.clientSecretFile].compactMap { $0 } + config.sources.compactMap(\.credentialFile)
+        for file in readableByOthers(secretFiles) {
+            output("warning: \(file) can be read by other accounts on this machine (chmod 600 it)")
+        }
+        if config.devLogin != nil { output("warning: development login is ON — everyone who can reach this is signed in without Microsoft") }
+        if let host = config.listenAddress?.host, !["127.0.0.1", "localhost", "::1"].contains(host) {
+            output("warning: listening on \(host), not the loopback address — put a TLS proxy in front and firewall the port")
+        }
+        let state = try ServerState(config: config)
+        if check {
+            output("\(path): ok — \(config.sources.count) tailnet\(config.sources.count == 1 ? "" : "s"), sign-in redirect \(state.origin)/auth/callback")
+            return 0
+        }
+        let address = config.listenAddress!
+        let app = Application(router: buildRouter(state), configuration: .init(address: .hostname(address.host, port: address.port)))
+        output("tailscale-acl: serving \(state.origin) on \(address.host):\(address.port)")
+        try await app.runService()
+        return 0
+    } catch {
+        output("tailscale-acl serve: \(error.localizedDescription)")
+        return 1
+    }
+}

@@ -40,9 +40,26 @@ Swift Package (no Xcode project), one module, two layers:
   sheets, `PolicyStore`, the Keychain, app lock, encryption, 1Password,
   MCP, GitOps, history. Its tests are in `Tests/TailscaleACLTests/Mac/`.
 
-`Package.swift` leaves the `Mac` folders out on Linux, and on a Mac when
-`TAILSCALE_ACL_ENGINE=1` is set (the quick local check that the engine
-doesn't lean on the app):
+- **Web service** — `Sources/TailscaleACL/Server/` (tests in
+  `Tests/TailscaleACLTests/Server/`): `tailscale-acl serve`, read-only, for
+  colleagues on any platform; see `docs/web-service.md`. Hummingbird.
+  `ServerConfig.swift` (JSON config, `problems()`; secrets by file),
+  `Login.swift` (Microsoft Entra OIDC: code flow + PKCE, `EntraLogin`,
+  `roles(for:)` from app roles/group IDs, in-memory `SessionStore`),
+  `WebServer.swift` (`buildRouter`: `/login`, `/auth/callback`, `/logout`,
+  `/api/*` behind `RequireRole`; `PolicySource` caches a tailnet for a
+  minute; `AuditLog` → `<dataDir>/audit.jsonl`; `SecurityHeaders`). It must
+  never get a route that changes a policy. Tests drive it in-process
+  (`HummingbirdTesting`) with Microsoft and the tailnet stubbed by
+  `StubProtocol`.
+
+`Package.swift` builds either the app (engine + `Mac/`, the default on
+macOS) or the engine with the command-line tool and the web service (engine
++ `Server/`): on Linux, and on a Mac when `TAILSCALE_ACL_ENGINE=1` is set.
+The app never contains the server or its libraries. The package's dependency
+list is the same in both modes on a Mac so that `Package.resolved` (which
+pins Sparkle and the server's libraries; keep it committed) doesn't change
+with the mode — an engine-only build once deleted it.
 
 ```sh
 TAILSCALE_ACL_ENGINE=1 swift test --scratch-path "$HOME/Library/Caches/tailscale-acl-engine-build"
@@ -50,9 +67,10 @@ TAILSCALE_ACL_ENGINE=1 swift test --scratch-path "$HOME/Library/Caches/tailscale
 
 Rules that keep it working (the "Linux engine" CI job checks them):
 - A file that imports SwiftUI, AppKit, Security, CryptoKit, Network, or
-  uses `PolicyStore` belongs in `Mac/`. Engine code never references it;
-  where it must hand over (the app's `main`, 1Password reads), that is
-  inside `#if MAC_APP` (defined only when the app is built).
+  uses `PolicyStore` belongs in `Mac/`; one that imports Hummingbird in
+  `Server/`. Engine code references neither; where it must hand over (the
+  app's `main` or `serve`, 1Password reads), that is inside `#if MAC_APP`
+  (defined only when the app is built).
 - Engine files that use `URLSession` import `FoundationNetworking` when it
   exists. No CoreFoundation calls, no `RelativeDateTimeFormatter`.
 - In test files outside `Mac/`, tests that need the app are inside
